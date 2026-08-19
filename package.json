@@ -17,7 +17,7 @@
     "internal/adapter/claudecode/sidecar"
   ],
   "scripts": {
-    "dev": "HY_PORT=8787 HY_VITE_PORT=5199 concurrently -k -n go,web -c cyan,magenta \"air\" \"./scripts/web vite\"",
+    "dev": "./scripts/dev",
     "build": "npm run build:web && npm run build:server",
     "build:web": "./scripts/web tsc -b && ./scripts/web vite build",
     "build:server": "go build -o hy ./cmd/hy",

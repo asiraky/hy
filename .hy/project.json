@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "name": "hy",
+  "defaults": {
+    "harness": "claude",
+    "workspace": "managed",
+    "baseBranch": "main"
+  },
+  "workspace": {
+    "suggestedRoot": ".worktrees",
+    "provision": "scripts/hy-provision.mjs",
+    "provisionTimeoutSeconds": 600,
+    "deprovisionTimeoutSeconds": 600
+  }
+}

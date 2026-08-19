@@ -14,6 +14,12 @@ node_modules/
 # by default and are complete repositories in their own right.
 /.worktrees/
 
+# Written into a worktree by scripts/hy-provision.mjs, and true only of that
+# one worktree. .hy/project.json is committed; everything else under .hy is not.
+/.hy/*
+!/.hy/project.json
+/WORKTREE.md
+
 # Runtime data
 *.db
 *.db-wal
