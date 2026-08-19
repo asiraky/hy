@@ -7,11 +7,13 @@ export function Composer({
   busy,
   onSend,
   onCancel,
+  disabledPlaceholder,
 }: {
   disabled: boolean;
   busy: boolean;
   onSend: (text: string) => void;
   onCancel: () => void;
+  disabledPlaceholder?: string;
 }) {
   const [text, setText] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -43,7 +45,7 @@ export function Composer({
             value={text}
             disabled={disabled}
             placeholder={
-              disabled ? "Session closed" : isDesktop ? "Ask anything…  (⌘↵ to send)" : "Ask anything…"
+              disabled ? (disabledPlaceholder ?? "Session closed") : isDesktop ? "Ask anything…  (⌘↵ to send)" : "Ask anything…"
             }
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {

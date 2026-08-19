@@ -20,6 +20,7 @@ export function Sidebar({
   onNew,
   onDelete,
   accentOf,
+  projectName,
 }: {
   sessions: SessionMeta[];
   activeId: string | null;
@@ -30,6 +31,7 @@ export function Sidebar({
   onDelete: (id: string) => void;
   // Supplied by the server via the adapter; the sidebar knows no harness names.
   accentOf: (harness: string) => string | undefined;
+  projectName: (id?: string) => string | undefined;
 }) {
   return (
     <aside
@@ -80,9 +82,10 @@ export function Sidebar({
             >
               <span className="flex items-center gap-1.5">
                 <HarnessBadge harness={s.harness} accent={accentOf(s.harness)} />
-                {s.phase === "turn" && (
+                {["turn","provisioning","creating","cleaning"].includes(s.phase) && (
                   <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
                 )}
+                {["provision_failed","cleanup_failed"].includes(s.phase) && <span className="size-1.5 shrink-0 rounded-full bg-red-400" />}
                 <span className="ml-auto shrink-0 font-mono text-[10px] text-ink-500">
                   {ago(s.updatedAt)}
                 </span>
@@ -91,7 +94,7 @@ export function Sidebar({
                 {s.title || "Untitled"}
               </span>
               <span className="block truncate font-mono text-[10px] text-ink-500">
-                {s.cwd.split("/").slice(-2).join("/")}
+                {projectName(s.projectId) ?? s.cwd.split("/").slice(-2).join("/")}{s.branch ? ` · ${s.branch}` : ""}
               </span>
             </button>
 
@@ -101,7 +104,7 @@ export function Sidebar({
               onClick={() => onDelete(s.id)}
               className="-mr-1 flex size-11 shrink-0 items-center justify-center rounded text-ink-500 transition hover:text-red-400 md:size-8 md:opacity-0 md:group-hover:opacity-100"
             >
-              ✕
+              ×
             </button>
           </div>
         ))}

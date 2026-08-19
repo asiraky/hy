@@ -12,9 +12,11 @@ export function emptyState(sessionId: string): SessionState {
     harness: "",
     model: "",
     mode: "",
+    effort: "",
     title: "",
     phase: "idle",
     closed: false,
+    workspace: { phase: "" },
     items: [],
     turns: [],
     plan: [],
@@ -47,7 +49,7 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
 
   switch (ev.type) {
     case "session.created":
-      return { ...s, cwd: p.cwd, harness: p.harness, model: p.model ?? "", mode: p.mode ?? "", title: p.title ?? "" };
+      return { ...s, cwd: p.cwd, harness: p.harness, model: p.model ?? "", mode: p.mode ?? "", effort: p.effort ?? "", title: p.title ?? "" };
 
     case "session.config_changed":
       return {
@@ -59,6 +61,26 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
 
     case "session.closed":
       return { ...s, closed: true, phase: "closed" };
+
+    case "workspace.requested":
+      return { ...s, phase: "provisioning", workspace: { phase: "provisioning", projectId: p.projectId, projectRoot: p.projectRoot, mode: p.mode, branch: p.branch, baseRef: p.baseRef, startedAt: ev.timestamp } };
+    case "workspace.hook_started":
+      return { ...s, phase: p.hook === "deprovision" ? "cleaning" : s.phase, workspace: { ...s.workspace, phase: p.hook === "deprovision" ? "cleaning" : s.workspace.phase, hook: p.hook, command: p.command } };
+    case "workspace.hook_output":
+      return { ...s, workspace: { ...s.workspace, output: (s.workspace.output ?? "") + (p.stream === "stderr" ? "[stderr] " : "") + (p.chunk ?? "") } };
+    case "workspace.hook_finished":
+      return { ...s, workspace: { ...s.workspace, exitCode: p.exitCode, durationMs: p.durationMs } };
+    case "workspace.ready":
+      return { ...s, cwd: p.cwd, phase: "idle", workspace: { ...s.workspace, phase: "ready", branch: p.branch, resources: p.resources, error: undefined } };
+    case "workspace.failed":
+      return { ...s, phase: "provision_failed", workspace: { ...s.workspace, phase: "provision_failed", error: p.error, exitCode: p.exitCode } };
+    case "workspace.cleanup_started":
+      return { ...s, phase: "cleaning", workspace: { ...s.workspace, phase: "cleaning", deleteAfterCleanup: !!p.purge } };
+    case "workspace.cleanup_failed":
+      return { ...s, phase: "cleanup_failed", workspace: { ...s.workspace, phase: "cleanup_failed", error: p.error, exitCode: p.exitCode } };
+    case "workspace.cleanup_finished":
+    case "workspace.released":
+      return { ...s, workspace: { ...s.workspace, phase: "released" } };
 
     case "turn.started":
       return {

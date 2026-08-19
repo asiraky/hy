@@ -16,6 +16,7 @@ type CreateOptions struct {
 	Cwd       string
 	Model     string
 	Mode      string
+	Effort    string
 
 	// Resume asks the harness to continue an existing conversation rather
 	// than start a fresh one, so restarting the server does not amnesia the

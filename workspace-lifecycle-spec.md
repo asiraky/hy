@@ -1,0 +1,573 @@
+# Workspace lifecycle: provision before the agent, clean up after the session
+
+## The solution
+
+Each project has a `.hy/project.json` file and can define two executable hooks:
+
+```json
+{
+  "version": 1,
+  "name": "Zero8",
+  "defaults": {
+    "harness": "codex",
+    "model": "gpt-5.6-sol",
+    "effort": "high",
+    "workspace": "managed",
+    "baseBranch": "staging"
+  },
+  "workspace": {
+    "provision": "./scripts/hy-provision",
+    "deprovision": "./scripts/hy-deprovision"
+  }
+}
+```
+
+Hy runs `provision` when the session is created and **waits for it to exit**.
+The script can create a worktree wherever it wants, clone databases, allocate
+Redis, copy env files, install dependencies, and rewrite `AGENTS.md`. It returns
+the directory in which the agent should run. Only after that does hy start
+Claude or Codex.
+
+When the session is closed, hy runs `deprovision` and waits for it to exit. That
+script receives the same session context plus the saved result of `provision`,
+so it can drop databases, release Redis/ports, and remove the exact worktree it
+created.
+
+The hooks own project-specific behavior. Hy only owns when to call them,
+waiting for completion, streaming their output, persisting their result, and
+retrying/reporting failure.
+
+## The project artifact
+
+The current application treats `cwd` as a value typed into each new session.
+That should be replaced by a first-class project:
+
+```text
+Project
+  id                  stable ID in hy's database
+  root                main checkout / working-directory root
+  name                display name
+  config              parsed .hy/project.json
+  defaults            harness, model, effort, mode, base branch
+  lifecycle hooks     provision and deprovision paths
+
+Session
+  projectId           owning project
+  cwd                 final cwd returned by provision
+  branch              this session's branch
+  provisionResult     saved output needed by deprovision
+```
+
+Hy keeps a local project registry in its existing database so the user adds a
+directory only once. `.hy/project.json` is the portable, project-owned
+configuration. The UI edits that file; the database indexes it and holds
+machine-local state such as last-used time. Sessions reference `projectId`
+instead of treating an arbitrary cwd as the whole identity.
+
+Script paths stored in the JSON file are relative to the project root. The
+picker may browse only that project by default and writes the selected relative
+path, so moving or cloning the project does not break its configuration.
+
+## User experience
+
+### Add a project once
+
+The first time, the user chooses **Add project** and picks a directory. Hy finds
+the main Git checkout, registers it, and reads `.hy/project.json` if present.
+Thereafter the project appears in the new-session picker; the user never browses
+to that directory again.
+
+For migration, the server's current default cwd can be offered as the first
+project automatically.
+
+### Configure it in Project Settings
+
+Every project has a settings action beside its name and in the session header.
+The settings screen contains:
+
+```text
+General
+  Project name                 Zero8
+  Project directory            /Users/aaron/code/zero8
+
+Agent defaults
+  Harness                      Codex
+  Model                        gpt-5.6-sol
+  Effort                       High
+  Permission/runtime mode      Full access
+
+Workspace
+  New sessions use             Managed worktree
+  Base branch                  staging
+  Suggested worktree folder    .worktrees
+  Provision script             scripts/hy-provision       [Choose...]
+  Deprovision script           scripts/hy-deprovision     [Choose...]
+```
+
+**Choose...** opens a server-side file picker rooted at the project. Selecting a
+file fills the field. **Save** writes `.hy/project.json` immediately and updates
+the in-memory project. There is no import step, no first dummy chat, and no
+separate command to teach hy that the hook should run next time.
+
+The app validates that each configured script exists and is executable. It does
+not run provision as a “test,” because testing it would create real resources.
+
+### Create a session
+
+**New session** shows projects rather than a cwd browser:
+
+```text
+Project      Zero8
+Harness      Codex             (from project default)
+Model        gpt-5.6-sol       (from project default)
+Effort       High              (from project default)
+Workspace    New worktree      (from project default)
+Branch       feature/...
+Base         staging           (from project default)
+```
+
+The defaults are already selected but can be overridden for this session. The
+advanced fields can stay collapsed in the common case, making creation roughly
+“pick project, name the work, start.”
+
+When the user starts:
+
+1. Hy navigates straight into the normal session/chat screen. The header,
+   transcript, and composer are all in their usual places.
+2. The transcript contains a system-style **Preparing workspace** message. It
+   is clearly from hy's workspace provisioner, not fabricated model output.
+3. The composer remains visible but disabled, with `Preparing workspace...` in
+   place of its normal placeholder. No prompt can be submitted or queued yet.
+4. Hy automatically runs the project's provision hook. Its stdout and stderr
+   stream live into an expandable console area inside the system message.
+5. When the hook exits successfully, hy starts the selected harness in the cwd
+   returned by the hook, enables and focuses the composer, and collapses the
+   message to a compact **Workspace ready** row.
+6. If provision fails, the message remains expanded with the command, exit
+   code, output, **Retry**, and **Clean up** actions. The session becomes
+   **Setup needs attention** in the sidebar.
+
+The user can leave the session while it prepares. Completion or failure is
+visible from the sidebar/inbox.
+
+The successful row can be expanded again to inspect the full output or
+dismissed with an X. Dismissal is presentation state only: the provisioning
+events and output remain durable and available from session activity/details.
+This preserves auditability without leaving setup noise in every completed
+conversation.
+
+### Close a session
+
+**Close and clean up** stops the harness and automatically runs the project's
+deprovision hook. The session shows **Cleaning up** and can be left in the
+background. Success closes it; failure keeps it in the inbox with **Retry
+cleanup**. The user never needs to remember which script to run.
+
+## The problem
+
+A session is not always ready merely because `git worktree add` returned. In
+the projects this application is intended to drive, creating an isolated
+workspace can also mean:
+
+- copying and rewriting env files;
+- allocating ports and a Redis database;
+- cloning a Postgres database;
+- installing dependencies;
+- writing worktree-specific instructions into `AGENTS.md` or `CLAUDE.md`; and
+- recording enough metadata to undo all of that later.
+
+Those operations are part of the session's correctness boundary. The harness
+must not be created until provisioning has exited successfully: both Claude Code and
+Codex load project instructions when their process/session starts, so merely
+disabling the composer while an already-running harness waits is too late.
+
+Cleanup is equally important. Removing only the Git worktree leaks databases,
+Redis allocations, ports, tunnels, and registry entries. Cleanup must be a
+durable, retryable lifecycle operation, not a best-effort UI callback.
+
+## Decision: a session owns a workspace lease
+
+Keep **conversation** and **workspace** as separate concepts, joined by an
+explicit lease:
+
+```text
+project (main checkout)
+  -> workspace lease (local checkout, borrowed worktree, or owned worktree)
+      -> session (durable event log)
+          -> harness process (Claude, Codex, ...)
+```
+
+A session can use one of three workspace modes:
+
+| Mode | Created by hy | Setup hook | Teardown hook | Git removal |
+|---|---:|---:|---:|---:|
+| `local` | no | no by default | no | no |
+| `borrowed` | no | optional | no by default | never |
+| `managed` | provision hook | yes | yes | deprovision hook |
+
+Ownership is recorded when the lease is created and never inferred later from
+the path. This is the guard that prevents hy from deleting a checkout it did
+not create.
+
+The branch is preserved when a managed worktree is released. Discarding a
+branch is a separate, explicit Git action.
+
+## Lifecycle state machine
+
+The sidebar's current `idle | turn | closed` phase is not expressive enough.
+The durable session phase should be:
+
+```text
+creating
+  -> provisioning
+      -> ready <-> running
+      -> provision_failed
+
+ready | provision_failed
+  -> cleaning
+      -> closed
+      -> cleanup_failed -> cleaning (retry)
+```
+
+`waiting_for_user` can later refine `running` for permissions and elicitation,
+but it is orthogonal to workspace readiness.
+
+Important rules:
+
+1. `create_session` persists the session and returns its ID immediately. The
+   UI can attach and render provision progress while it continues.
+2. No harness subprocess or harness conversation is created in `creating` or
+   `provisioning`.
+3. The composer is absent/disabled until `workspace.ready` is durable.
+4. Setup exit code zero is the readiness barrier. Starting a terminal or
+   successfully writing a command to it is not readiness.
+5. Provision failure leaves an inspectable session with its output and a
+   **Retry provision** / **Clean up** action. It does not silently delete the evidence.
+6. Closing a managed session closes the harness first, then runs deprovision.
+   A failed deprovision retains the session so cleanup can be retried.
+7. Server shutdown only disposes harness processes. It does not release
+   workspace leases or run deprovision; sessions are meant to survive a restart.
+8. Deleting a transcript is two-phase: release the workspace successfully,
+   then purge the event log. The log must remain if cleanup fails.
+
+## Durable events
+
+Lifecycle activity belongs in the same per-session log as tool calls. Add:
+
+```text
+workspace.requested
+workspace.worktree_created
+workspace.hook_started
+workspace.hook_output
+workspace.hook_finished
+workspace.ready
+workspace.failed
+workspace.cleanup_started
+workspace.cleanup_finished
+workspace.cleanup_failed
+workspace.released
+```
+
+Representative payloads:
+
+```json
+{
+  "type": "workspace.requested",
+  "payload": {
+    "mode": "managed",
+    "projectRoot": "/code/zero8",
+    "path": "/code/zero8/.worktrees/feature-session-inbox",
+    "branch": "feature/session-inbox",
+    "baseRef": "staging",
+    "owned": true
+  }
+}
+```
+
+```json
+{
+  "type": "workspace.hook_output",
+  "payload": {
+    "runId": "...",
+    "hook": "provision",
+    "stream": "stdout",
+    "chunk": "worktree-setup: cloning zero8 -> zero8_feature_session_inbox ...\n"
+  }
+}
+```
+
+```json
+{
+  "type": "workspace.ready",
+  "payload": {
+    "resources": {
+      "appUrl": "http://app--feature-session-inbox.zero8.test:8204",
+      "apiUrl": "http://api--feature-session-inbox.zero8.test:8104",
+      "database": "zero8_feature_session_inbox",
+      "redisDb": 4
+    }
+  }
+}
+```
+
+Hook output should be streamed in bounded chunks, treated as potentially
+sensitive, passed through a shared redaction policy before persistence, and
+capped per run. Store a truncation marker rather than allowing an install log
+to grow the event database without limit.
+
+The `sessions` table remains a query projection for the sidebar. Add indexed
+metadata such as `project_root`, `workspace_path`, `branch`, `base_ref`,
+`workspace_mode`, and the lifecycle phase, but keep the event log authoritative.
+
+## Project configuration and hook contract
+
+Use one checked-in file at the main checkout, `.hy/project.json`:
+
+```json
+{
+  "version": 1,
+  "name": "Zero8",
+  "defaults": {
+    "harness": "codex",
+    "model": "gpt-5.6-sol",
+    "effort": "high",
+    "workspace": "managed",
+    "baseBranch": "staging"
+  },
+  "workspace": {
+    "suggestedRoot": ".worktrees",
+    "provision": "./scripts/hy-provision",
+    "deprovision": "./scripts/hy-deprovision",
+    "provisionTimeoutSeconds": 1800,
+    "deprovisionTimeoutSeconds": 600
+  }
+}
+```
+
+Hooks can be executable files using any language via their shebang. Hy also
+recognises `.ts`/`.mts`, `.js`/`.mjs`/`.cjs`, and `.sh` files and launches them
+with Bun, Node, or `sh` respectively, so an existing project script does not
+have to be made executable. A shell script can simply delegate to an existing
+TypeScript implementation:
+
+```sh
+#!/bin/sh
+exec bun run scripts/worktree-setup.ts --hy-context "$HY_CONTEXT_FILE"
+```
+
+Hooks run with the main checkout as their cwd. Hy writes an input JSON file and
+provides its location as `HY_CONTEXT_FILE`. The input contains:
+
+```json
+{
+  "version": 1,
+  "sessionId": "...",
+  "projectRoot": "/code/zero8",
+  "requestedBranch": "feature/session-inbox",
+  "baseRef": "staging",
+  "suggestedWorktreePath": "/code/zero8/.worktrees/feature-session-inbox"
+}
+```
+
+The suggested path is only a default. The provision hook may create the
+worktree somewhere else. It writes its result atomically to `HY_RESULT_FILE`:
+
+```json
+{
+  "cwd": "/custom/worktrees/zero8/session-inbox",
+  "branch": "feature/session-inbox",
+  "resources": {
+    "appUrl": "http://app--session-inbox.zero8.test:8204",
+    "apiUrl": "http://api--session-inbox.zero8.test:8104",
+    "database": "zero8_feature_session_inbox",
+    "redisDb": 4
+  }
+}
+```
+
+`cwd` is the only required result. It is the directory hy gives to the harness.
+Hy verifies that it exists, saves the complete result, and starts the agent
+there only after the provision process exits zero.
+
+Deprovision receives the original context and provision result in its context
+file. It owns the complete inverse operation, including Git worktree removal if
+the provision hook created one. A successful exit means the workspace has been
+released; a non-zero exit leaves the session in `cleanup_failed` with a retry
+button.
+
+The process environment is deliberately small:
+
+```text
+HY_LIFECYCLE_VERSION=1
+HY_HOOK=provision | deprovision
+HY_SESSION_ID=<stable UUID>
+HY_PROJECT_ROOT=<absolute main checkout>
+HY_CONTEXT_FILE=<absolute JSON input path>
+HY_STATE_DIR=<durable per-session directory outside the worktree>
+HY_RESULT_FILE=<path for an atomic JSON result>
+```
+
+The durable `HY_STATE_DIR` is available to both hooks and survives removal of
+the worktree.
+
+Hooks must be idempotent:
+
+- provision rerun for the same session must converge on the same resource
+  allocation;
+- deprovision must succeed when some or all resources are already absent; and
+- deprovision must use the saved provision result and durable state to clean up
+  even after a partially completed provision.
+
+Hy should also provide a zero-configuration compatibility resolver for the
+existing `clawd` conventions:
+
+```text
+.claude/worktree/setup and teardown
+scripts/worktree-setup.ts and worktree-teardown.ts
+scripts/worktree-setup.mjs and worktree-teardown.mjs
+scripts/worktree-setup.sh and worktree-teardown.sh
+```
+
+The compatibility adapter supplies the arguments those scripts already expect.
+Their teardown scripts already own full removal, which matches the hook contract.
+New projects should use the context/result files above.
+
+### Trust boundary
+
+Lifecycle hooks are trusted host code. They can intentionally reach Docker,
+databases, env files, and other resources that the harness itself may not be
+allowed to manage. Hy should show the resolved hook commands and require trust
+once per project/config hash before executing them.
+
+Resolve configuration and hook paths from the persisted main checkout, never
+from the agent-editable managed worktree. Teardown must not execute a script
+that the agent changed during its turn. Persist the resolved configuration and
+its hash with `workspace.requested` so reconciliation can explain configuration
+drift and require renewed trust when appropriate.
+
+## Process and crash semantics
+
+The session actor remains the only writer to a session log. Provisioning runs
+in a child goroutine/process, but progress and completion come back through the
+actor inbox before being appended. This preserves the existing gapless event
+ordering invariant.
+
+Session creation becomes:
+
+```text
+persist session in `creating`
+start actor without a harness
+return session ID
+actor runs and awaits the provision hook
+actor validates the returned cwd
+actor creates the harness in that cwd
+actor appends workspace.ready
+actor changes phase to ready
+```
+
+On provision failure, hy keeps the output and invokes deprovision only when the
+user chooses **Clean up**. The user can instead inspect the failure and retry
+the idempotent provision hook.
+
+On restart, reconcile by durable phase:
+
+| Stored phase | Reconciliation |
+|---|---|
+| `provisioning` | mark interrupted; offer/perform idempotent provision retry |
+| `ready` / `running` | verify the recorded worktree; resume harness lazily |
+| `cleaning` / `cleanup_failed` | retry deprovision with the same context |
+| `closed` | no process or workspace action |
+
+Hook children must belong to a process group owned by hy. Normal shutdown
+terminates and reaps them, then leaves the durable phase interrupted for the
+next reconciliation pass. A startup reaper also checks stale managed leases so
+a hard kill cannot leak resources forever.
+
+## Safe default when a project has no hooks
+
+Hooks are optional. Without them, hy can provide a basic built-in worktree
+implementation using the suggested `.worktrees/<branch>` location. That default
+only creates and removes Git worktrees; it does not guess how to clone env
+files, databases, Redis state, or other project resources.
+
+Before the built-in implementation removes a path, hy must verify:
+
+1. the lease says `owned: true`;
+2. the resolved target equals the persisted path (no fresh template expansion);
+3. `git worktree list --porcelain` lists that exact path;
+4. its Git common directory matches the persisted project root; and
+5. the target is neither the project root nor an ancestor of it.
+
+Then it runs `git worktree remove --force <exact-path>` without a shell and
+`git worktree prune`. Hy does not perform Git removal after a custom
+deprovision hook—the hook owns the complete operation.
+
+## User-facing behaviour
+
+Creation should navigate to the normal chat screen immediately and show a
+system-style lifecycle message in the transcript:
+
+```text
+Workspace provisioner
+Preparing workspace...
+
+  Creating worktree                     done
+  Running scripts/hy-provision
+    Allocated API 8104 / app 8204
+    Installed dependencies
+    Cloning zero8 -> zero8_feature_...   running
+  Starting Codex                        waiting
+```
+
+The output area follows the script as it runs and can distinguish stdout from
+stderr without making ordinary output look like an error. The composer is
+present but disabled. On success the provisioner message automatically becomes
+a compact row such as `Workspace ready in 1m 42s`; the composer enables and
+receives focus. The row may be expanded or dismissed. On failure it stays open
+with **Retry provision** and **Clean up** actions.
+
+Closing a managed session shows deprovision in the same feed. A cleanup failure
+keeps the session near the top of the sidebar because it needs attention.
+Expose three distinct actions so lifecycle intent is never hidden behind an X:
+
+- **Stop for now**: dispose the harness; retain conversation and workspace.
+- **Close and clean up**: close the conversation, run deprovision, remove the
+  managed worktree, preserve the branch and transcript.
+- **Delete**: close and clean up first; purge the transcript only after success.
+
+## Compatibility with the existing projects
+
+The current `zero8`, `worksauce`, and `eden` setup scripts already do the hard
+parts correctly: they accept an externally-created worktree path, allocate
+stable resources, clone env/DB state, write agent instructions, and are mostly
+idempotent. The immediate migration is:
+
+1. add tiny `hy-provision` and `hy-deprovision` wrappers around the existing
+   setup/teardown scripts;
+2. make provision write its selected cwd and optional display metadata to
+   `HY_RESULT_FILE`; and
+3. add `.hy/project.json`, or rely initially on the compatibility resolver.
+
+This removes the current T3-specific dispatcher from the correctness path.
+The same repository hooks then work from `clawd`, hy, CI, or another launcher
+because the project-specific logic remains in the project and the lifecycle
+contract belongs to the orchestrator.
+
+## Implementation slices
+
+1. **Projects:** add the project registry/table, `.hy/project.json` loading and
+   saving, Project Settings, and a project picker in place of the cwd field.
+2. **Provision barrier:** add lifecycle events/phases, create an actor without a
+   harness, stream the project hook, persist its result, and start the harness
+   in its returned cwd only after success.
+3. **Cleanup:** deprovision hook execution, retryable
+   `cleanup_failed`, and two-phase transcript deletion.
+4. **Recovery:** restart reconciliation, process-group cleanup, and a stale
+   lease reaper.
+5. **Resources UI:** parse hook result metadata and surface URLs/services in
+   session details.
+
+The first two slices produce the seamless creation flow and fix the
+instruction-file race. The first three reproduce the essential `clawd`
+lifecycle without tying the core to any one project's Bun, Docker, Postgres,
+Redis, or env-file conventions.

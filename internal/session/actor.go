@@ -80,6 +80,9 @@ type command struct {
 	emission     *proto.Emission
 	hard         bool // close: append session.closed, rather than just disposing
 	reply        chan cmdResult
+	model        string
+	mode         string
+	effort       string
 }
 
 type permAsk struct {
@@ -105,6 +108,9 @@ const (
 	cmdResolveElicit = "resolve_elicitation"
 	cmdAskElicit     = "ask_elicitation"
 	cmdClose         = "close"
+	cmdActivate      = "activate"
+	cmdHarnessEvent  = "harness_event"
+	cmdHarnessExit   = "harness_exit"
 )
 
 // ErrBusy is returned when a prompt arrives while a turn is already running.
@@ -112,6 +118,7 @@ var ErrBusy = errors.New("a turn is already in progress")
 
 // ErrClosed is returned when a command tries to mutate a closed transcript.
 var ErrClosed = errors.New("session is closed")
+var ErrNotReady = errors.New("workspace is not ready")
 
 // ErrAlreadyResolved is returned to the loser of a permission race. It is an
 // ack, not a failure: the request was answered, just not by this presenter.
@@ -135,7 +142,7 @@ func Start(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store.
 	}
 
 	sess, err := ad.CreateSession(ctx, hostServices{a}, adapter.CreateOptions{
-		SessionID: meta.ID, Cwd: meta.Cwd, Model: model, Mode: mode,
+		SessionID: meta.ID, Cwd: meta.Cwd, Model: model, Mode: mode, Effort: meta.Effort,
 	})
 	if err != nil {
 		return nil, err
@@ -144,12 +151,26 @@ func Start(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store.
 
 	a.wg.Add(1)
 	go a.run()
+	a.pump(sess)
 
 	// session.created is the first event in every session's log.
 	a.enqueueEmission(proto.Emit(proto.SessionCreated, proto.SessionCreatedPayload{
-		Cwd: meta.Cwd, Harness: meta.Harness, Model: model, Mode: mode, Title: meta.Title,
+		Cwd: meta.Cwd, Harness: meta.Harness, Model: model, Mode: mode, Effort: meta.Effort, Title: meta.Title,
 	}))
 	return a, nil
+}
+
+// StartPending creates an attachable actor without starting a harness. The
+// lifecycle runner activates it only after provisioning has completed.
+func StartPending(st *store.Store, ad adapter.Adapter, meta store.SessionMeta, logf func(string, ...any)) *Actor {
+	a := &Actor{ID: meta.ID, Harness: meta.Harness, Cwd: meta.Cwd, store: st, adapter: ad,
+		inbox: make(chan command, 64), quit: make(chan struct{}), state: projection.New(meta.ID),
+		pendingPerm: map[string]chan adapter.PermissionOutcome{}, pendingElicit: map[string]chan adapter.ElicitationResult{},
+		subs: map[string]*Subscriber{}, logf: logf}
+	a.wg.Add(1)
+	go a.run()
+	a.enqueueEmission(proto.Emit(proto.SessionCreated, proto.SessionCreatedPayload{Cwd: meta.Cwd, Harness: meta.Harness, Model: meta.Model, Mode: meta.Mode, Effort: meta.Effort, Title: meta.Title}))
+	return a
 }
 
 // Resume rebuilds an actor for an existing session id, replaying its log into
@@ -181,6 +202,7 @@ func Resume(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store
 		Cwd:              meta.Cwd,
 		Model:            state.Model,
 		Mode:             state.Mode,
+		Effort:           state.Effort,
 		Resume:           true,
 		HarnessSessionID: state.HarnessSessionID,
 	})
@@ -191,6 +213,7 @@ func Resume(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store
 
 	a.wg.Add(1)
 	go a.run()
+	a.pump(sess)
 
 	// Server death ends the in-flight turn (the harness process is gone), but
 	// the conversation remains resumable. Close every durable human request and
@@ -238,6 +261,17 @@ func RestoreClosed(ctx context.Context, st *store.Store, meta store.SessionMeta,
 		pendingElicit: map[string]chan adapter.ElicitationResult{},
 		subs:          map[string]*Subscriber{}, logf: logf,
 	}
+	a.wg.Add(1)
+	go a.run()
+	return a, nil
+}
+
+func RestorePending(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store.SessionMeta, logf func(string, ...any)) (*Actor, error) {
+	state, err := loadState(ctx, st, meta.ID)
+	if err != nil {
+		return nil, err
+	}
+	a := &Actor{ID: meta.ID, Harness: meta.Harness, Cwd: meta.Cwd, store: st, adapter: ad, inbox: make(chan command, 64), quit: make(chan struct{}), state: state, head: state.Seq, pendingPerm: map[string]chan adapter.PermissionOutcome{}, pendingElicit: map[string]chan adapter.ElicitationResult{}, subs: map[string]*Subscriber{}, logf: logf}
 	a.wg.Add(1)
 	go a.run()
 	return a, nil
@@ -345,6 +379,16 @@ func (a *Actor) Prompt(ctx context.Context, text string) (string, error) {
 	return v.(string), nil
 }
 
+func (a *Actor) Emit(ctx context.Context, em proto.Emission) error {
+	_, err := a.call(ctx, command{kind: "emit", emission: &em})
+	return err
+}
+
+func (a *Actor) Activate(ctx context.Context, cwd, model, mode, effort string) error {
+	_, err := a.call(ctx, command{kind: cmdActivate, prompt: cwd, model: model, mode: mode, effort: effort})
+	return err
+}
+
 // Cancel interrupts the running turn. It is a command on the inbox, never a
 // context cancellation: losing every client must not interrupt a turn.
 func (a *Actor) Cancel(ctx context.Context) error {
@@ -392,27 +436,28 @@ func (a *Actor) enqueueEmission(em proto.Emission) {
 	}
 }
 
+func (a *Actor) pump(sess adapter.Session) {
+	go func() {
+		for em := range sess.Events() {
+			select {
+			case a.inbox <- command{kind: cmdHarnessEvent, emission: &em}:
+			case <-a.quit:
+				return
+			}
+		}
+		select {
+		case a.inbox <- command{kind: cmdHarnessExit}:
+		case <-a.quit:
+		}
+	}()
+}
+
 // ---- the actor loop ----
 
 func (a *Actor) run() {
 	defer a.wg.Done()
-
-	var events <-chan proto.Emission
-	if a.sess != nil {
-		events = a.sess.Events()
-	}
 	for {
 		select {
-		case em, ok := <-events:
-			if !ok {
-				// The harness process is gone. That ends this process, not
-				// the session: the log stands and the next attach resumes.
-				events = nil
-				a.shutdown(false)
-				return
-			}
-			a.append(em)
-
 		case c := <-a.inbox:
 			if a.handle(c) {
 				return
@@ -430,6 +475,30 @@ func (a *Actor) handle(c command) (stop bool) {
 
 	case "emit":
 		a.append(*c.emission)
+		if c.reply != nil {
+			c.reply <- cmdResult{}
+		}
+
+	case cmdHarnessEvent:
+		a.append(*c.emission)
+
+	case cmdHarnessExit:
+		a.shutdown(false)
+		return true
+
+	case cmdActivate:
+		if a.sess != nil {
+			c.reply <- cmdResult{}
+			return false
+		}
+		sess, err := a.adapter.CreateSession(ctx, hostServices{a}, adapter.CreateOptions{SessionID: a.ID, Cwd: c.prompt, Model: c.model, Mode: c.mode, Effort: c.effort})
+		if err != nil {
+			c.reply <- cmdResult{err: err}
+			return false
+		}
+		a.Cwd, a.sess = c.prompt, sess
+		a.pump(sess)
+		c.reply <- cmdResult{}
 
 	case cmdPrompt:
 		if a.state.Closed {
@@ -438,6 +507,10 @@ func (a *Actor) handle(c command) (stop bool) {
 		}
 		if a.turnActive != "" {
 			c.reply <- cmdResult{err: ErrBusy}
+			return false
+		}
+		if a.sess == nil {
+			c.reply <- cmdResult{err: ErrNotReady}
 			return false
 		}
 		turnID := uuid.NewString()

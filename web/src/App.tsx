@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Client, wsURL, type ConnectionStatus } from "./client";
 import { useIsDesktop } from "./useMediaQuery";
-import type { Access, HarnessMeta, SessionMeta, SessionState } from "./protocol";
+import type { Access, HarnessMeta, Project, ProjectConfig, SessionMeta, SessionState } from "./protocol";
 import { AccessPanel } from "./components/Access";
 import { Composer } from "./components/Composer";
 import { NewSession } from "./components/NewSession";
+import type { NewSessionInput } from "./components/NewSession";
+import { ProjectSettings } from "./components/ProjectSettings";
 import { PermissionPrompt } from "./components/PermissionPrompt";
 import { ElicitationPrompt } from "./components/ElicitationPrompt";
 import { Sidebar } from "./components/Sidebar";
@@ -18,6 +20,7 @@ export function App() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [harnesses, setHarnesses] = useState<HarnessMeta[]>([]);
   const [defaultCwd, setDefaultCwd] = useState("");
+  const [projects, setProjects] = useState<Project[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [state, setState] = useState<SessionState | null>(null);
   const isDesktop = useIsDesktop();
@@ -26,10 +29,12 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(isDesktop);
   useEffect(() => setSidebarOpen(isDesktop), [isDesktop]);
   const [creating, setCreating] = useState(false);
+  const [projectSettings, setProjectSettings] = useState<Project | "add" | null>(null);
   const [access, setAccess] = useState<Access | null>(null);
   const [showAccess, setShowAccess] = useState(false);
 
   const clientRef = useRef<Client | null>(null);
+  const forcePromptedRef = useRef<string | null>(null);
 
   // The socket callbacks below outlive any single render, so they read the
   // attached session from a ref rather than a captured closure. The ref is
@@ -48,6 +53,7 @@ export function App() {
         setHarnesses(h);
         setDefaultCwd(cwd);
       },
+      onProjects: setProjects,
       // State only lands for the session currently attached; the client
       // discards anything else.
       onState: (id, s) => {
@@ -87,13 +93,16 @@ export function App() {
   }, [isDesktop]);
 
   const create = useCallback(
-    async (harness: string, cwd: string, model: string) => {
-      const res = await clientRef.current!.command("create_session", { harness, cwd, model });
+    async (input: NewSessionInput) => {
+      const res = await clientRef.current!.command("create_session", input);
       setCreating(false);
       select(res.sessionId);
     },
     [select],
   );
+
+  const addProject = useCallback(async (root: string) => { const res=await clientRef.current!.command("add_project",{root}); setProjects(p=>[res.project,...p.filter(x=>x.id!==res.project.id)]); },[]);
+  const saveProject = useCallback(async (projectId:string,config:ProjectConfig) => { const res=await clientRef.current!.command("save_project",{projectId,config}); setProjects(p=>p.map(x=>x.id===projectId?res.project:x)); },[]);
 
   const send = useCallback(
     (text: string) => {
@@ -139,15 +148,19 @@ export function App() {
 
   const remove = useCallback(
     (id: string) => {
-      clientRef.current?.command("delete_session", { sessionId: id });
-      if (id === activeId) {
-        setActiveId(null);
-        setState(null);
-        clientRef.current?.detach();
-      }
+      if (id !== activeRef.current) select(id);
+      clientRef.current?.command("delete_session", { sessionId: id }).catch((e) => {
+        console.warn("delete failed:", e.message);
+      });
     },
-    [activeId],
+    [select],
   );
+
+  const forceDelete = useCallback((id: string) => {
+    const accepted = window.confirm("Tear down failed. Would you like to force delete?\n\nThis skips the teardown script, removes the recorded Git worktree, and permanently deletes the session.");
+    if (!accepted) return;
+    clientRef.current?.command("force_delete_session", { sessionId: id }).catch((e) => window.alert(`Force delete failed: ${e.message}`));
+  }, []);
 
   // Ask the server to re-probe, for when the user has just installed something.
   const recheck = useCallback(() => {
@@ -163,6 +176,22 @@ export function App() {
   );
   const pending = state?.pendingPermissions?.[0];
   const elicitation = state?.pendingElicitations?.[0];
+  const activeProject = projects.find((p) => p.id === meta?.projectId);
+  const workspaceBusy = state ? ["creating","provisioning","cleaning"].includes(state.phase) : false;
+  const workspaceFailed = state ? ["provision_failed","cleanup_failed"].includes(state.phase) : false;
+
+  useEffect(() => {
+    if (!activeId || state?.phase !== "cleanup_failed" || !state.workspace.deleteAfterCleanup) return;
+    const key = `${activeId}:${state.seq}`;
+    if (forcePromptedRef.current === key) return;
+    forcePromptedRef.current = key;
+    forceDelete(activeId);
+  }, [activeId, state, forceDelete]);
+
+  useEffect(() => {
+    if (!activeId || !state || sessions.some((s) => s.id === activeId)) return;
+    setActiveId(null); setState(null); clientRef.current?.detach();
+  }, [sessions, activeId, state]);
 
   return (
     <div className="flex h-full overflow-hidden">
@@ -175,6 +204,7 @@ export function App() {
         onNew={startNew}
         onDelete={remove}
         accentOf={accentOf}
+        projectName={(id)=>projects.find(p=>p.id===id)?.config.name}
       />
 
       {/* The drawer overlays content on small screens, so it needs a way out
@@ -216,6 +246,17 @@ export function App() {
                 </span>
               )}
 
+              {activeProject && (
+                <button
+                  type="button"
+                  onClick={() => setProjectSettings(activeProject)}
+                  title={`${activeProject.config.name} settings`}
+                  className="flex size-9 items-center justify-center rounded text-ink-500 hover:bg-ink-850 hover:text-ink-100"
+                >
+                  ⚙
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => setShowAccess(true)}
@@ -235,7 +276,7 @@ export function App() {
 
         {state ? (
           <>
-            <Transcript state={state} />
+            <Transcript state={state} onRetryProvision={()=>activeId&&clientRef.current?.command("retry_provision",{sessionId:activeId})} onCleanup={()=>activeId&&clientRef.current?.command("cleanup_session",{sessionId:activeId})} onForceDelete={()=>activeId&&forceDelete(activeId)} />
 
             {pending && (
               <PermissionPrompt
@@ -254,7 +295,8 @@ export function App() {
             )}
 
             <Composer
-              disabled={state.closed}
+              disabled={state.closed || workspaceBusy || workspaceFailed}
+              disabledPlaceholder={workspaceBusy ? (state.phase === "cleaning" ? "Cleaning up workspace…" : "Preparing workspace…") : workspaceFailed ? "Workspace needs attention" : undefined}
               busy={state.phase === "turn"}
               onSend={send}
               onCancel={cancel}
@@ -292,12 +334,24 @@ export function App() {
 
       {creating && (
         <NewSession
+          projects={projects}
           harnesses={harnesses}
-          defaultCwd={defaultCwd}
           onCreate={create}
+          onAddProject={()=>setProjectSettings("add")}
+          onSettings={setProjectSettings}
           onRecheck={recheck}
           status={status}
           onClose={() => setCreating(false)}
+        />
+      )}
+      {projectSettings && (
+        <ProjectSettings
+          project={projectSettings === "add" ? null : projectSettings}
+          defaultRoot={defaultCwd}
+          harnesses={harnesses}
+          onAdd={addProject}
+          onSave={saveProject}
+          onClose={() => setProjectSettings(null)}
         />
       )}
     </div>

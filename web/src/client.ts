@@ -4,7 +4,7 @@
 
 import { applyEvent, emptyState } from "./apply";
 import { checkBuild } from "./boot";
-import type { Access, HarnessMeta, ServerFrame, SessionMeta, SessionState } from "./protocol";
+import type { Access, HarnessMeta, Project, ServerFrame, SessionMeta, SessionState } from "./protocol";
 
 export type ConnectionStatus = "connecting" | "online" | "offline";
 
@@ -20,6 +20,7 @@ export interface ClientEvents {
   onStatus(status: ConnectionStatus): void;
   onSessions(sessions: SessionMeta[]): void;
   onHarnesses(harnesses: HarnessMeta[], defaultCwd: string): void;
+  onProjects(projects: Project[]): void;
   onState(sessionId: string, state: SessionState): void;
   onAccess(access: Access): void;
 }
@@ -135,6 +136,7 @@ export class Client {
         checkBuild(f.build);
         this.events.onSessions(f.sessions ?? []);
         this.events.onHarnesses(f.harnesses ?? [], f.cwd ?? "");
+        this.events.onProjects(f.projects ?? []);
         if (f.access) {
           this.events.onAccess(f.access);
         }

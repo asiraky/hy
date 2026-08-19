@@ -161,18 +161,34 @@ func (s *Server) Handler() http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		root := r.URL.Query().Get("root")
+		if root != "" {
+			rootAbs, rootErr := filepath.Abs(root)
+			rel, relErr := filepath.Rel(rootAbs, abs)
+			if rootErr != nil || relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				http.Error(w, "path is outside project", http.StatusBadRequest)
+				return
+			}
+		}
 		entries, err := os.ReadDir(abs)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		dirs := []string{}
+		files := []string{}
 		for _, e := range entries {
-			if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			showHidden := r.URL.Query().Get("files") == "1" && e.Name() != ".git"
+			if e.IsDir() && (!strings.HasPrefix(e.Name(), ".") || showHidden) {
 				dirs = append(dirs, e.Name())
 			}
+			if !e.IsDir() && r.URL.Query().Get("files") == "1" {
+				if info, infoErr := e.Info(); infoErr == nil && (info.Mode()&0o111 != 0 || isScriptExtension(e.Name())) {
+					files = append(files, e.Name())
+				}
+			}
 		}
-		writeJSON(w, map[string]any{"path": abs, "parent": filepath.Dir(abs), "dirs": dirs})
+		writeJSON(w, map[string]any{"path": abs, "parent": filepath.Dir(abs), "dirs": dirs, "files": files})
 	})
 
 	mux.HandleFunc("/ws", s.serveWS)
@@ -187,6 +203,14 @@ func (s *Server) Handler() http.Handler {
 	}
 
 	return withCORS(s.gate(mux), s.allowAny)
+}
+
+func isScriptExtension(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".ts", ".mts", ".js", ".mjs", ".cjs", ".sh":
+		return true
+	}
+	return false
 }
 
 // publicPaths are reachable without a paired device. Everything else — the

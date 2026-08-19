@@ -11,6 +11,10 @@ This implements the architecture in `harness-multiplexer-spec.md`, milestones 1â
 and 9: the event log, the session actor and fanout, the sync protocol, the Claude
 adapter, the web UI, and the Codex adapter.
 
+The core workflow from [`workspace-lifecycle-spec.md`](workspace-lifecycle-spec.md)
+is implemented: projects and defaults, project-owned provision/deprovision
+scripts, the readiness barrier, live setup output, and retryable cleanup.
+
 ## Quick start
 
 ```bash

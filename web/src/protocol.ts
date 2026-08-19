@@ -106,9 +106,11 @@ export interface SessionState {
   harness: string;
   model: string;
   mode: string;
+  effort: string;
   title: string;
-  phase: "idle" | "turn" | "closed";
+  phase: "creating" | "provisioning" | "provision_failed" | "idle" | "turn" | "cleaning" | "cleanup_failed" | "closed";
   closed: boolean;
+  workspace: WorkspaceState;
   items: Item[];
   turns: Turn[];
   plan: PlanEntry[];
@@ -116,6 +118,34 @@ export interface SessionState {
   pendingPermissions: PendingPermission[];
   pendingElicitations: PendingElicitation[];
 }
+
+export interface WorkspaceState {
+  phase: string;
+  projectId?: string;
+  projectRoot?: string;
+  mode?: string;
+  effort?: string;
+  branch?: string;
+  baseRef?: string;
+  hook?: string;
+  command?: string;
+  output?: string;
+  error?: string;
+  exitCode?: number;
+  startedAt?: number;
+  durationMs?: number;
+  resources?: Record<string, unknown>;
+  deleteAfterCleanup?: boolean;
+}
+
+export interface ProjectConfig {
+  version: number;
+  name: string;
+  defaults: { harness?: string; model?: string; effort?: string; mode?: string; workspace?: string; baseBranch?: string };
+  workspace: { suggestedRoot?: string; provision?: string; deprovision?: string; provisionTimeoutSeconds?: number; deprovisionTimeoutSeconds?: number };
+}
+
+export interface Project { id: string; root: string; config: ProjectConfig; createdAt: number; updatedAt: number }
 
 export interface SessionMeta {
   id: string;
@@ -126,6 +156,11 @@ export interface SessionMeta {
   updatedAt: number;
   headSeq: number;
   phase: string;
+  projectId?: string;
+  branch?: string;
+  model?: string;
+  mode?: string;
+  workspaceMode?: string;
 }
 
 export interface ModelMeta {
@@ -215,6 +250,7 @@ export interface ServerFrame {
   build?: string;
   sessions?: SessionMeta[];
   harnesses?: HarnessMeta[];
+  projects?: Project[];
   cwd?: string;
   access?: Access;
   sessionId?: string;
