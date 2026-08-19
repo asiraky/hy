@@ -1,0 +1,740 @@
+// Package codexapp adapts `codex app-server` (JSON-RPC over stdio) to the
+// canonical event model.
+//
+// Flow: initialize → initialized → thread/start → turn/start, with streaming
+// item/* notifications and server→client approval requests. Verified against
+// codex-cli 0.147.0.
+package codexapp
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/asiraky/hy/internal/adapter"
+	"github.com/asiraky/hy/internal/jsonrpc"
+	"github.com/asiraky/hy/internal/proto"
+)
+
+// Adapter creates codex sessions.
+type Adapter struct{ Bin string }
+
+func New(bin string) *Adapter {
+	if bin == "" {
+		bin = "codex"
+	}
+	return &Adapter{Bin: bin}
+}
+
+func (a *Adapter) ID() string { return "codex" }
+
+func (a *Adapter) Meta() adapter.HarnessMeta {
+	return adapter.HarnessMeta{
+		ID:      "codex",
+		Name:    "Codex",
+		Accent:  "oklch(0.76 0.13 165)",
+		DocsURL: "https://developers.openai.com/codex",
+	}
+}
+
+// Probe reports whether a Codex session could start right now. Codex needs
+// only its own CLI: it exposes app-server as a documented programmatic
+// interface, so there is no sidecar and no runtime to find.
+func (a *Adapter) Probe(ctx context.Context) adapter.Availability {
+	path, err := exec.LookPath(a.Bin)
+	if err != nil {
+		return adapter.Unavailable(
+			"The Codex CLI was not found on this machine.",
+			adapter.Remedy{Text: "Install Codex", URL: "https://developers.openai.com/codex"},
+			adapter.Remedy{Text: "Or install it with npm", Command: "npm i -g @openai/codex"},
+		)
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(probeCtx, path, "--version").Output()
+	if err != nil {
+		return adapter.Unavailable(
+			"The Codex CLI was found at "+path+" but did not run.",
+			adapter.Remedy{Text: "Check the install with: codex doctor", Command: "codex doctor"},
+		)
+	}
+
+	return adapter.Ready(map[string]string{
+		"codex":    path,
+		"codexVer": strings.TrimSpace(string(out)),
+	})
+}
+
+func (a *Adapter) Models() []adapter.ModelMeta {
+	return []adapter.ModelMeta{
+		{ID: "", Label: "Default"},
+		{ID: "gpt-5.1-codex-max", Label: "GPT-5.1 Codex Max"},
+		{ID: "gpt-5.1-codex", Label: "GPT-5.1 Codex"},
+		{ID: "gpt-5.1", Label: "GPT-5.1"},
+	}
+}
+
+func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, o adapter.CreateOptions) (adapter.Session, error) {
+	cmd := exec.Command(a.Bin, "app-server")
+	cmd.Dir = o.Cwd
+	cmd.Env = os.Environ()
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start %s app-server: %w", a.Bin, err)
+	}
+
+	s := &session{
+		host:     host,
+		cmd:      cmd,
+		events:   make(chan proto.Emission, 256),
+		streamed: map[string]bool{},
+		done:     make(chan struct{}),
+	}
+	s.conn = jsonrpc.NewConn(stdout, stdin, s.handleRequest, s.handleNotification)
+
+	go s.drainStderr(stderr)
+	go s.watchExit()
+
+	var initRes struct {
+		CodexHome string `json:"codexHome"`
+	}
+	if err := s.conn.Call(ctx, "initialize", map[string]any{
+		"clientInfo":   map[string]any{"name": "hy", "version": "0.1.0"},
+		"capabilities": map[string]any{},
+	}, &initRes); err != nil {
+		_ = s.Close()
+		return nil, fmt.Errorf("codex initialize: %w", err)
+	}
+	if err := s.conn.Notify("initialized", map[string]any{}); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+
+	startParams := map[string]any{
+		"cwd": o.Cwd,
+		// on-request means the server asks us before anything outside the
+		// sandbox, which is the whole point of routing permissions to a human.
+		"approvalPolicy": "on-request",
+		"sandbox":        "workspace-write",
+	}
+	if o.Model != "" {
+		startParams["model"] = o.Model
+	}
+
+	method := "thread/start"
+	if o.HarnessSessionID != "" {
+		// Continue the existing thread so a server restart does not lose the
+		// agent's context.
+		method = "thread/resume"
+		startParams["threadId"] = o.HarnessSessionID
+	}
+
+	var startRes struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+	}
+	if err := s.conn.Call(ctx, method, startParams, &startRes); err != nil {
+		if o.HarnessSessionID == "" {
+			_ = s.Close()
+			return nil, fmt.Errorf("codex %s: %w", method, err)
+		}
+		// The thread is gone (archived, or a different codex home). Fall back
+		// to a fresh one rather than leaving the session unusable.
+		host.Logf("codex thread/resume failed, starting a new thread: %v", err)
+		delete(startParams, "threadId")
+		if err := s.conn.Call(ctx, "thread/start", startParams, &startRes); err != nil {
+			_ = s.Close()
+			return nil, fmt.Errorf("codex thread/start: %w", err)
+		}
+	}
+	s.threadID = startRes.Thread.ID
+
+	s.emit(proto.Emit(proto.SessionConfigChanged, proto.SessionConfigChangedPayload{
+		HarnessSessionID: s.threadID,
+	}))
+
+	return s, nil
+}
+
+type session struct {
+	host adapter.HostServices
+	cmd  *exec.Cmd
+	conn *jsonrpc.Conn
+
+	threadID string
+
+	events chan proto.Emission
+	done   chan struct{}
+	closed sync.Once
+
+	mu       sync.Mutex
+	turnID   string
+	streamed map[string]bool // item ids that arrived as deltas
+}
+
+func (s *session) Events() <-chan proto.Emission { return s.events }
+
+func (s *session) Prompt(ctx context.Context, in adapter.PromptInput) error {
+	s.mu.Lock()
+	s.turnID = in.TurnID
+	s.mu.Unlock()
+
+	return s.conn.Call(ctx, "turn/start", map[string]any{
+		"threadId": s.threadID,
+		"input":    []map[string]any{{"type": "text", "text": in.Text}},
+	}, nil)
+}
+
+func (s *session) Cancel(ctx context.Context) error {
+	return s.conn.Call(ctx, "turn/interrupt", map[string]any{"threadId": s.threadID}, nil)
+}
+
+func (s *session) Close() error {
+	s.closed.Do(func() {
+		close(s.done)
+		if s.cmd.Process != nil {
+			_ = s.cmd.Process.Kill()
+		}
+		_ = s.cmd.Wait()
+	})
+	return nil
+}
+
+func (s *session) watchExit() {
+	<-s.conn.Done()
+	s.mu.Lock()
+	turn := s.turnID
+	s.turnID = ""
+	s.mu.Unlock()
+	if turn != "" {
+		s.emit(proto.Emit(proto.TurnFinished, proto.TurnFinishedPayload{
+			TurnID: turn, StopReason: proto.StopError, Error: "harness exited",
+		}))
+	}
+	close(s.events)
+}
+
+func (s *session) drainStderr(r io.ReadCloser) {
+	sc := bufio.NewScanner(r)
+	for sc.Scan() {
+		if line := strings.TrimSpace(sc.Text()); line != "" {
+			s.host.Logf("codex stderr: %s", line)
+		}
+	}
+}
+
+func (s *session) emit(e proto.Emission) {
+	select {
+	case s.events <- e:
+	case <-s.done:
+	}
+}
+
+func (s *session) currentTurn() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.turnID
+}
+
+// ---- server → client requests (approvals) ----
+
+func (s *session) handleRequest(ctx context.Context, method string, params json.RawMessage) (any, error) {
+	switch method {
+	case "item/commandExecution/requestApproval", "execCommandApproval":
+		var p struct {
+			ItemID  string `json:"itemId"`
+			Command string `json:"command"`
+			Cwd     string `json:"cwd"`
+			Reason  string `json:"reason"`
+		}
+		_ = json.Unmarshal(params, &p)
+		return s.ask(ctx, p.ItemID, "shell", firstLine(p.Command), params)
+
+	case "item/fileChange/requestApproval", "applyPatchApproval":
+		var p struct {
+			ItemID    string `json:"itemId"`
+			Reason    string `json:"reason"`
+			GrantRoot string `json:"grantRoot"`
+		}
+		_ = json.Unmarshal(params, &p)
+		title := "Apply file changes"
+		if p.GrantRoot != "" {
+			title = "Apply file changes outside " + p.GrantRoot
+		}
+		return s.ask(ctx, p.ItemID, "apply_patch", title, params)
+
+	case "item/permissions/requestApproval":
+		var p struct {
+			ItemID string `json:"itemId"`
+			Reason string `json:"reason"`
+		}
+		_ = json.Unmarshal(params, &p)
+		title := "Grant additional permissions"
+		if p.Reason != "" {
+			title = p.Reason
+		}
+		return s.ask(ctx, p.ItemID, "permissions", title, params)
+
+	case "item/tool/requestUserInput":
+		return s.requestUserInput(ctx, params)
+
+	case "mcpServer/elicitation/request":
+		return s.requestMCPElicitation(ctx, params)
+
+	default:
+		return nil, fmt.Errorf("unsupported request: %s", method)
+	}
+}
+
+type userInputQuestion struct {
+	ID       string `json:"id"`
+	Header   string `json:"header"`
+	Question string `json:"question"`
+	IsSecret bool   `json:"isSecret"`
+	Options  []struct {
+		Label       string `json:"label"`
+		Description string `json:"description"`
+	} `json:"options"`
+}
+
+func (s *session) requestUserInput(ctx context.Context, params json.RawMessage) (any, error) {
+	var p struct {
+		TurnID    string              `json:"turnId"`
+		Questions []userInputQuestion `json:"questions"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, err
+	}
+	properties := map[string]any{}
+	required := make([]string, 0, len(p.Questions))
+	for _, q := range p.Questions {
+		field := map[string]any{"type": "string", "title": q.Question, "description": q.Header}
+		if q.IsSecret {
+			field["format"] = "password"
+		}
+		if len(q.Options) > 0 {
+			values := make([]string, 0, len(q.Options))
+			descriptions := map[string]string{}
+			for _, option := range q.Options {
+				values = append(values, option.Label)
+				descriptions[option.Label] = option.Description
+			}
+			field["enum"] = values
+			field["x-optionDescriptions"] = descriptions
+		}
+		properties[q.ID] = field
+		required = append(required, q.ID)
+	}
+	schema := jsonOf(map[string]any{"type": "object", "properties": properties, "required": required})
+	result, err := s.host.Elicit(ctx, adapter.ElicitationRequest{
+		TurnID: p.TurnID, Prompt: "Codex needs your input", Schema: schema,
+	})
+	if err != nil || result.Action != "accept" {
+		return map[string]any{"answers": map[string]any{}}, nil
+	}
+	var values map[string]any
+	_ = json.Unmarshal(result.Value, &values)
+	answers := map[string]any{}
+	for _, q := range p.Questions {
+		answers[q.ID] = map[string]any{"answers": stringValues(values[q.ID])}
+	}
+	return map[string]any{"answers": answers}, nil
+}
+
+func (s *session) requestMCPElicitation(ctx context.Context, params json.RawMessage) (any, error) {
+	var p struct {
+		TurnID          string          `json:"turnId"`
+		Message         string          `json:"message"`
+		Mode            string          `json:"mode"`
+		RequestedSchema json.RawMessage `json:"requestedSchema"`
+		URL             string          `json:"url"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, err
+	}
+	schema := p.RequestedSchema
+	if p.Mode == "url" {
+		schema = jsonOf(map[string]any{
+			"type": "object", "properties": map[string]any{}, "x-url": p.URL,
+		})
+	}
+	result, err := s.host.Elicit(ctx, adapter.ElicitationRequest{
+		TurnID: p.TurnID, Prompt: p.Message, Schema: schema,
+	})
+	if err != nil {
+		return map[string]any{"action": "cancel"}, nil
+	}
+	action := result.Action
+	if action != "accept" && action != "decline" {
+		action = "cancel"
+	}
+	response := map[string]any{"action": action}
+	if action == "accept" && len(result.Value) > 0 {
+		var content any
+		if json.Unmarshal(result.Value, &content) == nil {
+			response["content"] = content
+		}
+	}
+	return response, nil
+}
+
+func stringValues(value any) []string {
+	switch v := value.(type) {
+	case string:
+		return []string{v}
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			out = append(out, fmt.Sprint(item))
+		}
+		return out
+	case nil:
+		return []string{}
+	default:
+		return []string{fmt.Sprint(v)}
+	}
+}
+
+// ask routes an approval to a human via the host and maps the answer onto
+// codex's decision vocabulary.
+func (s *session) ask(ctx context.Context, itemID, tool, title string, raw json.RawMessage) (any, error) {
+	outcome, err := s.host.RequestPermission(ctx, adapter.PermissionRequest{
+		TurnID:     s.currentTurn(),
+		ToolCallID: itemID,
+		ToolName:   tool,
+		Title:      title,
+		RawInput:   raw,
+		Options: []proto.PermissionOption{
+			{OptionID: "accept", Name: "Allow once", Kind: proto.OutcomeAllowOnce},
+			{OptionID: "acceptForSession", Name: "Allow for session", Kind: proto.OutcomeAllowAlways},
+			{OptionID: "decline", Name: "Reject", Kind: proto.OutcomeRejectOnce},
+		},
+	})
+	if err != nil {
+		return map[string]any{"decision": "decline"}, nil
+	}
+
+	decision := "decline"
+	switch outcome.Outcome {
+	case proto.OutcomeAllowOnce:
+		decision = "accept"
+	case proto.OutcomeAllowAlways:
+		decision = "acceptForSession"
+	case proto.OutcomeCancelled:
+		decision = "cancel"
+	}
+	return map[string]any{"decision": decision}, nil
+}
+
+// ---- server → client notifications ----
+
+func (s *session) handleNotification(method string, params json.RawMessage) {
+	turn := s.currentTurn()
+
+	switch method {
+	case "item/started", "item/completed":
+		s.handleItem(method == "item/completed", turn, params)
+
+	case "item/agentMessage/delta":
+		var p struct {
+			ItemID string `json:"itemId"`
+			Delta  string `json:"delta"`
+		}
+		_ = json.Unmarshal(params, &p)
+		s.mu.Lock()
+		s.streamed[p.ItemID] = true
+		s.mu.Unlock()
+		s.emit(proto.Emit(proto.MessageChunk, proto.MessageChunkPayload{
+			TurnID: turn, Role: "agent", Kind: "text", BlockID: p.ItemID, Delta: p.Delta,
+		}))
+
+	case "item/reasoning/summaryTextDelta", "item/reasoning/textDelta":
+		var p struct {
+			ItemID string `json:"itemId"`
+			Delta  string `json:"delta"`
+		}
+		_ = json.Unmarshal(params, &p)
+		s.emit(proto.Emit(proto.MessageChunk, proto.MessageChunkPayload{
+			TurnID: turn, Role: "agent", Kind: "thought", BlockID: p.ItemID + ":reasoning", Delta: p.Delta,
+		}))
+
+	case "item/commandExecution/outputDelta", "command/exec/outputDelta":
+		// Streamed output is dropped; the completed item carries the
+		// aggregated output, which is what the timeline renders.
+
+	case "turn/plan/updated", "item/plan/delta":
+		s.handlePlan(params)
+
+	case "thread/tokenUsage/updated":
+		var p struct {
+			TokenUsage struct {
+				Total struct {
+					InputTokens           int64 `json:"inputTokens"`
+					OutputTokens          int64 `json:"outputTokens"`
+					CachedInputTokens     int64 `json:"cachedInputTokens"`
+					CacheWriteInputTokens int64 `json:"cacheWriteInputTokens"`
+				} `json:"total"`
+			} `json:"tokenUsage"`
+		}
+		_ = json.Unmarshal(params, &p)
+		t := p.TokenUsage.Total
+		s.emit(proto.Emit(proto.UsageUpdated, proto.UsageUpdatedPayload{
+			Input: t.InputTokens, Output: t.OutputTokens,
+			CacheRead: t.CachedInputTokens, CacheWrite: t.CacheWriteInputTokens,
+		}))
+
+	case "turn/completed", "turn/failed":
+		var p struct {
+			Turn struct {
+				Status string `json:"status"`
+				Error  *struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			} `json:"turn"`
+		}
+		_ = json.Unmarshal(params, &p)
+
+		stop, errMsg := proto.StopEndTurn, ""
+		switch {
+		case p.Turn.Error != nil:
+			stop, errMsg = proto.StopError, p.Turn.Error.Message
+		case p.Turn.Status == "cancelled" || p.Turn.Status == "interrupted":
+			stop = proto.StopCancelled
+		case p.Turn.Status == "failed":
+			stop = proto.StopError
+		}
+
+		s.mu.Lock()
+		done := s.turnID
+		s.turnID = ""
+		s.mu.Unlock()
+
+		s.emit(proto.Emit(proto.TurnFinished, proto.TurnFinishedPayload{
+			TurnID: done, StopReason: stop, Error: errMsg,
+		}))
+
+	case "error":
+		var p struct {
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(params, &p)
+		s.host.Logf("codex error: %s", p.Message)
+	}
+}
+
+// codexItem is the subset of the ThreadItem union this prototype renders.
+type codexItem struct {
+	Type   string `json:"type"`
+	ID     string `json:"id"`
+	Status string `json:"status"`
+
+	// agentMessage
+	Text  string `json:"text"`
+	Phase string `json:"phase"`
+
+	// reasoning
+	Summary []struct {
+		Text string `json:"text"`
+	} `json:"summary"`
+
+	// commandExecution
+	Command          string `json:"command"`
+	Cwd              string `json:"cwd"`
+	AggregatedOutput string `json:"aggregatedOutput"`
+	ExitCode         *int   `json:"exitCode"`
+
+	// fileChange
+	Changes []struct {
+		Path string `json:"path"`
+		Kind string `json:"kind"`
+		Diff string `json:"diff"`
+	} `json:"changes"`
+
+	// mcpToolCall
+	Server string          `json:"server"`
+	Tool   string          `json:"tool"`
+	Result json.RawMessage `json:"result"`
+
+	// webSearch
+	Query string `json:"query"`
+}
+
+func (s *session) handleItem(completed bool, turn string, params json.RawMessage) {
+	var p struct {
+		Item   codexItem `json:"item"`
+		TurnID string    `json:"turnId"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return
+	}
+	it := p.Item
+	if turn == "" {
+		turn = p.TurnID
+	}
+
+	switch it.Type {
+	case "userMessage":
+		// Already in the log via turn.started.
+
+	case "agentMessage":
+		// Deltas normally carry the text. Backfill only when none arrived,
+		// so a message that did stream is not duplicated.
+		if !completed || it.Text == "" {
+			return
+		}
+		s.mu.Lock()
+		streamed := s.streamed[it.ID]
+		s.mu.Unlock()
+		if !streamed {
+			s.emit(proto.Emit(proto.MessageChunk, proto.MessageChunkPayload{
+				TurnID: turn, Role: "agent", Kind: "text", BlockID: it.ID, Delta: it.Text,
+			}))
+		}
+
+	case "reasoning":
+		// Reasoning text arrives as thought deltas; nothing to do on the
+		// item boundaries.
+
+	case "commandExecution":
+		if !completed {
+			s.emit(proto.Emit(proto.ToolCallStarted, proto.ToolCallStartedPayload{
+				TurnID: turn, ToolCallID: it.ID, Kind: proto.KindExecute,
+				Title: firstLine(it.Command), Status: proto.StatusInProgress,
+				RawInput: jsonOf(map[string]any{"command": it.Command, "cwd": it.Cwd}),
+			}))
+			return
+		}
+		status := proto.StatusCompleted
+		if it.ExitCode != nil && *it.ExitCode != 0 {
+			status = proto.StatusFailed
+		}
+		var content []proto.ToolContent
+		if it.AggregatedOutput != "" {
+			content = []proto.ToolContent{{Type: "text", Text: it.AggregatedOutput}}
+		}
+		s.emit(proto.Emit(proto.ToolCallUpdated, proto.ToolCallUpdatedPayload{
+			ToolCallID: it.ID, Status: status, Content: content,
+		}))
+
+	case "fileChange":
+		var content []proto.ToolContent
+		paths := make([]string, 0, len(it.Changes))
+		for _, c := range it.Changes {
+			paths = append(paths, c.Path)
+			content = append(content, proto.ToolContent{Type: "diff", Path: c.Path, Text: c.Diff})
+		}
+		title := "Edit " + strings.Join(paths, ", ")
+		if !completed {
+			s.emit(proto.Emit(proto.ToolCallStarted, proto.ToolCallStartedPayload{
+				TurnID: turn, ToolCallID: it.ID, Kind: proto.KindEdit,
+				Title: title, Status: proto.StatusInProgress,
+			}))
+			return
+		}
+		status := proto.StatusCompleted
+		if it.Status == "failed" || it.Status == "declined" {
+			status = proto.StatusFailed
+		}
+		s.emit(proto.Emit(proto.ToolCallUpdated, proto.ToolCallUpdatedPayload{
+			ToolCallID: it.ID, Status: status, Title: title, Content: content,
+		}))
+
+	case "mcpToolCall":
+		title := it.Server + "/" + it.Tool
+		if !completed {
+			s.emit(proto.Emit(proto.ToolCallStarted, proto.ToolCallStartedPayload{
+				TurnID: turn, ToolCallID: it.ID, Kind: proto.KindOther,
+				Title: title, Status: proto.StatusInProgress,
+			}))
+			return
+		}
+		s.emit(proto.Emit(proto.ToolCallUpdated, proto.ToolCallUpdatedPayload{
+			ToolCallID: it.ID, Status: proto.StatusCompleted,
+			Content: []proto.ToolContent{{Type: "text", Text: string(it.Result)}},
+		}))
+
+	case "webSearch":
+		if !completed {
+			s.emit(proto.Emit(proto.ToolCallStarted, proto.ToolCallStartedPayload{
+				TurnID: turn, ToolCallID: it.ID, Kind: proto.KindFetch,
+				Title: "Search: " + it.Query, Status: proto.StatusInProgress,
+			}))
+			return
+		}
+		s.emit(proto.Emit(proto.ToolCallUpdated, proto.ToolCallUpdatedPayload{
+			ToolCallID: it.ID, Status: proto.StatusCompleted,
+		}))
+	}
+}
+
+func (s *session) handlePlan(params json.RawMessage) {
+	var p struct {
+		Plan []struct {
+			Step   string `json:"step"`
+			Text   string `json:"text"`
+			Status string `json:"status"`
+		} `json:"plan"`
+		Item struct {
+			Plan []struct {
+				Step   string `json:"step"`
+				Text   string `json:"text"`
+				Status string `json:"status"`
+			} `json:"plan"`
+		} `json:"item"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return
+	}
+	steps := p.Plan
+	if len(steps) == 0 {
+		steps = p.Item.Plan
+	}
+	entries := make([]proto.PlanEntry, 0, len(steps))
+	for _, st := range steps {
+		text := st.Step
+		if text == "" {
+			text = st.Text
+		}
+		entries = append(entries, proto.PlanEntry{Content: text, Status: st.Status})
+	}
+	if len(entries) > 0 {
+		s.emit(proto.Emit(proto.PlanUpdated, proto.PlanUpdatedPayload{Entries: entries}))
+	}
+}
+
+func jsonOf(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i] + " …"
+	}
+	return s
+}

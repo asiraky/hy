@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- interactive-widget keeps the layout viewport from being shrunk by the
+         on-screen keyboard, so the composer stays put instead of being pushed
+         off-screen. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <meta name="theme-color" content="#09090b" />
+    <!-- Stamped with the bundle's content hash when the Go server serves this
+         document. It stays "dev" under the Vite dev server, which is how the
+         client knows to skip build-mismatch checks during development. -->
+    <meta name="hy-build" content="dev" />
+    <title>hy</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

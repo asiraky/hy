@@ -1,0 +1,351 @@
+// Package projection folds the event log into the state a UI renders. It is
+// derived data: dropping every projection and rebuilding from the log must
+// yield an identical result.
+package projection
+
+import (
+	"encoding/json"
+
+	"github.com/asiraky/hy/internal/proto"
+)
+
+// ItemKind discriminates timeline entries.
+const (
+	ItemMessage = "message"
+	ItemTool    = "tool"
+)
+
+// Item is one entry in the session timeline, in the order it first appeared.
+type Item struct {
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	TurnID string `json:"turnId,omitempty"`
+
+	// message
+	Role        string `json:"role,omitempty"`
+	ContentKind string `json:"contentKind,omitempty"` // text | thought
+	Text        string `json:"text,omitempty"`
+
+	// tool
+	ToolKind string              `json:"toolKind,omitempty"`
+	Title    string              `json:"title,omitempty"`
+	Status   string              `json:"status,omitempty"`
+	Input    json.RawMessage     `json:"input,omitempty"`
+	Content  []proto.ToolContent `json:"content,omitempty"`
+}
+
+// Turn records the lifecycle of one prompt/response cycle.
+type Turn struct {
+	ID         string `json:"id"`
+	Prompt     string `json:"prompt"`
+	StopReason string `json:"stopReason,omitempty"`
+	Error      string `json:"error,omitempty"`
+	Done       bool   `json:"done"`
+}
+
+// PendingPermission is a permission request awaiting a human. It lives in the
+// log, not in a connection, so any attached presenter can answer it.
+type PendingPermission struct {
+	RequestID  string                   `json:"requestId"`
+	ToolCallID string                   `json:"toolCallId"`
+	ToolName   string                   `json:"toolName"`
+	Title      string                   `json:"title"`
+	Input      json.RawMessage          `json:"input,omitempty"`
+	Options    []proto.PermissionOption `json:"options"`
+}
+
+type PendingElicitation struct {
+	RequestID string          `json:"requestId"`
+	Prompt    string          `json:"prompt"`
+	Schema    json.RawMessage `json:"schema"`
+}
+
+// State is the complete renderable state of a session as of Seq.
+type State struct {
+	SessionID string `json:"sessionId"`
+	Seq       int64  `json:"seq"`
+	Cwd       string `json:"cwd"`
+	Harness   string `json:"harness"`
+	Model     string `json:"model"`
+	Mode      string `json:"mode"`
+	Title     string `json:"title"`
+	// HarnessSessionID is the harness's own conversation id, used to resume.
+	HarnessSessionID string `json:"harnessSessionId,omitempty"`
+	Phase            string `json:"phase"` // idle | turn | closed
+	Closed           bool   `json:"closed"`
+
+	Items        []Item                    `json:"items"`
+	Turns        []Turn                    `json:"turns"`
+	Plan         []proto.PlanEntry         `json:"plan"`
+	Usage        proto.UsageUpdatedPayload `json:"usage"`
+	Pending      []PendingPermission       `json:"pendingPermissions"`
+	Elicitations []PendingElicitation      `json:"pendingElicitations"`
+
+	itemIndex map[string]int `json:"-"`
+}
+
+func New(sessionID string) *State {
+	return &State{
+		SessionID:    sessionID,
+		Phase:        "idle",
+		Items:        []Item{},
+		Turns:        []Turn{},
+		Plan:         []proto.PlanEntry{},
+		Pending:      []PendingPermission{},
+		Elicitations: []PendingElicitation{},
+		itemIndex:    map[string]int{},
+	}
+}
+
+// reindex rebuilds the id→position map, needed after a snapshot is decoded.
+func (s *State) reindex() {
+	s.itemIndex = make(map[string]int, len(s.Items))
+	for i, it := range s.Items {
+		s.itemIndex[it.ID] = i
+	}
+}
+
+// FromSnapshot decodes a stored snapshot back into usable state.
+func FromSnapshot(blob json.RawMessage) (*State, error) {
+	var s State
+	if err := json.Unmarshal(blob, &s); err != nil {
+		return nil, err
+	}
+	s.reindex()
+	return &s, nil
+}
+
+func (s *State) upsert(id string, mut func(*Item)) {
+	if s.itemIndex == nil {
+		s.reindex()
+	}
+	if i, ok := s.itemIndex[id]; ok {
+		mut(&s.Items[i])
+		return
+	}
+	it := Item{ID: id}
+	mut(&it)
+	s.Items = append(s.Items, it)
+	s.itemIndex[id] = len(s.Items) - 1
+}
+
+// Apply folds one event. Applying the same event twice is a no-op for every
+// type except message.chunk, which is why callers must discard seq <= Seq.
+func (s *State) Apply(ev proto.Event) {
+	if ev.Seq <= s.Seq {
+		return
+	}
+	s.Seq = ev.Seq
+
+	switch ev.Type {
+	case proto.SessionCreated:
+		var p proto.SessionCreatedPayload
+		decode(ev.Payload, &p)
+		s.Cwd, s.Harness, s.Model, s.Mode, s.Title = p.Cwd, p.Harness, p.Model, p.Mode, p.Title
+
+	case proto.SessionConfigChanged:
+		var p proto.SessionConfigChangedPayload
+		decode(ev.Payload, &p)
+		if p.Model != "" {
+			s.Model = p.Model
+		}
+		if p.Mode != "" {
+			s.Mode = p.Mode
+		}
+		if p.Title != "" {
+			s.Title = p.Title
+		}
+		if p.HarnessSessionID != "" {
+			s.HarnessSessionID = p.HarnessSessionID
+		}
+
+	case proto.SessionClosed:
+		s.Closed = true
+		s.Phase = "closed"
+
+	case proto.TurnStarted:
+		var p proto.TurnStartedPayload
+		decode(ev.Payload, &p)
+		s.Phase = "turn"
+		s.Turns = append(s.Turns, Turn{ID: p.TurnID, Prompt: p.Prompt})
+		if s.Title == "" {
+			s.Title = truncate(p.Prompt, 60)
+		}
+		// The prompt itself is a timeline item so the UI shows what was asked.
+		s.upsert("prompt:"+p.TurnID, func(it *Item) {
+			it.Kind = ItemMessage
+			it.Role = "user"
+			it.ContentKind = "text"
+			it.Text = p.Prompt
+			it.TurnID = p.TurnID
+		})
+
+	case proto.TurnFinished:
+		var p proto.TurnFinishedPayload
+		decode(ev.Payload, &p)
+		s.Phase = "idle"
+		for i := range s.Turns {
+			if s.Turns[i].ID == p.TurnID {
+				s.Turns[i].StopReason = p.StopReason
+				s.Turns[i].Error = p.Error
+				s.Turns[i].Done = true
+			}
+		}
+		// Any tool left mid-flight when the turn ended is no longer running.
+		for i := range s.Items {
+			if s.Items[i].Kind == ItemTool && (s.Items[i].Status == proto.StatusInProgress || s.Items[i].Status == proto.StatusPending) {
+				s.Items[i].Status = proto.StatusFailed
+			}
+		}
+
+	case proto.MessageChunk:
+		var p proto.MessageChunkPayload
+		decode(ev.Payload, &p)
+		s.upsert(p.BlockID, func(it *Item) {
+			it.Kind = ItemMessage
+			it.Role = p.Role
+			it.ContentKind = p.Kind
+			it.TurnID = p.TurnID
+			it.Text += p.Delta
+		})
+
+	case proto.ToolCallStarted:
+		var p proto.ToolCallStartedPayload
+		decode(ev.Payload, &p)
+		s.upsert(p.ToolCallID, func(it *Item) {
+			it.Kind = ItemTool
+			it.TurnID = p.TurnID
+			it.ToolKind = p.Kind
+			it.Title = p.Title
+			it.Status = p.Status
+			it.Input = p.RawInput
+		})
+
+	case proto.ToolCallUpdated:
+		var p proto.ToolCallUpdatedPayload
+		decode(ev.Payload, &p)
+		s.upsert(p.ToolCallID, func(it *Item) {
+			it.Kind = ItemTool
+			if p.Status != "" {
+				it.Status = p.Status
+			}
+			if p.Title != "" {
+				it.Title = p.Title
+			}
+			if len(p.RawInput) > 0 {
+				it.Input = p.RawInput
+			}
+			if len(p.Content) > 0 {
+				it.Content = append(it.Content, p.Content...)
+			}
+		})
+
+	case proto.PlanUpdated:
+		var p proto.PlanUpdatedPayload
+		decode(ev.Payload, &p)
+		s.Plan = p.Entries
+
+	case proto.UsageUpdated:
+		var p proto.UsageUpdatedPayload
+		decode(ev.Payload, &p)
+		s.Usage = p
+
+	case proto.PermissionRequested:
+		var p proto.PermissionRequestedPayload
+		decode(ev.Payload, &p)
+		s.Pending = append(s.Pending, PendingPermission{
+			RequestID:  p.RequestID,
+			ToolCallID: p.ToolCallID,
+			ToolName:   p.ToolName,
+			Title:      p.Title,
+			Input:      p.RawInput,
+			Options:    p.Options,
+		})
+
+	case proto.PermissionResolved:
+		var p proto.PermissionResolvedPayload
+		decode(ev.Payload, &p)
+		out := s.Pending[:0]
+		for _, pend := range s.Pending {
+			if pend.RequestID != p.RequestID {
+				out = append(out, pend)
+			}
+		}
+		s.Pending = out
+
+	case proto.ElicitationRequested:
+		var p proto.ElicitationRequestedPayload
+		decode(ev.Payload, &p)
+		s.Elicitations = append(s.Elicitations, PendingElicitation{
+			RequestID: p.RequestID, Prompt: p.Prompt, Schema: p.Schema,
+		})
+
+	case proto.ElicitationResolved:
+		var p proto.ElicitationResolvedPayload
+		decode(ev.Payload, &p)
+		out := s.Elicitations[:0]
+		for _, pending := range s.Elicitations {
+			if pending.RequestID != p.RequestID {
+				out = append(out, pending)
+			}
+		}
+		s.Elicitations = out
+	}
+}
+
+func decode(raw json.RawMessage, v any) {
+	if len(raw) == 0 {
+		return
+	}
+	_ = json.Unmarshal(raw, v)
+}
+
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+// Clone returns a deep copy safe to hand outside the actor goroutine. A
+// shallow copy would share the item and content slices with the live state,
+// which the actor keeps mutating.
+func (s *State) Clone() *State {
+	out := *s
+	out.itemIndex = nil
+
+	out.Items = make([]Item, len(s.Items))
+	for i, it := range s.Items {
+		cp := it
+		if len(it.Content) > 0 {
+			cp.Content = append([]proto.ToolContent(nil), it.Content...)
+		}
+		if len(it.Input) > 0 {
+			cp.Input = append(json.RawMessage(nil), it.Input...)
+		}
+		out.Items[i] = cp
+	}
+
+	out.Turns = make([]Turn, len(s.Turns))
+	copy(out.Turns, s.Turns)
+	out.Plan = make([]proto.PlanEntry, len(s.Plan))
+	copy(out.Plan, s.Plan)
+
+	out.Pending = make([]PendingPermission, len(s.Pending))
+	for i, p := range s.Pending {
+		cp := p
+		cp.Options = append([]proto.PermissionOption(nil), p.Options...)
+		if len(p.Input) > 0 {
+			cp.Input = append(json.RawMessage(nil), p.Input...)
+		}
+		out.Pending[i] = cp
+	}
+	out.Elicitations = make([]PendingElicitation, len(s.Elicitations))
+	for i, pending := range s.Elicitations {
+		out.Elicitations[i] = pending
+		out.Elicitations[i].Schema = append(json.RawMessage(nil), pending.Schema...)
+	}
+
+	return &out
+}

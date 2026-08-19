@@ -1,0 +1,12 @@
+#!/bin/sh
+# Runs a binary from the web workspace.
+#
+# Package managers disagree about where workspace dependencies land: bun keeps
+# them in web/node_modules, npm hoists them to the root. Putting both on PATH
+# means the scripts work under either without the root package.json having to
+# know which one installed.
+set -e
+cd "$(dirname "$0")/../web"
+PATH="$PWD/node_modules/.bin:$PWD/../node_modules/.bin:$PATH"
+export PATH
+exec "$@"

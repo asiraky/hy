@@ -1,0 +1,22 @@
+# Rebuild and restart the Go server when Go source changes.
+#
+# The web app is not watched here: Vite owns those files and swaps them into
+# the running page without a restart. Watching them would rebuild the binary on
+# every keystroke in a component for no benefit.
+
+root = "."
+tmp_dir = ".air"
+
+[build]
+  cmd = "go build -o ./.air/hy ./cmd/hy"
+  bin = "./.air/hy -dev"
+  include_ext = ["go"]
+  exclude_dir = [".air", "web", "node_modules", "cmd/hy/webdist", "internal/adapter/claudecode/sidecar"]
+  exclude_regex = ["_test\\.go"]
+  # Editors write in bursts; without this a single save can trigger several
+  # builds.
+  delay = 300
+  stop_on_error = true
+
+[misc]
+  clean_on_exit = true

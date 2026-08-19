@@ -1,0 +1,27 @@
+# Local binaries and development processes
+/hy
+/.air/
+/internal/adapter/claudecode/sidecar/dist/
+
+# Dependencies and generated frontend output
+node_modules/
+/web/dist/
+/cmd/hy/webdist/assets/
+/cmd/hy/webdist/index.html
+*.tsbuildinfo
+
+# Runtime data
+*.db
+*.db-wal
+*.db-shm
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+
+# Test and editor/OS output
+coverage/
+*.coverprofile
+.DS_Store
+*.swp

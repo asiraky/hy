@@ -1,0 +1,269 @@
+// Command hy runs the harness multiplexer: one server driving Claude Code and
+// Codex behind a single canonical protocol, with any number of UIs attached.
+package main
+
+import (
+	"context"
+	"embed"
+	"flag"
+	"fmt"
+	"io/fs"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"syscall"
+	"time"
+
+	"github.com/asiraky/hy/internal/adapter/claudecode"
+	"github.com/asiraky/hy/internal/adapter/codexapp"
+	"github.com/asiraky/hy/internal/auth"
+	"github.com/asiraky/hy/internal/banner"
+	"github.com/asiraky/hy/internal/endpoints"
+	"github.com/asiraky/hy/internal/netinfo"
+	"github.com/asiraky/hy/internal/overlay"
+	"github.com/asiraky/hy/internal/server"
+	"github.com/asiraky/hy/internal/session"
+	"github.com/asiraky/hy/internal/store"
+)
+
+// web/dist is embedded when it has been built. The directory always contains a
+// placeholder so the build works without a UI bundle present.
+//
+//go:embed all:webdist
+var webdist embed.FS
+
+func main() {
+	var (
+		addr       = flag.String("addr", "", "bind one specific address, e.g. 192.168.1.20:8787 (default: every private and overlay address)")
+		port       = flag.Int("port", 8787, "port to listen on")
+		bindPublic = flag.Bool("bind-public", false, "also bind globally routable addresses, exposing hy to the internet")
+		dbPath     = flag.String("db", defaultDB(), "path to the event log database")
+		cwd        = flag.String("cwd", mustCwd(), "default working directory for new sessions")
+		claudePath = flag.String("claude-path", "", "path to the Claude Code executable (default: discover it)")
+		codexBin   = flag.String("codex", "codex", "path to the codex CLI")
+		dev        = flag.Bool("dev", false, "development mode: serve the UI from the Vite dev server instead of the embedded bundle")
+		vitePort   = flag.Int("vite-port", envInt("HY_VITE_PORT", 5199), "port the Vite dev server listens on (with -dev)")
+	)
+	flag.Parse()
+
+	plan, err := netinfo.Plan(netinfo.Options{
+		Override:      *addr,
+		Port:          *port,
+		IncludePublic: *bindPublic,
+	})
+	if err != nil {
+		log.Fatalf("choose addresses: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(*dbPath), 0o755); err != nil {
+		log.Fatalf("create data dir: %v", err)
+	}
+
+	st, err := store.Open(*dbPath)
+	if err != nil {
+		log.Fatalf("open log: %v", err)
+	}
+	defer st.Close()
+
+	// The bind decision drives the auth policy: reachable from another
+	// machine means every request from one needs a paired device. It is
+	// re-derived below from what actually bound.
+	guard := auth.New(st, plan.Reachable)
+
+	logf := func(format string, args ...any) { log.Printf(format, args...) }
+
+	mgr := session.NewManager(st, logf,
+		claudecode.New(*claudePath),
+		codexapp.New(*codexBin),
+	)
+	defer mgr.Shutdown()
+
+	webFS, hasUI := embeddedUI()
+
+	// In development the UI comes from Vite through this server rather than
+	// from the embedded bundle, so a stale or absent build is irrelevant.
+	devViteURL := ""
+	if *dev {
+		devViteURL = fmt.Sprintf("http://127.0.0.1:%d", *vitePort)
+		hasUI = true
+	}
+
+	// Bind first, then advertise: an interface can disappear between being
+	// enumerated and being bound, and a QR pointing at an address nothing is
+	// listening on sends a phone nowhere. `bound` is what actually opened.
+	listeners, bound, err := plan.Listen()
+	if err != nil {
+		log.Fatalf("listen: %v", err)
+	}
+	plan = bound
+
+	access := endpoints.NewBuilder(plan, plan.Port)
+
+	srv := server.New(server.Options{
+		Manager:    mgr,
+		Store:      st,
+		Guard:      guard,
+		Endpoints:  access,
+		DefaultCwd: *cwd,
+		WebFS:      webFS,
+		DevViteURL: devViteURL,
+		// Nothing is cross-origin any more: the browser talks to this server
+		// and this server talks to Vite, so the upgrade check can stay on.
+		AllowAnyOrigin: false,
+	})
+
+	httpSrv := &http.Server{
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	var harnesses []string
+	for _, h := range mgr.Harnesses(context.Background()) {
+		status := "ready"
+		if !h.Availability.OK() {
+			status = "unavailable — " + h.Availability.Reason
+		}
+		harnesses = append(harnesses, fmt.Sprintf("%-12s %s", h.Name, status))
+	}
+
+	// Built from the same source the client is told about, so the banner and
+	// the app never disagree about how to reach this machine.
+	set := access.Build(context.Background())
+
+	var lines []banner.Line
+	for _, e := range set.Endpoints {
+		lines = append(lines, banner.Line{Label: e.Label, URL: e.URL, Insecure: !e.Encrypted})
+	}
+
+	opts := banner.Options{
+		DBPath:    *dbPath,
+		Cwd:       *cwd,
+		Harness:   harnesses,
+		Addrs:     lines,
+		HasUI:     hasUI,
+		Reachable: plan.Reachable,
+	}
+
+	// A code is only worth minting when another device could use it.
+	if plan.Reachable {
+		code, err := guard.NewPairingCode(context.Background())
+		if err != nil {
+			log.Printf("could not mint a pairing code: %v", err)
+		} else {
+			// Prefer the overlay hostname: pairing binds a device token to
+			// one origin, and that name is the only one that reaches this
+			// machine both at home and away.
+			base := set.BestPairingURL()
+			if base == "" {
+				base = plan.BestPairingURL()
+			}
+			opts.PairingCode = auth.FormatCode(code)
+			opts.PairingRaw = code
+			// The code rides in the fragment so it is never sent to the
+			// server in a request line, and so cannot reach an access log.
+			opts.PairingURL = base + "/pair#c=" + code
+		}
+	}
+
+	// `tailscale serve` proxies the tailnet to our loopback address, which
+	// would otherwise make every remote request look local and grant it access
+	// with no pairing. The mapping can be turned on outside this process and
+	// survives reboots, so it is watched rather than read once.
+	watchProxy(guard, access, plan.Port)
+
+	banner.Write(os.Stdout, opts)
+
+	for _, ln := range listeners {
+		go func(l net.Listener) {
+			if err := httpSrv.Serve(l); err != nil && err != http.ErrServerClosed {
+				log.Printf("serve on %s stopped: %v", l.Addr(), err)
+			}
+		}(ln)
+	}
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
+
+	log.Println("shutting down; disposing harnesses")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = httpSrv.Shutdown(ctx)
+	mgr.Shutdown()
+}
+
+// watchProxy keeps the guard's view of any reverse proxy current.
+//
+// It checks immediately, so a mapping left over from a previous run is in
+// force before the first request is served, and then on a ticker, because the
+// mapping can be changed by another program at any time. The interval bounds
+// how long a newly-added proxy could go unnoticed; requests relayed by
+// Tailscale also carry headers the guard treats as proof of relaying, which
+// covers that window.
+func watchProxy(guard *auth.Guard, access *endpoints.Builder, port int) {
+	check := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		ts := overlay.Detect(ctx)
+		if !ts.Running || ts.DNSName == "" {
+			guard.SetProxied(false)
+			return
+		}
+		guard.SetProxied(overlay.CheckServe(ctx, ts.CLI, port, ts.DNSName).Enabled)
+	}
+
+	check()
+
+	go func() {
+		t := time.NewTicker(15 * time.Second)
+		defer t.Stop()
+		for range t.C {
+			check()
+		}
+	}()
+}
+
+// embeddedUI returns the built bundle, or (nil, false) when only the
+// placeholder is present.
+func embeddedUI() (fs.FS, bool) {
+	sub, err := fs.Sub(webdist, "webdist")
+	if err != nil {
+		return nil, false
+	}
+	if _, err := fs.Stat(sub, "index.html"); err != nil {
+		return nil, false
+	}
+	return sub, true
+}
+
+// envInt reads an integer from the environment, falling back when it is unset
+// or unparseable. The dev scripts set these so Go and Vite agree on ports.
+func envInt(name string, fallback int) int {
+	if v := os.Getenv(name); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func defaultDB() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "hy.db"
+	}
+	return filepath.Join(home, ".hy", "hy.db")
+}
+
+func mustCwd() string {
+	d, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return d
+}

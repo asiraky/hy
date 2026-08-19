@@ -1,0 +1,738 @@
+// Package session owns the running sessions: one goroutine per session, which
+// is the only thing that mutates that session's state. Fanout to presenters is
+// non-blocking; a slow consumer is dropped and resynced, never buffered without
+// limit and never allowed to stall a turn.
+package session
+
+import (
+	"context"
+	"errors"
+	"sync"
+
+	"github.com/google/uuid"
+
+	"github.com/asiraky/hy/internal/adapter"
+	"github.com/asiraky/hy/internal/projection"
+	"github.com/asiraky/hy/internal/proto"
+	"github.com/asiraky/hy/internal/store"
+)
+
+// Tunables named by the spec's invariants.
+const (
+	MaxReplayGap    = 1000 // no attach reads more events than this
+	SubscriberQueue = 256  // bounded per-connection outbound queue
+	SnapshotEvery   = 200  // snapshot cadence, a latency cache only
+)
+
+// Subscriber receives live events for one session. Ch is closed when the
+// subscription ends. Resync is closed if the server dropped the queue.
+type Subscriber struct {
+	ID     string
+	Ch     chan proto.Event
+	Resync chan struct{}
+
+	dropped bool
+}
+
+// Actor is one live session.
+type Actor struct {
+	ID      string
+	Harness string
+	Cwd     string
+
+	store   *store.Store
+	adapter adapter.Adapter
+	sess    adapter.Session
+
+	inbox chan command
+	quit  chan struct{}
+	wg    sync.WaitGroup
+
+	// Owned by the actor goroutine only.
+	state         *projection.State
+	lastSnapAt    int64
+	pendingPerm   map[string]chan adapter.PermissionOutcome
+	pendingElicit map[string]chan adapter.ElicitationResult
+	turnActive    string
+
+	mu   sync.Mutex // guards subs and headSeq for readers outside the loop
+	subs map[string]*Subscriber
+	head int64
+
+	// onExit lets the manager forget a disposed actor, so the next attach
+	// resumes the session from the log instead of finding a dead one.
+	onExit func()
+	// onPhase fires when the session moves between idle and turn, so a
+	// session list rendered elsewhere can follow along.
+	onPhase func()
+
+	logf func(string, ...any)
+}
+
+type command struct {
+	kind         string
+	prompt       string
+	reqID        string
+	outcome      adapter.PermissionOutcome
+	perm         permAsk
+	elicit       elicitAsk
+	elicitResult adapter.ElicitationResult
+	emission     *proto.Emission
+	hard         bool // close: append session.closed, rather than just disposing
+	reply        chan cmdResult
+}
+
+type permAsk struct {
+	req adapter.PermissionRequest
+	ch  chan adapter.PermissionOutcome
+}
+
+type elicitAsk struct {
+	req adapter.ElicitationRequest
+	ch  chan adapter.ElicitationResult
+}
+
+type cmdResult struct {
+	value any
+	err   error
+}
+
+const (
+	cmdPrompt        = "prompt"
+	cmdCancel        = "cancel"
+	cmdResolvePerm   = "resolve_permission"
+	cmdAskPerm       = "ask_permission"
+	cmdResolveElicit = "resolve_elicitation"
+	cmdAskElicit     = "ask_elicitation"
+	cmdClose         = "close"
+)
+
+// ErrBusy is returned when a prompt arrives while a turn is already running.
+var ErrBusy = errors.New("a turn is already in progress")
+
+// ErrClosed is returned when a command tries to mutate a closed transcript.
+var ErrClosed = errors.New("session is closed")
+
+// ErrAlreadyResolved is returned to the loser of a permission race. It is an
+// ack, not a failure: the request was answered, just not by this presenter.
+var ErrAlreadyResolved = errors.New("already_resolved")
+
+// Start creates a harness session and its actor goroutine.
+func Start(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store.SessionMeta, model, mode string, logf func(string, ...any)) (*Actor, error) {
+	a := &Actor{
+		ID:            meta.ID,
+		Harness:       meta.Harness,
+		Cwd:           meta.Cwd,
+		store:         st,
+		adapter:       ad,
+		inbox:         make(chan command, 64),
+		quit:          make(chan struct{}),
+		state:         projection.New(meta.ID),
+		pendingPerm:   map[string]chan adapter.PermissionOutcome{},
+		pendingElicit: map[string]chan adapter.ElicitationResult{},
+		subs:          map[string]*Subscriber{},
+		logf:          logf,
+	}
+
+	sess, err := ad.CreateSession(ctx, hostServices{a}, adapter.CreateOptions{
+		SessionID: meta.ID, Cwd: meta.Cwd, Model: model, Mode: mode,
+	})
+	if err != nil {
+		return nil, err
+	}
+	a.sess = sess
+
+	a.wg.Add(1)
+	go a.run()
+
+	// session.created is the first event in every session's log.
+	a.enqueueEmission(proto.Emit(proto.SessionCreated, proto.SessionCreatedPayload{
+		Cwd: meta.Cwd, Harness: meta.Harness, Model: model, Mode: mode, Title: meta.Title,
+	}))
+	return a, nil
+}
+
+// Resume rebuilds an actor for an existing session id, replaying its log into
+// the projection before starting a fresh harness process.
+func Resume(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store.SessionMeta, logf func(string, ...any)) (*Actor, error) {
+	state, err := loadState(ctx, st, meta.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	a := &Actor{
+		ID:            meta.ID,
+		Harness:       meta.Harness,
+		Cwd:           meta.Cwd,
+		store:         st,
+		adapter:       ad,
+		inbox:         make(chan command, 64),
+		quit:          make(chan struct{}),
+		state:         state,
+		head:          state.Seq,
+		pendingPerm:   map[string]chan adapter.PermissionOutcome{},
+		pendingElicit: map[string]chan adapter.ElicitationResult{},
+		subs:          map[string]*Subscriber{},
+		logf:          logf,
+	}
+
+	sess, err := ad.CreateSession(ctx, hostServices{a}, adapter.CreateOptions{
+		SessionID:        meta.ID,
+		Cwd:              meta.Cwd,
+		Model:            state.Model,
+		Mode:             state.Mode,
+		Resume:           true,
+		HarnessSessionID: state.HarnessSessionID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	a.sess = sess
+
+	a.wg.Add(1)
+	go a.run()
+
+	// Server death ends the in-flight turn (the harness process is gone), but
+	// the conversation remains resumable. Close every durable human request and
+	// unfinished turn so the log-authoritative projection reopens idle rather
+	// than leaving every presenter stuck on a Stop button forever.
+	for _, pending := range state.Pending {
+		a.enqueueEmission(proto.Emit(proto.PermissionResolved, proto.PermissionResolvedPayload{
+			RequestID: pending.RequestID, Outcome: proto.OutcomeCancelled,
+		}))
+	}
+	for _, pending := range state.Elicitations {
+		a.enqueueEmission(proto.Emit(proto.ElicitationResolved, proto.ElicitationResolvedPayload{
+			RequestID: pending.RequestID, Action: "cancel",
+		}))
+	}
+	for _, turn := range state.Turns {
+		if !turn.Done {
+			a.enqueueEmission(proto.Emit(proto.TurnFinished, proto.TurnFinishedPayload{
+				TurnID: turn.ID, StopReason: proto.StopError, Error: "server restarted during turn",
+			}))
+		}
+	}
+	return a, nil
+}
+
+// RestoreClosed creates a read-only actor for a closed transcript. It has no
+// harness process, but retains the same attach/state/fanout surface so closed
+// sessions remain inspectable by presenters.
+func RestoreClosed(ctx context.Context, st *store.Store, meta store.SessionMeta, logf func(string, ...any)) (*Actor, error) {
+	state, err := loadState(ctx, st, meta.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !state.Closed {
+		ev, err := st.Append(ctx, meta.ID, proto.Emit(proto.SessionClosed, proto.SessionClosedPayload{Reason: "closed"}))
+		if err != nil {
+			return nil, err
+		}
+		state.Apply(ev)
+	}
+	a := &Actor{
+		ID: meta.ID, Harness: meta.Harness, Cwd: meta.Cwd,
+		store: st, inbox: make(chan command, 64), quit: make(chan struct{}),
+		state: state, head: state.Seq, pendingPerm: map[string]chan adapter.PermissionOutcome{},
+		pendingElicit: map[string]chan adapter.ElicitationResult{},
+		subs:          map[string]*Subscriber{}, logf: logf,
+	}
+	a.wg.Add(1)
+	go a.run()
+	return a, nil
+}
+
+// loadState folds the whole log, using the newest snapshot as a starting point.
+func loadState(ctx context.Context, st *store.Store, id string) (*projection.State, error) {
+	state := projection.New(id)
+	if seq, blob, err := st.LatestSnapshot(ctx, id); err == nil && blob != nil {
+		if s, err := projection.FromSnapshot(blob); err == nil {
+			state = s
+			state.Seq = seq
+		}
+	}
+	for {
+		evs, err := st.ReadEvents(ctx, id, state.Seq, 1000)
+		if err != nil {
+			return nil, err
+		}
+		if len(evs) == 0 {
+			return state, nil
+		}
+		for _, ev := range evs {
+			state.Apply(ev)
+		}
+	}
+}
+
+// Head returns the current sequence number.
+func (a *Actor) Head() int64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.head
+}
+
+// State returns a snapshot of the projection as of Head. It is produced inside
+// the actor loop so it can never observe a half-applied event.
+func (a *Actor) State(ctx context.Context) (*projection.State, error) {
+	reply := make(chan cmdResult, 1)
+	select {
+	case a.inbox <- command{kind: "state", reply: reply}:
+	case <-a.quit:
+		return nil, errors.New("session closed")
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	select {
+	case r := <-reply:
+		if r.err != nil {
+			return nil, r.err
+		}
+		return r.value.(*projection.State), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// Subscribe registers a live listener. Callers must Unsubscribe.
+//
+// Subscribing happens before the caller reads history, which closes the window
+// where an event lands between the read and the subscription.
+func (a *Actor) Subscribe() *Subscriber {
+	sub := &Subscriber{
+		ID:     uuid.NewString(),
+		Ch:     make(chan proto.Event, SubscriberQueue),
+		Resync: make(chan struct{}),
+	}
+	a.mu.Lock()
+	a.subs[sub.ID] = sub
+	a.mu.Unlock()
+	return sub
+}
+
+func (a *Actor) Unsubscribe(sub *Subscriber) {
+	a.mu.Lock()
+	delete(a.subs, sub.ID)
+	a.mu.Unlock()
+}
+
+// ---- commands from presenters ----
+
+func (a *Actor) call(ctx context.Context, c command) (any, error) {
+	c.reply = make(chan cmdResult, 1)
+	select {
+	case a.inbox <- c:
+	case <-a.quit:
+		return nil, errors.New("session closed")
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	select {
+	case r := <-c.reply:
+		return r.value, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// Prompt starts a turn.
+func (a *Actor) Prompt(ctx context.Context, text string) (string, error) {
+	v, err := a.call(ctx, command{kind: cmdPrompt, prompt: text})
+	if err != nil {
+		return "", err
+	}
+	return v.(string), nil
+}
+
+// Cancel interrupts the running turn. It is a command on the inbox, never a
+// context cancellation: losing every client must not interrupt a turn.
+func (a *Actor) Cancel(ctx context.Context) error {
+	_, err := a.call(ctx, command{kind: cmdCancel})
+	return err
+}
+
+// ResolvePermission answers a pending request from any presenter.
+func (a *Actor) ResolvePermission(ctx context.Context, requestID string, outcome adapter.PermissionOutcome) error {
+	_, err := a.call(ctx, command{kind: cmdResolvePerm, reqID: requestID, outcome: outcome})
+	return err
+}
+
+func (a *Actor) ResolveElicitation(ctx context.Context, requestID string, result adapter.ElicitationResult) error {
+	_, err := a.call(ctx, command{kind: cmdResolveElicit, reqID: requestID, elicitResult: result})
+	return err
+}
+
+// Close ends the session for good: session.closed is appended and the session
+// can no longer be resumed.
+func (a *Actor) Close(reason string) {
+	select {
+	case a.inbox <- command{kind: cmdClose, prompt: reason, hard: true}:
+	case <-a.quit:
+	}
+	a.wg.Wait()
+}
+
+// Dispose tears down the harness process without ending the session. The log
+// is untouched and the next attach resumes it, so restarting the server does
+// not throw away conversations.
+func (a *Actor) Dispose(reason string) {
+	select {
+	case a.inbox <- command{kind: cmdClose, prompt: reason, hard: false}:
+	case <-a.quit:
+	}
+	a.wg.Wait()
+}
+
+// enqueueEmission appends an event produced outside the harness stream.
+func (a *Actor) enqueueEmission(em proto.Emission) {
+	select {
+	case a.inbox <- command{kind: "emit", emission: &em}:
+	case <-a.quit:
+	}
+}
+
+// ---- the actor loop ----
+
+func (a *Actor) run() {
+	defer a.wg.Done()
+
+	var events <-chan proto.Emission
+	if a.sess != nil {
+		events = a.sess.Events()
+	}
+	for {
+		select {
+		case em, ok := <-events:
+			if !ok {
+				// The harness process is gone. That ends this process, not
+				// the session: the log stands and the next attach resumes.
+				events = nil
+				a.shutdown(false)
+				return
+			}
+			a.append(em)
+
+		case c := <-a.inbox:
+			if a.handle(c) {
+				return
+			}
+		}
+	}
+}
+
+func (a *Actor) handle(c command) (stop bool) {
+	ctx := context.Background()
+
+	switch c.kind {
+	case "state":
+		c.reply <- cmdResult{value: a.state.Clone()}
+
+	case "emit":
+		a.append(*c.emission)
+
+	case cmdPrompt:
+		if a.state.Closed {
+			c.reply <- cmdResult{err: ErrClosed}
+			return false
+		}
+		if a.turnActive != "" {
+			c.reply <- cmdResult{err: ErrBusy}
+			return false
+		}
+		turnID := uuid.NewString()
+		a.turnActive = turnID
+		a.append(proto.Emit(proto.TurnStarted, proto.TurnStartedPayload{TurnID: turnID, Prompt: c.prompt}))
+		_ = a.store.SetPhase(ctx, a.ID, "turn")
+		_ = a.store.SetTitle(ctx, a.ID, truncate(c.prompt, 60))
+
+		if err := a.sess.Prompt(ctx, adapter.PromptInput{TurnID: turnID, Text: c.prompt}); err != nil {
+			a.turnActive = ""
+			a.append(proto.Emit(proto.TurnFinished, proto.TurnFinishedPayload{
+				TurnID: turnID, StopReason: proto.StopError, Error: err.Error(),
+			}))
+			_ = a.store.SetPhase(ctx, a.ID, "idle")
+			c.reply <- cmdResult{err: err}
+			return false
+		}
+		c.reply <- cmdResult{value: turnID}
+
+	case cmdCancel:
+		if a.turnActive == "" {
+			c.reply <- cmdResult{value: "idle"}
+			return false
+		}
+		err := a.sess.Cancel(ctx)
+		c.reply <- cmdResult{value: "cancelling", err: err}
+
+	case cmdAskPerm:
+		req := c.perm.req
+		requestID := uuid.NewString()
+		a.pendingPerm[requestID] = c.perm.ch
+		opts := req.Options
+		if len(opts) == 0 {
+			opts = proto.DefaultPermissionOptions()
+		}
+		a.append(proto.Emit(proto.PermissionRequested, proto.PermissionRequestedPayload{
+			RequestID:  requestID,
+			TurnID:     req.TurnID,
+			ToolCallID: req.ToolCallID,
+			ToolName:   req.ToolName,
+			Title:      req.Title,
+			RawInput:   req.RawInput,
+			Options:    opts,
+		}))
+
+	case cmdResolvePerm:
+		ch, ok := a.pendingPerm[c.reqID]
+		if !ok {
+			// First resolution already won. The loser gets an ack, not an error.
+			c.reply <- cmdResult{value: "already_resolved"}
+			return false
+		}
+		delete(a.pendingPerm, c.reqID)
+		a.append(proto.Emit(proto.PermissionResolved, proto.PermissionResolvedPayload{
+			RequestID: c.reqID, Outcome: c.outcome.Outcome, OptionID: c.outcome.OptionID,
+		}))
+		select {
+		case ch <- c.outcome:
+		default:
+		}
+		c.reply <- cmdResult{value: "resolved"}
+
+	case cmdAskElicit:
+		requestID := uuid.NewString()
+		a.pendingElicit[requestID] = c.elicit.ch
+		a.append(proto.Emit(proto.ElicitationRequested, proto.ElicitationRequestedPayload{
+			RequestID: requestID, TurnID: c.elicit.req.TurnID,
+			Prompt: c.elicit.req.Prompt, Schema: c.elicit.req.Schema,
+		}))
+
+	case cmdResolveElicit:
+		ch, ok := a.pendingElicit[c.reqID]
+		if !ok {
+			c.reply <- cmdResult{value: "already_resolved"}
+			return false
+		}
+		delete(a.pendingElicit, c.reqID)
+		a.append(proto.Emit(proto.ElicitationResolved, proto.ElicitationResolvedPayload{
+			RequestID: c.reqID, Action: c.elicitResult.Action, Value: c.elicitResult.Value,
+		}))
+		select {
+		case ch <- c.elicitResult:
+		default:
+		}
+		c.reply <- cmdResult{value: "resolved"}
+
+	case cmdClose:
+		if c.hard {
+			a.append(proto.Emit(proto.SessionClosed, proto.SessionClosedPayload{Reason: c.prompt}))
+		}
+		a.shutdown(c.hard)
+		return true
+	}
+	return false
+}
+
+func (a *Actor) shutdown(hard bool) {
+	ctx := context.Background()
+	phase := "idle"
+	if hard || a.state.Closed {
+		phase = "closed"
+	}
+	_ = a.store.SetPhase(ctx, a.ID, phase)
+
+	// Unblock every adapter goroutine waiting on a human.
+	for id, ch := range a.pendingPerm {
+		select {
+		case ch <- adapter.PermissionOutcome{Outcome: proto.OutcomeCancelled}:
+		default:
+		}
+		delete(a.pendingPerm, id)
+	}
+	for id, ch := range a.pendingElicit {
+		select {
+		case ch <- adapter.ElicitationResult{Action: "cancel"}:
+		default:
+		}
+		delete(a.pendingElicit, id)
+	}
+
+	if a.sess != nil {
+		_ = a.sess.Close()
+	}
+	close(a.quit)
+
+	a.mu.Lock()
+	subs := a.subs
+	a.subs = map[string]*Subscriber{}
+	a.mu.Unlock()
+	for _, s := range subs {
+		close(s.Ch)
+	}
+
+	a.mu.Lock()
+	onExit := a.onExit
+	a.mu.Unlock()
+	if onExit != nil {
+		onExit()
+	}
+}
+
+// append writes the event, folds it into the projection, and fans it out.
+// This is the only place any of those three happen.
+func (a *Actor) append(em proto.Emission) {
+	ctx := context.Background()
+
+	ev, err := a.store.Append(ctx, a.ID, em)
+	if err != nil {
+		a.logf("append %s on %s: %v", em.Type, a.ID, err)
+		return
+	}
+
+	a.state.Apply(ev)
+
+	a.mu.Lock()
+	a.head = ev.Seq
+	a.mu.Unlock()
+
+	if em.Type == proto.TurnFinished {
+		a.turnActive = ""
+		_ = a.store.SetPhase(ctx, a.ID, "idle")
+	}
+	if em.Type == proto.TurnFinished || em.Type == proto.TurnStarted {
+		a.mu.Lock()
+		onPhase := a.onPhase
+		a.mu.Unlock()
+		if onPhase != nil {
+			onPhase()
+		}
+	}
+
+	a.fanout(ev)
+
+	if ev.Seq-a.lastSnapAt >= SnapshotEvery || em.Type == proto.TurnFinished {
+		a.lastSnapAt = ev.Seq
+		if err := a.store.PutSnapshot(ctx, a.ID, ev.Seq, a.state); err != nil {
+			a.logf("snapshot %s: %v", a.ID, err)
+		}
+	}
+}
+
+// fanout delivers to every subscriber without blocking. On a full queue the
+// subscriber is dropped and told to resync rather than growing server memory
+// or stalling the turn.
+func (a *Actor) fanout(ev proto.Event) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for id, sub := range a.subs {
+		if sub.dropped {
+			continue
+		}
+		select {
+		case sub.Ch <- ev:
+		default:
+			sub.dropped = true
+			close(sub.Resync)
+			delete(a.subs, id)
+		}
+	}
+}
+
+// ---- host services exposed to adapters ----
+
+type hostServices struct{ a *Actor }
+
+// RequestPermission appends a durable permission.requested event and blocks
+// until any presenter resolves it. Nothing about this lives in a connection.
+func (h hostServices) RequestPermission(ctx context.Context, req adapter.PermissionRequest) (adapter.PermissionOutcome, error) {
+	ch := make(chan adapter.PermissionOutcome, 1)
+
+	select {
+	case h.a.inbox <- command{kind: cmdAskPerm, perm: permAsk{req: req, ch: ch}}:
+	case <-h.a.quit:
+		return adapter.PermissionOutcome{Outcome: proto.OutcomeCancelled}, nil
+	case <-ctx.Done():
+		return adapter.PermissionOutcome{}, ctx.Err()
+	}
+
+	select {
+	case out := <-ch:
+		return out, nil
+	case <-h.a.quit:
+		return adapter.PermissionOutcome{Outcome: proto.OutcomeCancelled}, nil
+	case <-ctx.Done():
+		return adapter.PermissionOutcome{}, ctx.Err()
+	}
+}
+
+func (h hostServices) Elicit(ctx context.Context, req adapter.ElicitationRequest) (adapter.ElicitationResult, error) {
+	ch := make(chan adapter.ElicitationResult, 1)
+	select {
+	case h.a.inbox <- command{kind: cmdAskElicit, elicit: elicitAsk{req: req, ch: ch}}:
+	case <-h.a.quit:
+		return adapter.ElicitationResult{Action: "cancel"}, nil
+	case <-ctx.Done():
+		return adapter.ElicitationResult{}, ctx.Err()
+	}
+	select {
+	case result := <-ch:
+		return result, nil
+	case <-h.a.quit:
+		return adapter.ElicitationResult{Action: "cancel"}, nil
+	case <-ctx.Done():
+		return adapter.ElicitationResult{}, ctx.Err()
+	}
+}
+
+func (h hostServices) Logf(format string, args ...any) { h.a.logf(format, args...) }
+
+// ---- attach ----
+
+// Attach result kinds.
+const (
+	AttachSnapshot = "snapshot"
+	AttachReplay   = "replay"
+)
+
+// AttachResult is what a presenter needs to reconstruct state exactly.
+type AttachResult struct {
+	Kind     string
+	Snapshot *projection.State
+	Events   []proto.Event
+	Seq      int64
+}
+
+// Attach computes the catch-up payload for a cursor. The caller must already
+// have subscribed.
+func (a *Actor) Attach(ctx context.Context, afterSeq int64, hasCursor bool) (AttachResult, error) {
+	head := a.Head()
+	gap := head - afterSeq
+
+	if !hasCursor || gap < 0 || gap > MaxReplayGap {
+		state, err := a.State(ctx)
+		if err != nil {
+			return AttachResult{}, err
+		}
+		return AttachResult{Kind: AttachSnapshot, Snapshot: state, Seq: state.Seq}, nil
+	}
+
+	evs, err := a.store.ReadEvents(ctx, a.ID, afterSeq, MaxReplayGap)
+	if err != nil {
+		return AttachResult{}, err
+	}
+	seq := afterSeq
+	if len(evs) > 0 {
+		seq = evs[len(evs)-1].Seq
+	}
+	return AttachResult{Kind: AttachReplay, Events: evs, Seq: seq}, nil
+}
+
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}

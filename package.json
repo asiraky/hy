@@ -1,0 +1,35 @@
+{
+  "name": "hy",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/asiraky/hy.git"
+  },
+  "bugs": {
+    "url": "https://github.com/asiraky/hy/issues"
+  },
+  "homepage": "https://github.com/asiraky/hy#readme",
+  "type": "module",
+  "workspaces": [
+    "web",
+    "internal/adapter/claudecode/sidecar"
+  ],
+  "scripts": {
+    "dev": "HY_PORT=8787 HY_VITE_PORT=5199 concurrently -k -n go,web -c cyan,magenta \"air\" \"./scripts/web vite\"",
+    "build": "npm run build:web && npm run build:server",
+    "build:web": "./scripts/web tsc -b && ./scripts/web vite build",
+    "build:server": "go build -o hy ./cmd/hy",
+    "build:bundled": "npm run build:web && npm run build:sidecar && go build -tags bundled_sidecar -o hy ./cmd/hy",
+    "build:sidecar": "cd internal/adapter/claudecode/sidecar && npm install && bun build --compile sidecar.mjs --outfile dist/hy-claude-sidecar",
+    "start": "./hy",
+    "test": "npm run test:go && npm run test:web",
+    "test:go": "go test -race ./...",
+    "test:web": "./scripts/web tsc -b",
+    "clean": "rm -f hy && rm -rf cmd/hy/webdist/assets cmd/hy/webdist/index.html && touch cmd/hy/webdist/.gitkeep"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
