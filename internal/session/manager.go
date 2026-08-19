@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -280,6 +282,40 @@ func (m *Manager) SaveProject(ctx context.Context, id string, cfg project.Config
 	}
 	m.notifyList()
 	return p, nil
+}
+
+// ReloadProjects re-reads each project's on-disk config, which is the source
+// of truth; the copy in the database is a cache that a pull can make stale. A
+// project whose file has gone is left as it is: a missing file means the
+// checkout moved or is mid-checkout, not that its settings were cleared.
+func (m *Manager) ReloadProjects(ctx context.Context) error {
+	projects, err := m.store.ListProjects(ctx)
+	if err != nil {
+		return err
+	}
+	changed := false
+	for _, p := range projects {
+		if _, statErr := os.Stat(filepath.Join(p.Root, project.ConfigPath)); statErr != nil {
+			continue
+		}
+		cfg, loadErr := project.Load(p.Root)
+		if loadErr != nil {
+			m.logf("project %s: %v", p.Config.Name, loadErr)
+			continue
+		}
+		if reflect.DeepEqual(cfg, p.Config) {
+			continue
+		}
+		p.Config, p.UpdatedAt = cfg, proto.NowMillis()
+		if err := m.store.PutProject(ctx, p); err != nil {
+			return err
+		}
+		changed = true
+	}
+	if changed {
+		m.notifyList()
+	}
+	return nil
 }
 
 func (m *Manager) Projects(ctx context.Context) ([]project.Project, error) {

@@ -39,9 +39,9 @@ var webdist embed.FS
 func main() {
 	var (
 		addr       = flag.String("addr", "", "bind one specific address, e.g. 192.168.1.20:8787 (default: every private and overlay address)")
-		port       = flag.Int("port", 8787, "port to listen on")
+		port       = flag.Int("port", envInt("HY_PORT", 8787), "port to listen on")
 		bindPublic = flag.Bool("bind-public", false, "also bind globally routable addresses, exposing hy to the internet")
-		dbPath     = flag.String("db", defaultDB(), "path to the event log database")
+		dbPath     = flag.String("db", envStr("HY_DB", defaultDB()), "path to the event log database")
 		cwd        = flag.String("cwd", mustCwd(), "default working directory for new sessions")
 		claudePath = flag.String("claude-path", "", "path to the Claude Code executable (default: discover it)")
 		codexBin   = flag.String("codex", "codex", "path to the codex CLI")
@@ -81,6 +81,13 @@ func main() {
 		codexapp.New(*codexBin),
 	)
 	defer mgr.Shutdown()
+
+	// The config stored against a project is a cache of the file in the repo,
+	// so the file wins on startup: pulling a branch that changes .hy/project.json
+	// should take effect without re-adding the project.
+	if err := mgr.ReloadProjects(context.Background()); err != nil {
+		logf("reload project config: %v", err)
+	}
 
 	webFS, hasUI := embeddedUI()
 
@@ -248,6 +255,17 @@ func envInt(name string, fallback int) int {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
 		}
+	}
+	return fallback
+}
+
+// envStr reads a string from the environment, falling back when it is unset.
+// Together with envInt this is what lets a provisioned worktree run its own
+// server: it needs a port and a database of its own, and the dev script has
+// nowhere to pass flags through to.
+func envStr(name, fallback string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
 	}
 	return fallback
 }
