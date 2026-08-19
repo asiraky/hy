@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 
 	"github.com/asiraky/hy/internal/endpoints"
+	"github.com/asiraky/hy/internal/project"
 	"github.com/asiraky/hy/internal/projection"
 	"github.com/asiraky/hy/internal/proto"
 	"github.com/asiraky/hy/internal/session"
@@ -43,6 +44,7 @@ type serverFrame struct {
 	Build     string              `json:"build,omitempty"`
 	Sessions  []store.SessionMeta `json:"sessions,omitempty"`
 	Harnesses []session.Harness   `json:"harnesses,omitempty"`
+	Projects  []project.Project   `json:"projects,omitempty"`
 	Cwd       string              `json:"cwd,omitempty"`
 	// Access travels on welcome, after the gate, so an unpaired caller
 	// learns nothing about how else this machine can be reached.
@@ -60,10 +62,21 @@ type serverFrame struct {
 
 // Command argument shapes.
 type createArgs struct {
-	Harness string `json:"harness"`
-	Cwd     string `json:"cwd"`
-	Model   string `json:"model"`
-	Mode    string `json:"mode"`
+	Harness   string `json:"harness"`
+	Cwd       string `json:"cwd"`
+	ProjectID string `json:"projectId"`
+	Branch    string `json:"branch"`
+	Workspace string `json:"workspace"`
+	Model     string `json:"model"`
+	Mode      string `json:"mode"`
+}
+
+type addProjectArgs struct {
+	Root string `json:"root"`
+}
+type saveProjectArgs struct {
+	ProjectID string         `json:"projectId"`
+	Config    project.Config `json:"config"`
 }
 
 type promptArgs struct {

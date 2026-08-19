@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	_ "modernc.org/sqlite"
 
+	"github.com/asiraky/hy/internal/project"
 	"github.com/asiraky/hy/internal/proto"
 )
 
@@ -29,6 +31,14 @@ CREATE TABLE IF NOT EXISTS sessions (
   updated_at    INTEGER NOT NULL,
   head_seq      INTEGER NOT NULL DEFAULT 0,
   phase         TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS projects (
+  id            TEXT PRIMARY KEY,
+  root          TEXT NOT NULL UNIQUE,
+  config        BLOB NOT NULL,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -57,14 +67,23 @@ CREATE TABLE IF NOT EXISTS commands (
 
 // SessionMeta is the row-level view of a session, enough for a session list.
 type SessionMeta struct {
-	ID        string `json:"id"`
-	Cwd       string `json:"cwd"`
-	Harness   string `json:"harness"`
-	Title     string `json:"title"`
-	CreatedAt int64  `json:"createdAt"`
-	UpdatedAt int64  `json:"updatedAt"`
-	HeadSeq   int64  `json:"headSeq"`
-	Phase     string `json:"phase"`
+	ID                string          `json:"id"`
+	Cwd               string          `json:"cwd"`
+	Harness           string          `json:"harness"`
+	Title             string          `json:"title"`
+	CreatedAt         int64           `json:"createdAt"`
+	UpdatedAt         int64           `json:"updatedAt"`
+	HeadSeq           int64           `json:"headSeq"`
+	Phase             string          `json:"phase"`
+	ProjectID         string          `json:"projectId,omitempty"`
+	Branch            string          `json:"branch,omitempty"`
+	Model             string          `json:"model,omitempty"`
+	Mode              string          `json:"mode,omitempty"`
+	Effort            string          `json:"effort,omitempty"`
+	WorkspaceMode     string          `json:"workspaceMode,omitempty"`
+	ProvisionScript   string          `json:"-"`
+	DeprovisionScript string          `json:"-"`
+	ProvisionResult   json.RawMessage `json:"-"`
 }
 
 // Store wraps the database. Writes are serialised through a single mutex-held
@@ -83,6 +102,21 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+	for _, migration := range []string{
+		`ALTER TABLE sessions ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN branch TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN model TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN mode TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN effort TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN workspace_mode TEXT NOT NULL DEFAULT 'local'`,
+		`ALTER TABLE sessions ADD COLUMN provision_script TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN deprovision_script TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN provision_result BLOB`,
+	} {
+		if _, err := db.Exec(migration); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return nil, fmt.Errorf("migrate schema: %w", err)
+		}
+	}
 	s := &Store{db: db}
 	if err := s.initAuth(); err != nil {
 		return nil, fmt.Errorf("apply auth schema: %w", err)
@@ -96,9 +130,9 @@ func (s *Store) CreateSession(ctx context.Context, m SessionMeta) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO sessions (id, cwd, harness, title, created_at, updated_at, head_seq, phase)
-		 VALUES (?,?,?,?,?,?,0,?)`,
-		m.ID, m.Cwd, m.Harness, m.Title, m.CreatedAt, m.UpdatedAt, m.Phase)
+		`INSERT INTO sessions (id, cwd, harness, title, created_at, updated_at, head_seq, phase, project_id, branch, model, mode, effort, workspace_mode, provision_script, deprovision_script)
+		 VALUES (?,?,?,?,?,?,0,?,?,?,?,?,?,?,?,?)`,
+		m.ID, m.Cwd, m.Harness, m.Title, m.CreatedAt, m.UpdatedAt, m.Phase, m.ProjectID, m.Branch, m.Model, m.Mode, m.Effort, m.WorkspaceMode, m.ProvisionScript, m.DeprovisionScript)
 	return err
 }
 
@@ -183,9 +217,11 @@ func (s *Store) ReadEvents(ctx context.Context, sessionID string, afterSeq int64
 
 func (s *Store) Session(ctx context.Context, id string) (SessionMeta, error) {
 	var m SessionMeta
+	var provisionResult []byte
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, cwd, harness, title, created_at, updated_at, head_seq, phase FROM sessions WHERE id = ?`, id).
-		Scan(&m.ID, &m.Cwd, &m.Harness, &m.Title, &m.CreatedAt, &m.UpdatedAt, &m.HeadSeq, &m.Phase)
+		`SELECT id, cwd, harness, title, created_at, updated_at, head_seq, phase, project_id, branch, model, mode, effort, workspace_mode, provision_script, deprovision_script, provision_result FROM sessions WHERE id = ?`, id).
+		Scan(&m.ID, &m.Cwd, &m.Harness, &m.Title, &m.CreatedAt, &m.UpdatedAt, &m.HeadSeq, &m.Phase, &m.ProjectID, &m.Branch, &m.Model, &m.Mode, &m.Effort, &m.WorkspaceMode, &m.ProvisionScript, &m.DeprovisionScript, &provisionResult)
+	m.ProvisionResult = json.RawMessage(provisionResult)
 	if errors.Is(err, sql.ErrNoRows) {
 		return m, ErrNotFound
 	}
@@ -194,7 +230,7 @@ func (s *Store) Session(ctx context.Context, id string) (SessionMeta, error) {
 
 func (s *Store) ListSessions(ctx context.Context) ([]SessionMeta, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, cwd, harness, title, created_at, updated_at, head_seq, phase
+		`SELECT id, cwd, harness, title, created_at, updated_at, head_seq, phase, project_id, branch, model, mode, effort, workspace_mode
 		 FROM sessions ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
@@ -204,10 +240,62 @@ func (s *Store) ListSessions(ctx context.Context) ([]SessionMeta, error) {
 	out := []SessionMeta{}
 	for rows.Next() {
 		var m SessionMeta
-		if err := rows.Scan(&m.ID, &m.Cwd, &m.Harness, &m.Title, &m.CreatedAt, &m.UpdatedAt, &m.HeadSeq, &m.Phase); err != nil {
+		if err := rows.Scan(&m.ID, &m.Cwd, &m.Harness, &m.Title, &m.CreatedAt, &m.UpdatedAt, &m.HeadSeq, &m.Phase, &m.ProjectID, &m.Branch, &m.Model, &m.Mode, &m.Effort, &m.WorkspaceMode); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UpdateWorkspace(ctx context.Context, id, cwd, branch, phase string, result json.RawMessage) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.ExecContext(ctx, `UPDATE sessions SET cwd=?, branch=?, phase=?, provision_result=?, updated_at=? WHERE id=?`, cwd, branch, phase, []byte(result), proto.NowMillis(), id)
+	return err
+}
+
+func (s *Store) PutProject(ctx context.Context, p project.Project) error {
+	b, err := json.Marshal(p.Config)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err = s.db.ExecContext(ctx, `INSERT INTO projects(id,root,config,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET root=excluded.root,config=excluded.config,updated_at=excluded.updated_at`, p.ID, p.Root, b, p.CreatedAt, p.UpdatedAt)
+	return err
+}
+
+func (s *Store) Project(ctx context.Context, id string) (project.Project, error) {
+	var p project.Project
+	var b []byte
+	err := s.db.QueryRowContext(ctx, `SELECT id,root,config,created_at,updated_at FROM projects WHERE id=?`, id).Scan(&p.ID, &p.Root, &b, &p.CreatedAt, &p.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return p, ErrNotFound
+	}
+	if err == nil {
+		err = json.Unmarshal(b, &p.Config)
+	}
+	return p, err
+}
+
+func (s *Store) ListProjects(ctx context.Context) ([]project.Project, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,root,config,created_at,updated_at FROM projects ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []project.Project{}
+	for rows.Next() {
+		var p project.Project
+		var b []byte
+		if err := rows.Scan(&p.ID, &p.Root, &b, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(b, &p.Config); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
 	}
 	return out, rows.Err()
 }

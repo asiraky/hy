@@ -27,6 +27,17 @@ const (
 	PermissionResolved   = "permission.resolved"
 	ElicitationRequested = "elicitation.requested"
 	ElicitationResolved  = "elicitation.resolved"
+
+	WorkspaceRequested       = "workspace.requested"
+	WorkspaceHookStarted     = "workspace.hook_started"
+	WorkspaceHookOutput      = "workspace.hook_output"
+	WorkspaceHookFinished    = "workspace.hook_finished"
+	WorkspaceReady           = "workspace.ready"
+	WorkspaceFailed          = "workspace.failed"
+	WorkspaceCleanupStarted  = "workspace.cleanup_started"
+	WorkspaceCleanupFinished = "workspace.cleanup_finished"
+	WorkspaceCleanupFailed   = "workspace.cleanup_failed"
+	WorkspaceReleased        = "workspace.released"
 )
 
 // Stop reasons for turn.finished.
@@ -94,7 +105,48 @@ type SessionCreatedPayload struct {
 	Harness string `json:"harness"`
 	Model   string `json:"model,omitempty"`
 	Mode    string `json:"mode,omitempty"`
+	Effort  string `json:"effort,omitempty"`
 	Title   string `json:"title,omitempty"`
+}
+
+type WorkspaceRequestedPayload struct {
+	ProjectID   string `json:"projectId,omitempty"`
+	ProjectRoot string `json:"projectRoot"`
+	Mode        string `json:"mode"`
+	Branch      string `json:"branch,omitempty"`
+	BaseRef     string `json:"baseRef,omitempty"`
+}
+
+type WorkspaceHookStartedPayload struct {
+	RunID   string `json:"runId"`
+	Hook    string `json:"hook"`
+	Command string `json:"command"`
+}
+
+type WorkspaceHookOutputPayload struct {
+	RunID  string `json:"runId"`
+	Hook   string `json:"hook"`
+	Stream string `json:"stream"`
+	Chunk  string `json:"chunk"`
+}
+
+type WorkspaceHookFinishedPayload struct {
+	RunID      string `json:"runId"`
+	Hook       string `json:"hook"`
+	ExitCode   int    `json:"exitCode"`
+	DurationMs int64  `json:"durationMs"`
+}
+
+type WorkspaceReadyPayload struct {
+	Cwd       string         `json:"cwd"`
+	Branch    string         `json:"branch,omitempty"`
+	Resources map[string]any `json:"resources,omitempty"`
+}
+
+type WorkspaceFailedPayload struct {
+	Hook     string `json:"hook"`
+	Error    string `json:"error"`
+	ExitCode int    `json:"exitCode,omitempty"`
 }
 
 type SessionConfigChangedPayload struct {

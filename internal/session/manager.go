@@ -2,13 +2,16 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/asiraky/hy/internal/adapter"
+	"github.com/asiraky/hy/internal/project"
 	"github.com/asiraky/hy/internal/proto"
 	"github.com/asiraky/hy/internal/store"
 )
@@ -152,6 +155,185 @@ func (m *Manager) Create(ctx context.Context, harness, cwd, model, mode string) 
 	return a, nil
 }
 
+type CreateProjectOptions struct {
+	ProjectID string
+	Harness   string
+	Model     string
+	Mode      string
+	Effort    string
+	Branch    string
+	Workspace string
+}
+
+// CreateProject persists and returns an attachable session immediately. Its
+// workspace is prepared in the background; no harness exists before readiness.
+func (m *Manager) CreateProject(ctx context.Context, o CreateProjectOptions) (*Actor, error) {
+	p, err := m.store.Project(ctx, o.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	if o.Harness == "" {
+		o.Harness = p.Config.Defaults.Harness
+	}
+	if o.Model == "" {
+		o.Model = p.Config.Defaults.Model
+	}
+	if o.Mode == "" {
+		o.Mode = p.Config.Defaults.Mode
+	}
+	if o.Effort == "" {
+		o.Effort = p.Config.Defaults.Effort
+	}
+	if o.Workspace == "" {
+		o.Workspace = p.Config.Defaults.Workspace
+	}
+	if o.Workspace == "" {
+		o.Workspace = "local"
+	}
+	ad, ok := m.adapters[o.Harness]
+	if !ok {
+		return nil, fmt.Errorf("unknown harness %q", o.Harness)
+	}
+	if avail := ad.Probe(ctx); !avail.OK() {
+		return nil, fmt.Errorf("%s is not available: %s", ad.Meta().Name, avail.Reason)
+	}
+	provision, err := project.ResolveHook(p.Root, p.Config.Workspace.Provision)
+	if err != nil && p.Config.Workspace.Provision != "" {
+		return nil, fmt.Errorf("provision hook: %w", err)
+	}
+	deprovision, err := project.ResolveHook(p.Root, p.Config.Workspace.Deprovision)
+	if err != nil && p.Config.Workspace.Deprovision != "" {
+		return nil, fmt.Errorf("deprovision hook: %w", err)
+	}
+	meta := store.SessionMeta{ID: uuid.NewString(), Cwd: p.Root, Harness: o.Harness, CreatedAt: proto.NowMillis(), UpdatedAt: proto.NowMillis(), Phase: "creating", ProjectID: p.ID, Branch: o.Branch, Model: o.Model, Mode: o.Mode, Effort: o.Effort, WorkspaceMode: o.Workspace, ProvisionScript: relHook(p.Root, provision), DeprovisionScript: relHook(p.Root, deprovision)}
+	if err := m.store.CreateSession(ctx, meta); err != nil {
+		return nil, err
+	}
+	a := StartPending(m.store, ad, meta, m.logf)
+	m.adopt(a)
+	m.notifyList()
+	go m.provision(meta, p, a)
+	return a, nil
+}
+
+func relHook(root, path string) string {
+	if path == "" {
+		return ""
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return ""
+	}
+	return rel
+}
+
+func (m *Manager) AddProject(ctx context.Context, root string) (project.Project, error) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return project.Project{}, err
+	}
+	cfg, err := project.Load(abs)
+	if err != nil {
+		return project.Project{}, err
+	}
+	now := proto.NowMillis()
+	p := project.Project{ID: uuid.NewString(), Root: abs, Config: cfg, CreatedAt: now, UpdatedAt: now}
+	if err := m.store.PutProject(ctx, p); err != nil {
+		return p, err
+	}
+	m.notifyList()
+	return p, nil
+}
+
+func (m *Manager) SaveProject(ctx context.Context, id string, cfg project.Config) (project.Project, error) {
+	p, err := m.store.Project(ctx, id)
+	if err != nil {
+		return p, err
+	}
+	cfg, err = project.Save(p.Root, cfg)
+	if err != nil {
+		return p, err
+	}
+	p.Config = cfg
+	p.UpdatedAt = proto.NowMillis()
+	if err := m.store.PutProject(ctx, p); err != nil {
+		return p, err
+	}
+	m.notifyList()
+	return p, nil
+}
+
+func (m *Manager) Projects(ctx context.Context) ([]project.Project, error) {
+	return m.store.ListProjects(ctx)
+}
+
+func (m *Manager) RetryProvision(ctx context.Context, id string) error {
+	a, ok := m.Peek(id)
+	if !ok {
+		var err error
+		a, err = m.Get(ctx, id)
+		if err != nil {
+			return err
+		}
+	}
+	m.lifecycle.Lock()
+	defer m.lifecycle.Unlock()
+	meta, err := m.store.Session(ctx, id)
+	if err != nil {
+		return err
+	}
+	if meta.Phase != "provision_failed" {
+		return fmt.Errorf("session is not awaiting provisioning")
+	}
+	p, err := m.store.Project(ctx, meta.ProjectID)
+	if err != nil {
+		return err
+	}
+	if err := m.store.SetPhase(ctx, id, "provisioning"); err != nil {
+		return err
+	}
+	go m.provision(meta, p, a)
+	return nil
+}
+
+func (m *Manager) Cleanup(ctx context.Context, id string) error {
+	m.lifecycle.Lock()
+	defer m.lifecycle.Unlock()
+	meta, err := m.store.Session(ctx, id)
+	if err != nil {
+		return err
+	}
+	if meta.ProjectID == "" {
+		return m.closeLocked(ctx, id, "closed by user")
+	}
+	if meta.Phase == "cleaning" {
+		return errors.New("workspace cleanup is already running")
+	}
+	if meta.Phase == "closed" {
+		return nil
+	}
+	p, err := m.store.Project(ctx, meta.ProjectID)
+	if err != nil {
+		return err
+	}
+	// Stop the harness first. A fresh, process-less actor keeps cleanup output attachable.
+	if live, ok := m.Peek(id); ok {
+		live.Dispose("cleaning workspace")
+	}
+	_ = m.store.SetPhase(ctx, id, "cleaning")
+	ad, ok := m.adapters[meta.Harness]
+	if !ok {
+		return fmt.Errorf("unknown harness %q", meta.Harness)
+	}
+	a, err := RestorePending(ctx, m.store, ad, meta, m.logf)
+	if err != nil {
+		return err
+	}
+	m.adopt(a)
+	go m.cleanup(meta, p, a, false)
+	return nil
+}
+
 // Get returns the live actor for a session, resuming it from the log if the
 // process was restarted since it was last used.
 func (m *Manager) Get(ctx context.Context, id string) (*Actor, error) {
@@ -178,6 +360,23 @@ func (m *Manager) Get(ctx context.Context, id string) (*Actor, error) {
 
 	if meta.Phase == "closed" {
 		a, err = RestoreClosed(ctx, m.store, meta, m.logf)
+	} else if meta.Phase == "creating" || meta.Phase == "provisioning" || meta.Phase == "provision_failed" || meta.Phase == "cleaning" || meta.Phase == "cleanup_failed" {
+		ad, ok := m.adapters[meta.Harness]
+		if !ok {
+			return nil, fmt.Errorf("unknown harness %q", meta.Harness)
+		}
+		a, err = RestorePending(ctx, m.store, ad, meta, m.logf)
+		if err == nil && (meta.Phase == "creating" || meta.Phase == "provisioning") {
+			_ = m.store.SetPhase(ctx, meta.ID, "provision_failed")
+			_ = a.Emit(ctx, proto.Emit(proto.WorkspaceFailed, proto.WorkspaceFailedPayload{Hook: "provision", Error: "server restarted while provisioning; retry is safe"}))
+		}
+		if err == nil && meta.Phase == "cleaning" {
+			_ = m.store.SetPhase(ctx, meta.ID, "cleanup_failed")
+			_ = a.Emit(ctx, proto.Emit(proto.WorkspaceCleanupFailed, proto.WorkspaceFailedPayload{Hook: "deprovision", Error: "server restarted while cleaning up; retry is safe"}))
+		}
+		if err == nil {
+			m.notifyList()
+		}
 	} else {
 		ad, ok := m.adapters[meta.Harness]
 		if !ok {
@@ -276,8 +475,75 @@ func (m *Manager) closeLocked(ctx context.Context, id, reason string) error {
 func (m *Manager) Delete(ctx context.Context, id string) error {
 	m.lifecycle.Lock()
 	defer m.lifecycle.Unlock()
-	if err := m.closeLocked(ctx, id, "deleted"); err != nil {
+	meta, err := m.store.Session(ctx, id)
+	if err != nil {
 		return err
+	}
+	if meta.Phase == "closed" {
+		if err := m.store.DeleteSession(ctx, id); err != nil {
+			return err
+		}
+		m.notifyList()
+		return nil
+	}
+	if meta.ProjectID == "" {
+		if err := m.closeLocked(ctx, id, "deleted"); err != nil {
+			return err
+		}
+		if err := m.store.DeleteSession(ctx, id); err != nil {
+			return err
+		}
+		m.notifyList()
+		return nil
+	}
+	if meta.Phase == "cleaning" {
+		return errors.New("workspace cleanup is already running")
+	}
+	p, err := m.store.Project(ctx, meta.ProjectID)
+	if err != nil {
+		return err
+	}
+	if live, ok := m.Peek(id); ok {
+		live.Dispose("deleting session")
+	}
+	if err := m.store.SetPhase(ctx, id, "cleaning"); err != nil {
+		return err
+	}
+	ad, ok := m.adapters[meta.Harness]
+	if !ok {
+		return fmt.Errorf("unknown harness %q", meta.Harness)
+	}
+	a, err := RestorePending(ctx, m.store, ad, meta, m.logf)
+	if err != nil {
+		return err
+	}
+	m.adopt(a)
+	go m.cleanup(meta, p, a, true)
+	return nil
+}
+
+// ForceDelete skips the project deprovision hook after it has failed. It only
+// removes the exact recorded Git worktree, prunes Git metadata, then purges the
+// transcript. The project root is never removed.
+func (m *Manager) ForceDelete(ctx context.Context, id string) error {
+	m.lifecycle.Lock()
+	defer m.lifecycle.Unlock()
+	meta, err := m.store.Session(ctx, id)
+	if err != nil {
+		return err
+	}
+	if meta.Phase != "cleanup_failed" {
+		return errors.New("force delete is only available after teardown fails")
+	}
+	p, err := m.store.Project(ctx, meta.ProjectID)
+	if err != nil {
+		return err
+	}
+	if err := m.removeGitWorktree(ctx, meta, p, nil, true); err != nil {
+		return err
+	}
+	if live, ok := m.Peek(id); ok {
+		live.Dispose("force deleted")
 	}
 	if err := m.store.DeleteSession(ctx, id); err != nil {
 		return err

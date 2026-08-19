@@ -89,12 +89,14 @@ func (c *conn) dispatch(f clientFrame) {
 	switch f.Type {
 	case "hello":
 		sessions, _ := c.srv.mgr.List(c.ctx)
+		projects, _ := c.srv.mgr.Projects(c.ctx)
 		c.send(serverFrame{
 			Type:      "welcome",
 			ServerID:  c.srv.id,
 			Build:     c.srv.web.BuildID(),
 			Sessions:  sessions,
 			Harnesses: c.srv.mgr.Harnesses(c.ctx),
+			Projects:  projects,
 			Cwd:       c.srv.defaultCwd,
 			Access:    c.srv.access(c.ctx),
 		})
@@ -279,6 +281,13 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 		if err := json.Unmarshal(f.Args, &a); err != nil {
 			return nil, err
 		}
+		if a.ProjectID != "" {
+			actor, err := c.srv.mgr.CreateProject(ctx, session.CreateProjectOptions{ProjectID: a.ProjectID, Harness: a.Harness, Model: a.Model, Mode: a.Mode, Branch: a.Branch, Workspace: a.Workspace})
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"sessionId": actor.ID}, nil
+		}
 		if a.Cwd == "" {
 			a.Cwd = c.srv.defaultCwd
 		}
@@ -370,19 +379,62 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 		c.srv.mgr.RecheckHarnesses()
 		return map[string]any{"harnesses": c.srv.mgr.Harnesses(ctx)}, nil
 
+	case "add_project":
+		var a addProjectArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		p, err := c.srv.mgr.AddProject(ctx, a.Root)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"project": p}, nil
+
+	case "save_project":
+		var a saveProjectArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		p, err := c.srv.mgr.SaveProject(ctx, a.ProjectID, a.Config)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"project": p}, nil
+
+	case "retry_provision":
+		var a sessionArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "provisioning"}, c.srv.mgr.RetryProvision(ctx, a.SessionID)
+
+	case "cleanup_session":
+		var a sessionArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "cleaning"}, c.srv.mgr.Cleanup(ctx, a.SessionID)
+
 	case "close_session":
 		var a sessionArgs
 		if err := json.Unmarshal(f.Args, &a); err != nil {
 			return nil, err
 		}
-		return map[string]any{"status": "closed"}, c.srv.mgr.Close(ctx, a.SessionID, "closed by user")
+		return map[string]any{"status": "cleaning"}, c.srv.mgr.Cleanup(ctx, a.SessionID)
 
 	case "delete_session":
 		var a sessionArgs
 		if err := json.Unmarshal(f.Args, &a); err != nil {
 			return nil, err
 		}
-		return map[string]any{"status": "deleted"}, c.srv.mgr.Delete(ctx, a.SessionID)
+		return map[string]any{"status": "deleting"}, c.srv.mgr.Delete(ctx, a.SessionID)
+
+	case "force_delete_session":
+		var a sessionArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "deleted"}, c.srv.mgr.ForceDelete(ctx, a.SessionID)
 
 	default:
 		return nil, fmt.Errorf("unknown command %q", f.Command)

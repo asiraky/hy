@@ -151,6 +151,7 @@ type sidecarConfig struct {
 	Cwd            string `json:"cwd"`
 	Model          string `json:"model,omitempty"`
 	PermissionMode string `json:"permissionMode,omitempty"`
+	Effort         string `json:"effort,omitempty"`
 	// SessionID and Resume are mutually exclusive, as the SDK requires: one
 	// names a new conversation, the other continues an existing one.
 	SessionID  string `json:"sessionId,omitempty"`
@@ -176,6 +177,7 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 		Cwd:            o.Cwd,
 		Model:          o.Model,
 		PermissionMode: o.Mode,
+		Effort:         o.Effort,
 		ClaudePath:     r.claudePath,
 	}
 	// We own session identity: the same id names the conversation on create

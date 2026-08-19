@@ -109,6 +109,7 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 		events:   make(chan proto.Emission, 256),
 		streamed: map[string]bool{},
 		done:     make(chan struct{}),
+		effort:   o.Effort,
 	}
 	s.conn = jsonrpc.NewConn(stdout, stdin, s.handleRequest, s.handleNotification)
 
@@ -183,6 +184,7 @@ type session struct {
 	conn *jsonrpc.Conn
 
 	threadID string
+	effort   string
 
 	events chan proto.Emission
 	done   chan struct{}
@@ -200,10 +202,14 @@ func (s *session) Prompt(ctx context.Context, in adapter.PromptInput) error {
 	s.turnID = in.TurnID
 	s.mu.Unlock()
 
-	return s.conn.Call(ctx, "turn/start", map[string]any{
+	params := map[string]any{
 		"threadId": s.threadID,
 		"input":    []map[string]any{{"type": "text", "text": in.Text}},
-	}, nil)
+	}
+	if s.effort != "" {
+		params["effort"] = s.effort
+	}
+	return s.conn.Call(ctx, "turn/start", params, nil)
 }
 
 func (s *session) Cancel(ctx context.Context) error {

@@ -120,6 +120,7 @@ const session = query({
     canUseTool,
     ...(config.model ? { model: config.model } : {}),
     ...(config.permissionMode ? { permissionMode: config.permissionMode } : {}),
+    ...(config.effort ? { effort: config.effort } : {}),
     // Mutually exclusive by SDK contract: sessionId names a new conversation,
     // resume continues an existing one.
     ...(config.resume ? { resume: config.resume } : {}),

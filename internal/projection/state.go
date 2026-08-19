@@ -60,6 +60,24 @@ type PendingElicitation struct {
 	Schema    json.RawMessage `json:"schema"`
 }
 
+type WorkspaceState struct {
+	Phase              string         `json:"phase"`
+	ProjectID          string         `json:"projectId,omitempty"`
+	ProjectRoot        string         `json:"projectRoot,omitempty"`
+	Mode               string         `json:"mode,omitempty"`
+	Branch             string         `json:"branch,omitempty"`
+	BaseRef            string         `json:"baseRef,omitempty"`
+	Hook               string         `json:"hook,omitempty"`
+	Command            string         `json:"command,omitempty"`
+	Output             string         `json:"output,omitempty"`
+	Error              string         `json:"error,omitempty"`
+	ExitCode           int            `json:"exitCode,omitempty"`
+	StartedAt          int64          `json:"startedAt,omitempty"`
+	DurationMs         int64          `json:"durationMs,omitempty"`
+	Resources          map[string]any `json:"resources,omitempty"`
+	DeleteAfterCleanup bool           `json:"deleteAfterCleanup,omitempty"`
+}
+
 // State is the complete renderable state of a session as of Seq.
 type State struct {
 	SessionID string `json:"sessionId"`
@@ -68,11 +86,13 @@ type State struct {
 	Harness   string `json:"harness"`
 	Model     string `json:"model"`
 	Mode      string `json:"mode"`
+	Effort    string `json:"effort"`
 	Title     string `json:"title"`
 	// HarnessSessionID is the harness's own conversation id, used to resume.
-	HarnessSessionID string `json:"harnessSessionId,omitempty"`
-	Phase            string `json:"phase"` // idle | turn | closed
-	Closed           bool   `json:"closed"`
+	HarnessSessionID string         `json:"harnessSessionId,omitempty"`
+	Phase            string         `json:"phase"` // idle | turn | closed
+	Closed           bool           `json:"closed"`
+	Workspace        WorkspaceState `json:"workspace"`
 
 	Items        []Item                    `json:"items"`
 	Turns        []Turn                    `json:"turns"`
@@ -141,7 +161,7 @@ func (s *State) Apply(ev proto.Event) {
 	case proto.SessionCreated:
 		var p proto.SessionCreatedPayload
 		decode(ev.Payload, &p)
-		s.Cwd, s.Harness, s.Model, s.Mode, s.Title = p.Cwd, p.Harness, p.Model, p.Mode, p.Title
+		s.Cwd, s.Harness, s.Model, s.Mode, s.Effort, s.Title = p.Cwd, p.Harness, p.Model, p.Mode, p.Effort, p.Title
 
 	case proto.SessionConfigChanged:
 		var p proto.SessionConfigChangedPayload
@@ -162,6 +182,59 @@ func (s *State) Apply(ev proto.Event) {
 	case proto.SessionClosed:
 		s.Closed = true
 		s.Phase = "closed"
+
+	case proto.WorkspaceRequested:
+		var p proto.WorkspaceRequestedPayload
+		decode(ev.Payload, &p)
+		s.Phase = "provisioning"
+		s.Workspace = WorkspaceState{Phase: "provisioning", ProjectID: p.ProjectID, ProjectRoot: p.ProjectRoot, Mode: p.Mode, Branch: p.Branch, BaseRef: p.BaseRef, StartedAt: ev.Timestamp}
+
+	case proto.WorkspaceHookStarted:
+		var p proto.WorkspaceHookStartedPayload
+		decode(ev.Payload, &p)
+		s.Workspace.Hook, s.Workspace.Command = p.Hook, p.Command
+		if p.Hook == "deprovision" {
+			s.Phase, s.Workspace.Phase = "cleaning", "cleaning"
+		}
+
+	case proto.WorkspaceHookOutput:
+		var p proto.WorkspaceHookOutputPayload
+		decode(ev.Payload, &p)
+		if p.Stream == "stderr" {
+			s.Workspace.Output += "[stderr] "
+		}
+		s.Workspace.Output += p.Chunk
+
+	case proto.WorkspaceHookFinished:
+		var p proto.WorkspaceHookFinishedPayload
+		decode(ev.Payload, &p)
+		s.Workspace.ExitCode, s.Workspace.DurationMs = p.ExitCode, p.DurationMs
+
+	case proto.WorkspaceReady:
+		var p proto.WorkspaceReadyPayload
+		decode(ev.Payload, &p)
+		s.Cwd, s.Workspace.Branch, s.Workspace.Resources = p.Cwd, p.Branch, p.Resources
+		s.Phase, s.Workspace.Phase, s.Workspace.Error = "idle", "ready", ""
+
+	case proto.WorkspaceFailed:
+		var p proto.WorkspaceFailedPayload
+		decode(ev.Payload, &p)
+		s.Phase, s.Workspace.Phase, s.Workspace.Error, s.Workspace.ExitCode = "provision_failed", "provision_failed", p.Error, p.ExitCode
+
+	case proto.WorkspaceCleanupStarted:
+		var p struct {
+			Purge bool `json:"purge"`
+		}
+		decode(ev.Payload, &p)
+		s.Phase, s.Workspace.Phase, s.Workspace.DeleteAfterCleanup = "cleaning", "cleaning", p.Purge
+
+	case proto.WorkspaceCleanupFailed:
+		var p proto.WorkspaceFailedPayload
+		decode(ev.Payload, &p)
+		s.Phase, s.Workspace.Phase, s.Workspace.Error, s.Workspace.ExitCode = "cleanup_failed", "cleanup_failed", p.Error, p.ExitCode
+
+	case proto.WorkspaceCleanupFinished, proto.WorkspaceReleased:
+		s.Workspace.Phase = "released"
 
 	case proto.TurnStarted:
 		var p proto.TurnStartedPayload

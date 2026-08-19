@@ -4,12 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/asiraky/hy/internal/adapter"
+	"github.com/asiraky/hy/internal/project"
 	"github.com/asiraky/hy/internal/projection"
 	"github.com/asiraky/hy/internal/proto"
 	"github.com/asiraky/hy/internal/store"
@@ -109,6 +113,157 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatal("condition not met within 5s")
+}
+
+func TestProjectProvisionBlocksHarnessAndStreamsOutput(t *testing.T) {
+	root := t.TempDir()
+	hook := filepath.Join(root, "provision")
+	cleanupHook := filepath.Join(root, "deprovision")
+	script := "#!/bin/sh\necho preparing-test-workspace\nsleep 0.1\nprintf '{\"cwd\":\"%s\"}' \"$HY_PROJECT_ROOT\" > \"$HY_RESULT_FILE\"\n"
+	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cleanupHook, []byte("#!/bin/sh\ntest -f \"$HY_CONTEXT_FILE\"\necho cleanup-test-workspace\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := proto.NowMillis()
+	p := project.Project{ID: "p1", Root: root, CreatedAt: now, UpdatedAt: now, Config: project.DefaultConfig(root)}
+	p.Config.Defaults.Harness = "fake"
+	p.Config.Workspace.Provision = "provision"
+	p.Config.Workspace.Deprovision = "deprovision"
+	if err := st.PutProject(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	fa := &fakeAdapter{}
+	mgr := NewManager(st, func(string, ...any) {}, fa)
+	defer mgr.Shutdown()
+	a, err := mgr.CreateProject(context.Background(), CreateProjectOptions{ProjectID: p.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fa.session() != nil {
+		t.Fatal("harness started before provision hook completed")
+	}
+	waitFor(t, func() bool {
+		state, e := a.State(context.Background())
+		return e == nil && state.Workspace.Phase == "ready"
+	})
+	if fa.session() == nil {
+		t.Fatal("harness was not started after provision")
+	}
+	state, err := a.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Workspace.Output != "preparing-test-workspace\n" {
+		t.Fatalf("output = %q", state.Workspace.Output)
+	}
+	if err := mgr.Cleanup(context.Background(), a.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		meta, e := st.Session(context.Background(), a.ID)
+		if e == nil && meta.Phase == "cleanup_failed" {
+			t.Fatalf("cleanup failed: %+v", meta)
+		}
+		return e == nil && meta.Phase == "closed"
+	})
+	closed, err := mgr.Get(context.Background(), a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = closed.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(state.Workspace.Output, "cleanup-test-workspace") {
+		t.Fatalf("cleanup output was not durable: %q", state.Workspace.Output)
+	}
+}
+
+func TestClawdCompatibilityHookGetsBranchAndNeedsNoResultFile(t *testing.T) {
+	root := t.TempDir()
+	for _, args := range [][]string{{"init"}, {"config", "user.email", "hy@test.invalid"}, {"config", "user.name", "hy test"}, {"commit", "--allow-empty", "-m", "initial"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	hook := filepath.Join(root, "worktree-setup.sh")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\ndir=$(printf '%s' \"$1\" | tr / -)\ntest -d \".worktrees/$dir\"\necho compatibility-branch:$1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	teardown := filepath.Join(root, "worktree-teardown.sh")
+	if err := os.WriteFile(teardown, []byte("#!/bin/sh\necho simulated-teardown-failure >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := proto.NowMillis()
+	p := project.Project{ID: "compat", Root: root, CreatedAt: now, UpdatedAt: now, Config: project.DefaultConfig(root)}
+	p.Config.Defaults.Harness = "fake"
+	p.Config.Defaults.Workspace = "managed"
+	p.Config.Workspace.Provision = "worktree-setup.sh"
+	p.Config.Workspace.Deprovision = "worktree-teardown.sh"
+	if err := st.PutProject(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	fa := &fakeAdapter{}
+	mgr := NewManager(st, func(string, ...any) {}, fa)
+	defer mgr.Shutdown()
+	a, err := mgr.CreateProject(context.Background(), CreateProjectOptions{ProjectID: p.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		s, e := a.State(context.Background())
+		if e == nil && s.Workspace.Phase == "ready" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	s, err := a.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Cwd == root || !strings.Contains(s.Workspace.Output, "compatibility-branch:feature/hy-") {
+		t.Fatalf("compatibility result not synthesized: cwd=%q output=%q", s.Cwd, s.Workspace.Output)
+	}
+	if err := mgr.Delete(context.Background(), a.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		meta, e := st.Session(context.Background(), a.ID)
+		return e == nil && meta.Phase == "cleanup_failed"
+	})
+	if _, err := os.Stat(s.Cwd); err != nil {
+		t.Fatalf("failed teardown unexpectedly removed workspace: %v", err)
+	}
+	if err := mgr.ForceDelete(context.Background(), a.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		_, e := st.Session(context.Background(), a.ID)
+		return errors.Is(e, store.ErrNotFound)
+	})
+	if _, err := os.Stat(s.Cwd); !os.IsNotExist(err) {
+		t.Fatalf("force delete left workspace at %s", s.Cwd)
+	}
+	branchCheck := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+s.Workspace.Branch)
+	branchCheck.Dir = root
+	if err := branchCheck.Run(); err != nil {
+		t.Fatalf("force delete removed the branch: %v", err)
+	}
 }
 
 // Invariant 1: seq is gapless and strictly increasing.
