@@ -10,6 +10,10 @@ node_modules/
 /cmd/hy/webdist/index.html
 *.tsbuildinfo
 
+# Worktrees hy provisions for its own sessions, which live inside the checkout
+# by default and are complete repositories in their own right.
+/.worktrees/
+
 # Runtime data
 *.db
 *.db-wal

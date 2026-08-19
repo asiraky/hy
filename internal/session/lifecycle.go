@@ -56,7 +56,14 @@ func (m *Manager) provision(meta store.SessionMeta, p project.Project, a *Actor)
 	_ = m.store.SetPhase(ctx, meta.ID, "provisioning")
 	m.notifyList()
 
-	result := provisionResult{Cwd: p.Root, Branch: meta.Branch}
+	// meta.Cwd is the project root for a local session and the borrowed
+	// checkout for an attached one; either way it is already the answer when
+	// nothing has to be provisioned.
+	base := meta.Cwd
+	if base == "" {
+		base = p.Root
+	}
+	result := provisionResult{Cwd: base, Branch: meta.Branch}
 	if meta.ProvisionScript != "" {
 		var err error
 		result, err = m.runProvisionHook(ctx, meta, p, a)
