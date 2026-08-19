@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Client, wsURL, type ConnectionStatus } from "./client";
 import { useIsDesktop } from "./useMediaQuery";
-import type { Access, HarnessMeta, Project, ProjectConfig, SessionMeta, SessionState } from "./protocol";
+import type { Access, HarnessMeta, Project, ProjectConfig, SessionMeta, SessionState, UserConfig } from "./protocol";
 import { AccessPanel } from "./components/Access";
 import { Composer } from "./components/Composer";
 import { NewSession } from "./components/NewSession";
@@ -30,6 +30,7 @@ export function App() {
   useEffect(() => setSidebarOpen(isDesktop), [isDesktop]);
   const [creating, setCreating] = useState(false);
   const [projectSettings, setProjectSettings] = useState<Project | "add" | null>(null);
+  const [userConfig, setUserConfig] = useState<UserConfig | null>(null);
   const [access, setAccess] = useState<Access | null>(null);
   const [showAccess, setShowAccess] = useState(false);
 
@@ -66,6 +67,13 @@ export function App() {
     return () => client.close();
   }, []);
 
+  // User-scope preferences are read once the socket is up, and again after a
+  // reconnect only if we never got them; they change far less often than state.
+  useEffect(() => {
+    if (status !== "online" || userConfig) return;
+    clientRef.current?.command("get_user_config", {}).then(res => setUserConfig(res.userConfig)).catch(() => {});
+  }, [status, userConfig]);
+
   // Restore the last session once the list arrives.
   useEffect(() => {
     if (activeId || sessions.length === 0) return;
@@ -100,6 +108,12 @@ export function App() {
     },
     [select],
   );
+
+  const listWorkspaces = useCallback(async (projectId: string) => {
+    const res = await clientRef.current!.command("list_workspaces", { projectId });
+    return { workspaces: res.workspaces ?? [], issues: res.issues ?? [], issuesError: res.issuesError ?? "" };
+  }, []);
+  const saveUserConfig = useCallback(async (cfg: UserConfig) => { const res=await clientRef.current!.command("save_user_config",{config:cfg}); setUserConfig(res.userConfig); },[]);
 
   const addProject = useCallback(async (root: string) => { const res=await clientRef.current!.command("add_project",{root}); setProjects(p=>[res.project,...p.filter(x=>x.id!==res.project.id)]); },[]);
   const saveProject = useCallback(async (projectId:string,config:ProjectConfig) => { const res=await clientRef.current!.command("save_project",{projectId,config}); setProjects(p=>p.map(x=>x.id===projectId?res.project:x)); },[]);
@@ -336,7 +350,9 @@ export function App() {
         <NewSession
           projects={projects}
           harnesses={harnesses}
+          userConfig={userConfig}
           onCreate={create}
+          onListWorkspaces={listWorkspaces}
           onAddProject={()=>setProjectSettings("add")}
           onSettings={setProjectSettings}
           onRecheck={recheck}
@@ -349,8 +365,10 @@ export function App() {
           project={projectSettings === "add" ? null : projectSettings}
           defaultRoot={defaultCwd}
           harnesses={harnesses}
+          userConfig={userConfig}
           onAdd={addProject}
           onSave={saveProject}
+          onSaveUserConfig={saveUserConfig}
           onClose={() => setProjectSettings(null)}
         />
       )}

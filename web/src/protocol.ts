@@ -147,6 +147,40 @@ export interface ProjectConfig {
 
 export interface Project { id: string; root: string; config: ProjectConfig; createdAt: number; updatedAt: number }
 
+/** One checkout a session could run in: the project root, or any worktree Git knows about. */
+export interface Workspace {
+  path: string;
+  branch?: string;
+  /** Short commit, for a detached worktree that has no branch. */
+  head?: string;
+  isRoot?: boolean;
+  /** A live session already holds this checkout, so it is shown but not selectable. */
+  busy?: boolean;
+  busySessionId?: string;
+  busyTitle?: string;
+  locked?: boolean;
+}
+
+/** A `gh issue list` row, passed through verbatim so the user's own format function decides what matters. */
+export interface Issue {
+  number: number;
+  title: string;
+  url?: string;
+  labels?: { name: string }[];
+  assignees?: unknown;
+}
+
+/**
+ * Per-machine preferences, kept in ~/.hy/config.json rather than the repo:
+ * branchFormat is the operator's own naming habit, not the project's.
+ */
+export interface UserConfig {
+  version: number;
+  /** A JavaScript arrow function, issue in and branch name out, evaluated here. */
+  branchFormat?: string;
+  suggestIssues?: boolean;
+}
+
 export interface SessionMeta {
   id: string;
   cwd: string;

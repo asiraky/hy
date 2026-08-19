@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -163,6 +164,10 @@ type CreateProjectOptions struct {
 	Effort    string
 	Branch    string
 	Workspace string
+	// WorkspacePath attaches the session to a checkout that already exists
+	// instead of provisioning one. It is the minority case, so it overrides
+	// Workspace rather than being another value of it.
+	WorkspacePath string
 }
 
 // CreateProject persists and returns an attachable session immediately. Its
@@ -205,7 +210,21 @@ func (m *Manager) CreateProject(ctx context.Context, o CreateProjectOptions) (*A
 	if err != nil && p.Config.Workspace.Deprovision != "" {
 		return nil, fmt.Errorf("deprovision hook: %w", err)
 	}
-	meta := store.SessionMeta{ID: uuid.NewString(), Cwd: p.Root, Harness: o.Harness, CreatedAt: proto.NowMillis(), UpdatedAt: proto.NowMillis(), Phase: "creating", ProjectID: p.ID, Branch: o.Branch, Model: o.Model, Mode: o.Mode, Effort: o.Effort, WorkspaceMode: o.Workspace, ProvisionScript: relHook(p.Root, provision), DeprovisionScript: relHook(p.Root, deprovision)}
+	cwd := p.Root
+	if strings.TrimSpace(o.WorkspacePath) != "" {
+		w, resolveErr := m.ResolveWorkspace(ctx, p.ID, o.WorkspacePath)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		// hy did not create this checkout, so it must never destroy it: the
+		// borrowed mode skips both hooks and the managed worktree teardown.
+		cwd, o.Workspace, provision, deprovision = w.Path, "borrowed", "", ""
+		if o.Branch == "" {
+			o.Branch = w.Branch
+		}
+	}
+
+	meta := store.SessionMeta{ID: uuid.NewString(), Cwd: cwd, Harness: o.Harness, CreatedAt: proto.NowMillis(), UpdatedAt: proto.NowMillis(), Phase: "creating", ProjectID: p.ID, Branch: o.Branch, Model: o.Model, Mode: o.Mode, Effort: o.Effort, WorkspaceMode: o.Workspace, ProvisionScript: relHook(p.Root, provision), DeprovisionScript: relHook(p.Root, deprovision)}
 	if err := m.store.CreateSession(ctx, meta); err != nil {
 		return nil, err
 	}
@@ -539,8 +558,12 @@ func (m *Manager) ForceDelete(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if err := m.removeGitWorktree(ctx, meta, p, nil, true); err != nil {
-		return err
+	// A borrowed checkout belongs to whoever made it; forcing the session away
+	// must not take their worktree with it.
+	if meta.WorkspaceMode != "borrowed" {
+		if err := m.removeGitWorktree(ctx, meta, p, nil, true); err != nil {
+			return err
+		}
 	}
 	if live, ok := m.Peek(id); ok {
 		live.Dispose("force deleted")

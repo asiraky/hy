@@ -11,6 +11,7 @@ import (
 	"github.com/asiraky/hy/internal/proto"
 	"github.com/asiraky/hy/internal/session"
 	"github.com/asiraky/hy/internal/store"
+	"github.com/asiraky/hy/internal/userconfig"
 )
 
 // ProtocolVersion is bumped when the wire format changes incompatibly.
@@ -67,8 +68,19 @@ type createArgs struct {
 	ProjectID string `json:"projectId"`
 	Branch    string `json:"branch"`
 	Workspace string `json:"workspace"`
-	Model     string `json:"model"`
-	Mode      string `json:"mode"`
+	// WorkspacePath attaches to a checkout that already exists rather than
+	// provisioning one; empty means the usual create-a-worktree path.
+	WorkspacePath string `json:"workspacePath"`
+	Model         string `json:"model"`
+	Mode          string `json:"mode"`
+}
+
+type listWorkspacesArgs struct {
+	ProjectID string `json:"projectId"`
+}
+
+type saveUserConfigArgs struct {
+	Config userconfig.Config `json:"config"`
 }
 
 type addProjectArgs struct {

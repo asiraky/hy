@@ -15,6 +15,7 @@ import (
 	"github.com/asiraky/hy/internal/proto"
 	"github.com/asiraky/hy/internal/session"
 	"github.com/asiraky/hy/internal/store"
+	"github.com/asiraky/hy/internal/userconfig"
 )
 
 // conn is one presenter connection. It holds no session state of its own —
@@ -282,7 +283,7 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 			return nil, err
 		}
 		if a.ProjectID != "" {
-			actor, err := c.srv.mgr.CreateProject(ctx, session.CreateProjectOptions{ProjectID: a.ProjectID, Harness: a.Harness, Model: a.Model, Mode: a.Mode, Branch: a.Branch, Workspace: a.Workspace})
+			actor, err := c.srv.mgr.CreateProject(ctx, session.CreateProjectOptions{ProjectID: a.ProjectID, Harness: a.Harness, Model: a.Model, Mode: a.Mode, Branch: a.Branch, Workspace: a.Workspace, WorkspacePath: a.WorkspacePath})
 			if err != nil {
 				return nil, err
 			}
@@ -378,6 +379,38 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 	case "recheck_harnesses":
 		c.srv.mgr.RecheckHarnesses()
 		return map[string]any{"harnesses": c.srv.mgr.Harnesses(ctx)}, nil
+
+	case "list_workspaces":
+		var a listWorkspacesArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		spaces, err := c.srv.mgr.ListWorkspaces(ctx, a.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		// Issue lookup is advisory: it seeds branch-name suggestions and must
+		// never be the reason the workspace list fails to render.
+		issues, issuesErr := c.srv.mgr.ListIssues(ctx, a.ProjectID)
+		return map[string]any{"workspaces": spaces, "issues": issues, "issuesError": issuesErr}, nil
+
+	case "get_user_config":
+		cfg, err := userconfig.Load()
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"userConfig": cfg}, nil
+
+	case "save_user_config":
+		var a saveUserConfigArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		cfg, err := userconfig.Save(a.Config)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"userConfig": cfg}, nil
 
 	case "add_project":
 		var a addProjectArgs
