@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Item, SessionState, ToolStatus } from "../protocol";
 import { useSmoothText } from "../useSmoothText";
 import { Spinner } from "./ui";
@@ -69,10 +69,24 @@ function ToolCard({ item }: { item: Item }) {
   );
 }
 
-function Message({ item, streaming }: { item: Item; streaming: boolean }) {
+function Message({ item, streaming, recovered }: { item: Item; streaming: boolean; recovered: boolean }) {
   // Paced reveal, so a harness that delivers a line at a time still reads as
   // continuous output. Inactive messages render whole.
   const text = useSmoothText(item.text ?? "", streaming);
+
+  // The prompt that restarts interrupted work was written by the server, not
+  // by the person reading this. Showing it as their own message would be a
+  // lie; what they need to know is that a restart happened and the agent was
+  // put back to work.
+  if (recovered && item.role === "user") {
+    return (
+      <div className="fade-in flex justify-center">
+        <div className="rounded-full border border-ink-800 px-3 py-1 text-[12px] text-ink-500">
+          Server restarted — the agent was asked to pick the work back up
+        </div>
+      </div>
+    );
+  }
 
   if (item.role === "user") {
     return (
@@ -177,6 +191,11 @@ export function Transcript({ state, onRetryProvision, onCleanup, onForceDelete }
     return -1;
   })();
 
+  const recoveredTurns = useMemo(
+    () => new Set(state.turns.filter((t) => t.recovery).map((t) => t.id)),
+    [state.turns],
+  );
+
   return (
     <div ref={ref} className="scroll-thin min-h-0 flex-1 overflow-y-auto overscroll-contain">
       <div ref={contentRef} className="mx-auto flex max-w-3xl flex-col gap-3.5 px-4 py-6 md:px-5">
@@ -195,6 +214,7 @@ export function Transcript({ state, onRetryProvision, onCleanup, onForceDelete }
               key={item.id}
               item={item}
               streaming={state.phase === "turn" && i === lastAgentIndex}
+              recovered={!!item.turnId && recoveredTurns.has(item.turnId)}
             />
           ),
         )}

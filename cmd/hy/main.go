@@ -89,6 +89,11 @@ func main() {
 		logf("reload project config: %v", err)
 	}
 
+	// Work that was in flight when the last process stopped comes back now,
+	// rather than when someone opens a browser. A restart should cost an agent
+	// a turn boundary, not its task.
+	mgr.ResumeInterrupted()
+
 	webFS, hasUI := embeddedUI()
 
 	// In development the UI comes from Vite through this server rather than

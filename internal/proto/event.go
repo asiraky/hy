@@ -165,6 +165,17 @@ type SessionClosedPayload struct {
 type TurnStartedPayload struct {
 	TurnID string `json:"turnId"`
 	Prompt string `json:"prompt"`
+	// Recovery is set only on a turn the server started by itself, to finish
+	// work a restart interrupted. It is absent on every human prompt.
+	Recovery *TurnRecovery `json:"recovery,omitempty"`
+}
+
+// TurnRecovery describes a turn the server started to continue interrupted
+// work. Attempt counts consecutive recoveries so a session that dies on every
+// resume stops rather than restarting itself forever.
+type TurnRecovery struct {
+	ResumeOf string `json:"resumeOf"`
+	Attempt  int    `json:"attempt"`
 }
 
 type TurnFinishedPayload struct {

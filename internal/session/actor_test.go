@@ -684,11 +684,191 @@ func TestResumeFinishesInterruptedTurnAndCancelsPendingPermission(t *testing.T) 
 	}
 	waitFor(t, func() bool {
 		s, _ := resumed.State(context.Background())
-		return s.Phase == "idle" && len(s.Pending) == 0 && len(s.Turns) == 1 && s.Turns[0].Done
+		return len(s.Pending) == 0 && len(s.Turns) >= 1 && s.Turns[0].Done
 	})
 	state, _ := resumed.State(context.Background())
 	if state.Turns[0].StopReason != proto.StopError {
 		t.Fatalf("interrupted turn stop reason=%q; want error", state.Turns[0].StopReason)
+	}
+}
+
+func TestResumeContinuesTheInterruptedWork(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "recover.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	fa := &fakeAdapter{}
+	mgr := NewManager(st, func(string, ...any) {}, fa)
+	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return actor.Head() >= 1 })
+	if _, err := actor.Prompt(context.Background(), "do the long thing"); err != nil {
+		t.Fatal(err)
+	}
+	<-fa.session().prompts
+	waitFor(t, func() bool {
+		s, _ := actor.State(context.Background())
+		return s.Phase == "turn"
+	})
+
+	id := actor.ID
+	mgr.Shutdown()
+
+	// A session killed mid-turn stays marked as such, so the next start can
+	// find it without folding every log in the database.
+	meta, err := st.Session(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Phase != "turn" {
+		t.Fatalf("phase after mid-turn shutdown = %q; want turn", meta.Phase)
+	}
+
+	mgr2 := NewManager(st, func(string, ...any) {}, fa)
+	defer mgr2.Shutdown()
+	resumed, err := mgr2.Get(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	in := <-fa.session().prompts
+	if !strings.Contains(in.Text, "restarted") {
+		t.Fatalf("recovery prompt = %q; want it to explain the restart", in.Text)
+	}
+	waitFor(t, func() bool {
+		s, _ := resumed.State(context.Background())
+		return len(s.Turns) == 2
+	})
+	state, _ := resumed.State(context.Background())
+	if !state.Turns[0].Done || state.Turns[0].StopReason != proto.StopError {
+		t.Fatalf("interrupted turn = %+v; want it closed with an error", state.Turns[0])
+	}
+	if state.Turns[1].Recovery == nil || state.Turns[1].Recovery.Attempt != 1 {
+		t.Fatalf("continuation turn = %+v; want recovery attempt 1", state.Turns[1])
+	}
+	if state.Turns[1].Recovery.ResumeOf != state.Turns[0].ID {
+		t.Fatalf("continuation resumes %q; want %q", state.Turns[1].Recovery.ResumeOf, state.Turns[0].ID)
+	}
+	// The session is named after what the human asked for, never after the
+	// prompt the server wrote to itself.
+	if state.Title != "do the long thing" {
+		t.Fatalf("title = %q; want the human prompt", state.Title)
+	}
+}
+
+func TestStartupResumesInterruptedWorkWithoutAnAttach(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "startup.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	fa := &fakeAdapter{}
+	mgr := NewManager(st, func(string, ...any) {}, fa)
+	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return actor.Head() >= 1 })
+	if _, err := actor.Prompt(context.Background(), "long job"); err != nil {
+		t.Fatal(err)
+	}
+	<-fa.session().prompts
+	waitFor(t, func() bool {
+		s, _ := actor.State(context.Background())
+		return s.Phase == "turn"
+	})
+	id := actor.ID
+	mgr.Shutdown()
+
+	// Nobody attaches. The work should come back anyway.
+	mgr2 := NewManager(st, func(string, ...any) {}, fa)
+	defer mgr2.Shutdown()
+	mgr2.recoverAll(context.Background())
+
+	in := <-fa.session().prompts
+	if !strings.Contains(in.Text, "restarted") {
+		t.Fatalf("recovery prompt = %q; want it to explain the restart", in.Text)
+	}
+	resumed, ok := mgr2.Peek(id)
+	if !ok {
+		t.Fatal("session was not brought back")
+	}
+	waitFor(t, func() bool {
+		s, _ := resumed.State(context.Background())
+		return len(s.Turns) == 2 && s.Turns[1].Recovery != nil
+	})
+}
+
+func TestRepeatedlyInterruptedTurnStopsRecoveringItself(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "recover-cap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	fa := &fakeAdapter{}
+	mgr := NewManager(st, func(string, ...any) {}, fa)
+	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return actor.Head() >= 1 })
+	if _, err := actor.Prompt(context.Background(), "start"); err != nil {
+		t.Fatal(err)
+	}
+	<-fa.session().prompts
+	waitFor(t, func() bool {
+		s, _ := actor.State(context.Background())
+		return s.Phase == "turn"
+	})
+	id := actor.ID
+	mgr.Shutdown()
+
+	// Every restart dies in the middle of the turn the previous one started.
+	for attempt := 1; attempt <= maxRecoveryAttempts; attempt++ {
+		m := NewManager(st, func(string, ...any) {}, fa)
+		a, err := m.Get(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		<-fa.session().prompts
+		waitFor(t, func() bool {
+			s, _ := a.State(context.Background())
+			return s.Phase == "turn"
+		})
+		state, _ := a.State(context.Background())
+		last := state.Turns[len(state.Turns)-1]
+		if last.Recovery == nil || last.Recovery.Attempt != attempt {
+			t.Fatalf("restart %d started %+v; want recovery attempt %d", attempt, last, attempt)
+		}
+		m.Shutdown()
+	}
+
+	// The cap is reached: this resume closes the turn and leaves the session
+	// alone rather than starting a fourth continuation.
+	m := NewManager(st, func(string, ...any) {}, fa)
+	defer m.Shutdown()
+	a, err := m.Get(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		s, _ := a.State(context.Background())
+		return s.Phase == "idle"
+	})
+	before, _ := a.State(context.Background())
+	time.Sleep(150 * time.Millisecond)
+	after, _ := a.State(context.Background())
+	if len(after.Turns) != len(before.Turns) {
+		t.Fatalf("turns grew from %d to %d; want the recovery to stop at the cap", len(before.Turns), len(after.Turns))
+	}
+	if !after.Turns[len(after.Turns)-1].Done {
+		t.Fatalf("last turn left open after the cap: %+v", after.Turns[len(after.Turns)-1])
 	}
 }
 

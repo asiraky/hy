@@ -66,6 +66,10 @@ type Actor struct {
 	// session list rendered elsewhere can follow along.
 	onPhase func()
 
+	// recovery is set by Resume when the log shows a turn the server died in
+	// the middle of. Recover consumes it; see recovery.go.
+	recovery *proto.TurnRecovery
+
 	logf func(string, ...any)
 }
 
@@ -83,6 +87,7 @@ type command struct {
 	model        string
 	mode         string
 	effort       string
+	recovery     *proto.TurnRecovery // prompt: set when the server started this turn itself
 }
 
 type permAsk struct {
@@ -196,6 +201,13 @@ func Resume(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store
 		subs:          map[string]*Subscriber{},
 		logf:          logf,
 	}
+
+	// Decided here, while the projection is still this goroutine's: once the
+	// actor loop starts, the state belongs to it. Closing the interrupted turn
+	// below stops the UI lying about what is running, but it does not finish
+	// the work — that is what Recover is for, and this is the evidence it
+	// needs.
+	a.recovery = planRecovery(state)
 
 	sess, err := ad.CreateSession(ctx, hostServices{a}, adapter.CreateOptions{
 		SessionID:        meta.ID,
@@ -515,9 +527,13 @@ func (a *Actor) handle(c command) (stop bool) {
 		}
 		turnID := uuid.NewString()
 		a.turnActive = turnID
-		a.append(proto.Emit(proto.TurnStarted, proto.TurnStartedPayload{TurnID: turnID, Prompt: c.prompt}))
+		a.append(proto.Emit(proto.TurnStarted, proto.TurnStartedPayload{TurnID: turnID, Prompt: c.prompt, Recovery: c.recovery}))
 		_ = a.store.SetPhase(ctx, a.ID, "turn")
-		_ = a.store.SetTitle(ctx, a.ID, truncate(c.prompt, 60))
+		// A recovery prompt is the server talking to itself; naming a session
+		// after it would bury what the human actually asked for.
+		if c.recovery == nil {
+			_ = a.store.SetTitle(ctx, a.ID, truncate(c.prompt, 60))
+		}
 
 		if err := a.sess.Prompt(ctx, adapter.PromptInput{TurnID: turnID, Text: c.prompt}); err != nil {
 			a.turnActive = ""
@@ -610,8 +626,15 @@ func (a *Actor) handle(c command) (stop bool) {
 func (a *Actor) shutdown(hard bool) {
 	ctx := context.Background()
 	phase := "idle"
-	if hard || a.state.Closed {
+	switch {
+	case hard || a.state.Closed:
 		phase = "closed"
+	case a.turnActive != "":
+		// Disposed mid-turn. The row keeps saying "turn" so the next start can
+		// find this session and finish what it was doing; recording idle here
+		// would erase the only cheap evidence that work was in flight. A kill
+		// -9 leaves the same value behind, so both deaths look alike.
+		phase = "turn"
 	}
 	_ = a.store.SetPhase(ctx, a.ID, phase)
 

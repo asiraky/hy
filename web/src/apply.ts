@@ -86,8 +86,10 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
       return {
         ...s,
         phase: "turn",
-        title: s.title || p.prompt?.slice(0, 60) || "",
-        turns: [...s.turns, { id: p.turnId, prompt: p.prompt, done: false }],
+        // A recovery prompt is the server talking to itself, so it never
+        // names the session.
+        title: s.title || (p.recovery ? "" : p.prompt?.slice(0, 60) || ""),
+        turns: [...s.turns, { id: p.turnId, prompt: p.prompt, done: false, recovery: p.recovery }],
         items: upsert(s, `prompt:${p.turnId}`, (it) => {
           it.kind = "message";
           it.role = "user";
