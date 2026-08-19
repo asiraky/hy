@@ -8,7 +8,7 @@ A Go server that drives multiple coding harnesses (Claude Code, Codex, Cursor, G
 
 **Goals**
 
-- One canonical event vocabulary, derived from ACP, that every harness normalises into.
+- One canonical event vocabulary, aligned with ACP where practical, that every harness normalises into.
 - Any UI can attach to any session at any time and reconstruct exact state.
 - A session survives every client disconnecting. Compute lives on the server.
 - Adding a UI requires no server changes. Adding a harness requires one adapter and nothing else.
@@ -85,7 +85,7 @@ Note what Go buys you here: *every* harness is a subprocess speaking line-delimi
 
 ## 4. Canonical event model
 
-Derived from ACP's `session/update` variants and RPC surface, so the ACP adapter is close to an identity function.
+The vocabulary maps directly to ACP's `session/update` variants and RPC surface, keeping the ACP adapter close to an identity function.
 
 **Lifecycle**
 ```
@@ -305,7 +305,7 @@ type HostServices interface {
 
 ### Claude adapter
 
-The TypeScript Agent SDK is a wrapper that spawns the `claude` binary (`pathToClaudeCodeExecutable` in t3code's adapter). Go talks to the same subprocess directly — this is the same mechanism, minus the wrapper, not a downgrade.
+The TypeScript Agent SDK spawns the user-installed `claude` binary through `pathToClaudeCodeExecutable`. The Go adapter can communicate with that subprocess through its supported stream-JSON interface.
 
 ```
 claude -p \
@@ -319,7 +319,7 @@ claude -p \
 
 Verified against CLI 2.1.234: all of these flags exist, `--session-id` takes a caller-supplied UUID (so *you* own session identity, not the CLI), `--resume`/`--fork-session` cover resume and branching, and the binary implements a bidirectional `control_request` / `control_response` protocol carrying `can_use_tool`. That last one is the critical finding — it is `canUseTool` across a process boundary, so permission interception does not require the TS SDK.
 
-Mapping work: `assistant`/`stream_event` messages → `message.chunk` and `tool_call.*`; `control_request{can_use_tool}` → `permission.requested`, answered with `control_response`. Budget this as the largest single piece of the project; t3code's equivalent is 4,644 lines. Subagents (`parent_tool_use_id`) and compaction have no clean ACP representation — see the open question below.
+Mapping work: `assistant`/`stream_event` messages → `message.chunk` and `tool_call.*`; `control_request{can_use_tool}` → `permission.requested`, answered with `control_response`. Budget this as the largest single piece of the project. Subagents (`parent_tool_use_id`) and compaction have no clean ACP representation — see the open question below.
 
 ### Codex adapter
 
@@ -393,7 +393,7 @@ which yields a real, publicly-trusted TLS certificate on `<machine>.<tailnet>.ts
 
 ### The browser problem, and why the binary serves the web UI
 
-A web app loaded from an `https://` origin cannot open `ws://192.168.1.20:8080` — browsers block it as mixed content. This is not a corner case; it is the default outcome of hosting a web UI anywhere and pointing it at a LAN server. t3code models it explicitly as a `mixed-content-blocked` compatibility state, and any `http:` endpoint is classified that way automatically.
+A web app loaded from an `https://` origin cannot open `ws://192.168.1.20:8080` — browsers block it as mixed content. This is not a corner case; it is the default outcome of hosting a web UI anywhere and pointing it at a LAN server. Endpoint compatibility therefore records `mixed-content-blocked` for browser clients whenever an `http:` endpoint would cause this mismatch.
 
 Two clean resolutions, and the design uses both:
 
