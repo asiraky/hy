@@ -299,15 +299,40 @@ export function ProjectSettings({
                     </SelectContent>
                   </Select>
 
-                  <Input
-                    value={cfg.defaults.model ?? ""}
-                    onChange={(e) => defaults({ model: e.target.value })}
-                    placeholder="Default model"
-                    aria-label="Default model"
-                  />
-
                   {/* Radix rejects "" as a value, so the unset case is a named
                     sentinel that maps back to "" on the way out. */}
+                  <Select
+                    value={cfg.defaults.model || "default"}
+                    onValueChange={(v) => defaults({ model: v === "default" ? "" : v })}
+                  >
+                    <SelectTrigger aria-label="Default model" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default">Default model</SelectItem>
+                      {(() => {
+                        const models =
+                          harnesses.find((h) => h.id === (cfg.defaults.harness ?? ""))?.models ??
+                          [];
+                        const items = models.map((m) => (
+                          <SelectItem key={m.id} value={m.id}>
+                            {m.label}
+                          </SelectItem>
+                        ));
+                        // A saved model the current harness list does not know
+                        // still renders, verbatim, rather than vanishing.
+                        if (cfg.defaults.model && !models.some((m) => m.id === cfg.defaults.model)) {
+                          items.push(
+                            <SelectItem key={cfg.defaults.model} value={cfg.defaults.model}>
+                              {cfg.defaults.model}
+                            </SelectItem>,
+                          );
+                        }
+                        return items;
+                      })()}
+                    </SelectContent>
+                  </Select>
+
                   <Select
                     value={cfg.defaults.effort || "default"}
                     onValueChange={(v) => defaults({ effort: v === "default" ? "" : v })}
