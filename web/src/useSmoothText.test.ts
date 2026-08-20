@@ -67,6 +67,27 @@ describe("useSmoothText", () => {
     expect(result.current).toBe("hello, this is a streamed line of text");
   });
 
+  // Chunks can land faster than animation frames (codex streams a delta per
+  // word). If each chunk restarted the reveal loop, the pending frame would be
+  // cancelled before it ever fired and nothing would render until the stream
+  // paused. The loop must keep its frame across re-renders.
+  it("makes progress while chunks arrive faster than frames", async () => {
+    let text = "";
+    const { result, rerender } = renderHook(
+      (p: { text: string; active: boolean }) => useSmoothText(p.text, p.active),
+      { initialProps: { text, active: true } },
+    );
+
+    // 40 chunks, one every 8ms — twice per 16ms frame — for 320ms.
+    for (let i = 0; i < 40; i++) {
+      text += "word ";
+      rerender({ text, active: true });
+      await frames(8);
+    }
+
+    expect(result.current.length).toBeGreaterThan(0);
+  });
+
   it("flushes the remainder after the turn ends", async () => {
     const { result, rerender } = renderHook(
       ({ text, active }) => useSmoothText(text, active),

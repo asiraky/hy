@@ -291,6 +291,16 @@ func (s *session) Events() <-chan proto.Emission { return s.events }
 
 func (s *session) Prompt(ctx context.Context, in adapter.PromptInput) error {
 	s.mu.Lock()
+	// The actor believed the session was idle when it accepted this prompt,
+	// but the harness may have started work by itself in the meantime — the
+	// turn it opened is queued on the event channel and the actor has not
+	// seen it yet. Overwriting that turn's id here would label the harness's
+	// in-flight work with this prompt's turn and leave the open turn
+	// unfinished forever. Refuse instead; the caller can retry when idle.
+	if s.turnID != "" && s.turnID != in.TurnID {
+		s.mu.Unlock()
+		return errors.New("the harness resumed work on its own; wait for it to finish")
+	}
 	s.turnID = in.TurnID
 	s.sawResult = false
 	s.mu.Unlock()
@@ -763,5 +773,3 @@ func flattenContent(raw json.RawMessage) string {
 	}
 	return string(raw)
 }
-
-var _ = errors.New
