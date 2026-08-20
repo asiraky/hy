@@ -16,14 +16,24 @@ import { cn } from "~/lib/utils";
 // code block the instant the close arrives. Closing it here means the block is
 // a code block from its first line and simply grows.
 function closeOpenFence(text: string): string {
-  let open: string | null = null;
+  let open: { char: string; len: number } | null = null;
   for (const line of text.split("\n")) {
-    const m = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
+    const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
     if (!m) continue;
-    if (open === null) open = m[1][0];
-    else if (m[1][0] === open) open = null;
+    const [, fence, rest] = m;
+    const char = fence[0];
+    if (open === null) {
+      // A backtick fence's info string cannot itself contain a backtick, so
+      // "``` a ` b" opens nothing.
+      if (char === "`" && rest.includes("`")) continue;
+      open = { char, len: fence.length };
+      continue;
+    }
+    // A closing fence is the same character, at least as long as the opener,
+    // and carries no info string — "```js" inside a ```` block is content.
+    if (char === open.char && fence.length >= open.len && rest.trim() === "") open = null;
   }
-  return open === null ? text : `${text}\n${open.repeat(3)}`;
+  return open === null ? text : `${text}\n${open.char.repeat(open.len)}`;
 }
 
 // The fenced text as the author wrote it, straight off the syntax tree — the
@@ -143,9 +153,23 @@ const COMPONENTS: Components = {
     <th className="bg-muted/60 border-b px-2.5 py-1.5 text-left font-semibold">{children}</th>
   ),
   td: ({ children }) => <td className="border-b px-2.5 py-1.5 align-top last:border-b-0">{children}</td>,
-  img: ({ src, alt }) => (
-    <img src={typeof src === "string" ? src : undefined} alt={alt ?? ""} className="my-2 max-w-full rounded-lg" loading="lazy" />
-  ),
+  // An image tag in model output is a fetch the reader never asked for: it
+  // would leak their address and timing to whoever wrote the URL, and reach
+  // hosts only this browser can see. The link is offered instead, so loading
+  // it stays the reader's decision.
+  img: ({ src, alt }) =>
+    typeof src === "string" ? (
+      <a
+        href={src}
+        target="_blank"
+        rel="noopener noreferrer nofollow"
+        className="text-primary underline underline-offset-2"
+      >
+        {alt || "image"}
+      </a>
+    ) : (
+      <span className="text-muted-foreground">{alt || "image"}</span>
+    ),
 };
 
 const PLUGINS = [remarkGfm, remarkBreaks];
