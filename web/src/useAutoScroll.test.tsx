@@ -46,6 +46,10 @@ function fire(event: Event) {
   });
 }
 
+function settle(fn: () => void) {
+  act(fn);
+}
+
 function scrollTo(top: number) {
   setTop(top);
   fire(new Event("scroll"));
@@ -67,7 +71,7 @@ beforeEach(() => {
   Object.defineProperty(el, "scrollTop", {
     get: () => top,
     set: (v: number) => {
-      top = Math.max(0, Math.min(v, BOTTOM));
+      top = Math.max(0, Math.min(v, el.scrollHeight - VIEWPORT));
     },
     configurable: true,
   });
@@ -87,10 +91,11 @@ describe("useAutoScroll", () => {
     expect(pinned()).toBe(true);
   });
 
-  it("keeps the view at the bottom while pinned", () => {
-    setTop(BOTTOM - 300);
-    stick();
-    expect(scroller().scrollTop).toBe(BOTTOM);
+  it("follows content that grows underneath it while pinned", () => {
+    Object.defineProperty(scroller(), "scrollHeight", { value: CONTENT + 400, configurable: true });
+    settle(stick);
+    expect(pinned()).toBe(true);
+    expect(scroller().scrollTop).toBe(CONTENT + 400 - VIEWPORT);
   });
 
   it("unpins on a wheel scroll upwards", () => {
@@ -111,15 +116,40 @@ describe("useAutoScroll", () => {
 
   it("leaves the view alone once unpinned", () => {
     scrollTo(BOTTOM - 200);
-    stick();
+    settle(stick);
     expect(scroller().scrollTop).toBe(BOTTOM - 200);
   });
 
-  it("stays unpinned through a small nudge back towards the bottom", () => {
-    wheel(-10);
-    setTop(BOTTOM - 10);
+  it("stays unpinned after a nudge too small to leave the bottom tolerance", () => {
+    wheel(-5);
+    setTop(BOTTOM - 5);
     fire(new Event("scroll"));
     expect(pinned()).toBe(false);
+  });
+
+  it("unpins when content is dragged away underneath the pin", () => {
+    // A scrollbar drag during a stream: the position moves, and content
+    // arrives before the scroll event does.
+    setTop(BOTTOM - 200);
+    settle(stick);
+    expect(pinned()).toBe(false);
+    expect(scroller().scrollTop).toBe(BOTTOM - 200);
+  });
+
+  it("stays pinned when shrinking content clamps the position", () => {
+    // A tool card closing: the view has nowhere to be but the new bottom.
+    Object.defineProperty(scroller(), "scrollHeight", { value: 500, configurable: true });
+    setTop(100);
+    fire(new Event("scroll"));
+    settle(stick);
+    expect(pinned()).toBe(true);
+  });
+
+  it("ignores intent on a transcript that does not scroll", () => {
+    Object.defineProperty(scroller(), "scrollHeight", { value: VIEWPORT, configurable: true });
+    wheel(-40);
+    fire(new KeyboardEvent("keydown", { key: "PageUp" }));
+    expect(pinned()).toBe(true);
   });
 
   it("re-pins when the reader scrolls back to the bottom", () => {
@@ -130,7 +160,7 @@ describe("useAutoScroll", () => {
 
   it("re-pins and animates when the button is used", () => {
     scrollTo(BOTTOM - 200);
-    act(() => scrollToBottom());
+    settle(scrollToBottom);
     expect(pinned()).toBe(true);
     expect(scroller().scrollTo).toHaveBeenCalledWith({ top: CONTENT, behavior: "smooth" });
   });
@@ -138,7 +168,7 @@ describe("useAutoScroll", () => {
   it("jumps instead of animating under reduced motion", () => {
     vi.stubGlobal("matchMedia", () => ({ matches: true }));
     scrollTo(BOTTOM - 200);
-    act(() => scrollToBottom());
+    settle(scrollToBottom);
     expect(scroller().scrollTo).not.toHaveBeenCalled();
     expect(scroller().scrollTop).toBe(BOTTOM);
   });

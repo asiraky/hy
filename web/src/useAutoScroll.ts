@@ -16,6 +16,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // high-DPI layouts) are why it is not zero.
 const AT_BOTTOM_PX = 8;
 
+const atBottom = (el: HTMLElement) =>
+  el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX;
+
+// Nothing to leave, so nothing to read as leaving: a transcript that fits its
+// window answers a wheel or a swipe with no movement at all, and taking that
+// as intent would strand the pin off and the button on for a view that is
+// already showing everything there is.
+const canScroll = (el: HTMLElement) => el.scrollHeight - el.clientHeight > AT_BOTTOM_PX;
+
 /**
  * Keeps a scroller pinned to its own bottom while content grows, and gives up
  * the pin the moment the reader scrolls up.
@@ -52,8 +61,20 @@ export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>() {
   }, []);
 
   const stick = useCallback(() => {
-    if (pinnedRef.current) jumpToBottom();
-  }, [jumpToBottom]);
+    const el = scrollerRef.current;
+    if (!pinnedRef.current || !el) return;
+    // A scrollbar drag moves the view and says nothing else about it: its
+    // scroll event is queued, and if content arrives first this snap would
+    // overwrite the position before anyone read it — the exact fight this
+    // hook exists to end. So the position is checked against the one we last
+    // wrote before it is written over. A drop that ends at the bottom is not
+    // a reader: that is the view being clamped by content going away.
+    if (el.scrollTop < lastTop.current - 1 && !atBottom(el)) {
+      setPin(false);
+      return;
+    }
+    jumpToBottom();
+  }, [jumpToBottom, setPin]);
 
   // The button's action: animate down and take the pin back. Re-arming the pin
   // before the animation finishes is deliberate — content arriving mid-flight
@@ -79,16 +100,19 @@ export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>() {
     // where it actually is rather than from the top.
     lastTop.current = el.scrollTop;
 
-    const atBottom = () => el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX;
-
     const onScroll = () => {
       const top = el.scrollTop;
-      // Reaching the bottom always wins: it is the same position the pin
-      // itself would hold, so there is nothing left to preserve. Otherwise a
-      // position that went up — under the reader's hand or the scrollbar's —
-      // ends the pin.
-      if (atBottom()) setPin(true);
-      else if (top < lastTop.current) setPin(false);
+      // A position that went up — under the reader's hand or the scrollbar's
+      // — ends the pin, and it does so even a few pixels from the bottom:
+      // re-arming inside the tolerance would undo a small deliberate nudge
+      // and hand the view straight back to the stream. Movement up that ends
+      // at the bottom is not the reader at all, it is the view being clamped
+      // by content going away, and it leaves the pin as it found it. Arriving
+      // at the bottom any other way re-arms: that is the position the pin
+      // itself would hold, so there is nothing left to preserve.
+      const movedUp = top < lastTop.current;
+      if (movedUp && !atBottom(el)) setPin(false);
+      else if (!movedUp && atBottom(el)) setPin(true);
       lastTop.current = top;
     };
 
@@ -97,7 +121,7 @@ export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>() {
     // frame as the reader's scroll and cancel it out, leaving nothing for the
     // scroll handler to notice; the intent was still real.
     const onWheel = (e: WheelEvent) => {
-      if (e.deltaY < 0) setPin(false);
+      if (e.deltaY < 0 && canScroll(el)) setPin(false);
     };
 
     let touchY = 0;
@@ -108,13 +132,13 @@ export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>() {
       const y = e.touches[0]?.clientY ?? 0;
       // A finger travelling down the screen drags the content down, which is
       // to say it scrolls the view up.
-      if (y > touchY) setPin(false);
+      if (y > touchY && canScroll(el)) setPin(false);
       touchY = y;
     };
 
     const UP_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
     const onKeyDown = (e: KeyboardEvent) => {
-      if (UP_KEYS.has(e.key)) setPin(false);
+      if (UP_KEYS.has(e.key) && canScroll(el)) setPin(false);
     };
 
     el.addEventListener("scroll", onScroll, { passive: true });
