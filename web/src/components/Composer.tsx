@@ -20,7 +20,7 @@ export function Composer({
 }) {
   const [text, setText] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
-  // There is no ⌘ key on a phone, so do not advertise the shortcut there.
+  // There is no ⇧↵ worth advertising on a phone, so keep the hint to desktop.
   const isDesktop = useIsDesktop();
 
   // Grow with the content, up to a cap.
@@ -52,15 +52,18 @@ export function Composer({
               disabled
                 ? (disabledPlaceholder ?? "Session closed")
                 : isDesktop
-                  ? "Ask anything…  (⌘↵ to send)"
+                  ? "Ask anything…  (↵ to send · ⇧↵ for newline)"
                   : "Ask anything…"
             }
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                send();
-              }
+              if (e.key !== "Enter") return;
+              // Shift+Enter is the newline; let the textarea handle it.
+              if (e.shiftKey) return;
+              // Enter confirms an IME candidate (CJK input); it must not send.
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+              e.preventDefault();
+              send();
             }}
             // 16px on a phone: anything smaller makes iOS zoom the viewport on
             // focus, which breaks the layout the dvh handling just fixed.
