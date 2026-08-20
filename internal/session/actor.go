@@ -66,6 +66,10 @@ type Actor struct {
 	// session list rendered elsewhere can follow along.
 	onPhase func()
 
+	// recovery is set by Resume when the log shows a turn the server died in
+	// the middle of. Recover consumes it; see recovery.go.
+	recovery *proto.TurnRecovery
+
 	logf func(string, ...any)
 }
 
@@ -83,6 +87,7 @@ type command struct {
 	model        string
 	mode         string
 	effort       string
+	recovery     *proto.TurnRecovery // prompt: set when the server started this turn itself
 }
 
 type permAsk struct {
@@ -111,6 +116,7 @@ const (
 	cmdActivate      = "activate"
 	cmdHarnessEvent  = "harness_event"
 	cmdHarnessExit   = "harness_exit"
+	cmdContinue      = "continue"
 )
 
 // ErrBusy is returned when a prompt arrives while a turn is already running.
@@ -196,6 +202,13 @@ func Resume(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store
 		subs:          map[string]*Subscriber{},
 		logf:          logf,
 	}
+
+	// Decided here, while the projection is still this goroutine's: once the
+	// actor loop starts, the state belongs to it. Closing the interrupted turn
+	// below stops the UI lying about what is running, but it does not finish
+	// the work — that is what Recover is for, and this is the evidence it
+	// needs.
+	a.recovery = planRecovery(state)
 
 	sess, err := ad.CreateSession(ctx, hostServices{a}, adapter.CreateOptions{
 		SessionID:        meta.ID,
@@ -379,6 +392,17 @@ func (a *Actor) Prompt(ctx context.Context, text string) (string, error) {
 	return v.(string), nil
 }
 
+// Continue restarts work that ended in an error, on a human's say-so. It is
+// the same continuation the server starts by itself after a restart, minus the
+// attempt cap: someone is watching, and they can stop asking.
+func (a *Actor) Continue(ctx context.Context) (string, error) {
+	v, err := a.call(ctx, command{kind: cmdContinue})
+	if err != nil {
+		return "", err
+	}
+	return v.(string), nil
+}
+
 func (a *Actor) Emit(ctx context.Context, em proto.Emission) error {
 	_, err := a.call(ctx, command{kind: "emit", emission: &em})
 	return err
@@ -469,6 +493,23 @@ func (a *Actor) run() {
 func (a *Actor) handle(c command) (stop bool) {
 	ctx := context.Background()
 
+	// Continuing is a prompt the server writes, so it is turned into one here
+	// where the projection can say which turn is being continued.
+	if c.kind == cmdContinue {
+		last := a.lastTurn()
+		if last == nil || !last.Done || last.StopReason != proto.StopError {
+			c.reply <- cmdResult{err: ErrNothingToContinue}
+			return false
+		}
+		attempt := 1
+		if last.Recovery != nil {
+			attempt = last.Recovery.Attempt + 1
+		}
+		c.kind = cmdPrompt
+		c.prompt = recoveryPrompt
+		c.recovery = &proto.TurnRecovery{ResumeOf: last.ID, Attempt: attempt}
+	}
+
 	switch c.kind {
 	case "state":
 		c.reply <- cmdResult{value: a.state.Clone()}
@@ -515,9 +556,13 @@ func (a *Actor) handle(c command) (stop bool) {
 		}
 		turnID := uuid.NewString()
 		a.turnActive = turnID
-		a.append(proto.Emit(proto.TurnStarted, proto.TurnStartedPayload{TurnID: turnID, Prompt: c.prompt}))
+		a.append(proto.Emit(proto.TurnStarted, proto.TurnStartedPayload{TurnID: turnID, Prompt: c.prompt, Recovery: c.recovery}))
 		_ = a.store.SetPhase(ctx, a.ID, "turn")
-		_ = a.store.SetTitle(ctx, a.ID, truncate(c.prompt, 60))
+		// A recovery prompt is the server talking to itself; naming a session
+		// after it would bury what the human actually asked for.
+		if c.recovery == nil {
+			_ = a.store.SetTitle(ctx, a.ID, truncate(c.prompt, 60))
+		}
 
 		if err := a.sess.Prompt(ctx, adapter.PromptInput{TurnID: turnID, Text: c.prompt}); err != nil {
 			a.turnActive = ""
@@ -610,8 +655,15 @@ func (a *Actor) handle(c command) (stop bool) {
 func (a *Actor) shutdown(hard bool) {
 	ctx := context.Background()
 	phase := "idle"
-	if hard || a.state.Closed {
+	switch {
+	case hard || a.state.Closed:
 		phase = "closed"
+	case a.turnActive != "":
+		// Disposed mid-turn. The row keeps saying "turn" so the next start can
+		// find this session and finish what it was doing; recording idle here
+		// would erase the only cheap evidence that work was in flight. A kill
+		// -9 leaves the same value behind, so both deaths look alike.
+		phase = "turn"
 	}
 	_ = a.store.SetPhase(ctx, a.ID, phase)
 

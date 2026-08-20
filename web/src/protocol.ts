@@ -51,12 +51,20 @@ export interface Item {
   content?: ToolContent[];
 }
 
+export interface TurnRecovery {
+  resumeOf: string;
+  attempt: number;
+}
+
 export interface Turn {
   id: string;
   prompt: string;
   stopReason?: StopReason;
   error?: string;
   done: boolean;
+  // Present only on a turn the server started itself, to continue work a
+  // restart interrupted.
+  recovery?: TurnRecovery;
 }
 
 export interface PermissionOption {
