@@ -70,8 +70,9 @@ func NewManager(st *store.Store, logf func(string, ...any), ads ...adapter.Adapt
 // interprets nothing.
 type Harness struct {
 	adapter.HarnessMeta
-	Models       []adapter.ModelMeta  `json:"models"`
-	Availability adapter.Availability `json:"availability"`
+	Models          []adapter.ModelMeta          `json:"models"`
+	PermissionModes []adapter.PermissionModeMeta `json:"permissionModes"`
+	Availability    adapter.Availability         `json:"availability"`
 }
 
 // Harnesses lists every registered harness, available or not. An unavailable
@@ -82,9 +83,10 @@ func (m *Manager) Harnesses(ctx context.Context) []Harness {
 	for _, id := range m.order {
 		ad := m.adapters[id]
 		out = append(out, Harness{
-			HarnessMeta:  ad.Meta(),
-			Models:       ad.Models(),
-			Availability: m.availability(ctx, ad),
+			HarnessMeta:     ad.Meta(),
+			Models:          ad.Models(),
+			PermissionModes: ad.PermissionModes(),
+			Availability:    m.availability(ctx, ad),
 		})
 	}
 	return out

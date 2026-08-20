@@ -114,6 +114,7 @@ const (
 	cmdAskElicit     = "ask_elicitation"
 	cmdClose         = "close"
 	cmdActivate      = "activate"
+	cmdSetMode       = "set_mode"
 	cmdHarnessEvent  = "harness_event"
 	cmdHarnessExit   = "harness_exit"
 	cmdContinue      = "continue"
@@ -413,6 +414,13 @@ func (a *Actor) Activate(ctx context.Context, cwd, model, mode, effort string) e
 	return err
 }
 
+// SetMode switches the harness's permission mode mid-session and records the
+// change as a session.config_changed event, so every presenter sees it.
+func (a *Actor) SetMode(ctx context.Context, mode string) error {
+	_, err := a.call(ctx, command{kind: cmdSetMode, mode: mode})
+	return err
+}
+
 // Cancel interrupts the running turn. It is a command on the inbox, never a
 // context cancellation: losing every client must not interrupt a turn.
 func (a *Actor) Cancel(ctx context.Context) error {
@@ -539,6 +547,29 @@ func (a *Actor) handle(c command) (stop bool) {
 		}
 		a.Cwd, a.sess = c.prompt, sess
 		a.pump(sess)
+		c.reply <- cmdResult{}
+
+	case cmdSetMode:
+		if a.state.Closed {
+			c.reply <- cmdResult{err: ErrClosed}
+			return false
+		}
+		if a.sess == nil {
+			c.reply <- cmdResult{err: ErrNotReady}
+			return false
+		}
+		switcher, ok := a.sess.(adapter.ModeSwitcher)
+		if !ok {
+			c.reply <- cmdResult{err: errors.New("this harness cannot change permission mode mid-session")}
+			return false
+		}
+		if err := switcher.SetMode(ctx, c.mode); err != nil {
+			c.reply <- cmdResult{err: err}
+			return false
+		}
+		// Durable and fanned out, so the change lands in the log and every
+		// connected presenter follows — same requirement as permission.resolved.
+		a.append(proto.Emit(proto.SessionConfigChanged, proto.SessionConfigChangedPayload{Mode: c.mode}))
 		c.reply <- cmdResult{}
 
 	case cmdPrompt:

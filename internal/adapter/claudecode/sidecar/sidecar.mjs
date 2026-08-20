@@ -8,6 +8,7 @@
 // Wire format: JSON-RPC 2.0, one object per line, over stdin/stdout.
 //
 //   host -> here (notifications):  prompt, interrupt, setModel
+//   host -> here (request):        setPermissionMode -> {} | error
 //   here -> host (notifications):  message, fatal
 //   here -> host (request):        permission  -> {behavior, updatedInput?, message?}
 
@@ -120,6 +121,9 @@ const session = query({
     canUseTool,
     ...(config.model ? { model: config.model } : {}),
     ...(config.permissionMode ? { permissionMode: config.permissionMode } : {}),
+    // The SDK's deliberate second opt-in for bypassPermissions; the host sets
+    // it only for that mode, after the human confirmed in the UI.
+    ...(config.allowDangerouslySkipPermissions ? { allowDangerouslySkipPermissions: true } : {}),
     ...(config.effort ? { effort: config.effort } : {}),
     // Mutually exclusive by SDK contract: sessionId names a new conversation,
     // resume continues an existing one.
@@ -165,6 +169,18 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       break;
     case "setModel":
       session.setModel(frame.params.model || undefined).catch(() => {});
+      break;
+    case "setPermissionMode":
+      // A request, not a notification: a refused mode (managed settings can
+      // disable bypass and auto) must reach the human as an error, not vanish.
+      session
+        .setPermissionMode(frame.params.mode)
+        .then(() => {
+          if (frame.id !== undefined) respond(frame.id, {});
+        })
+        .catch((e) => {
+          if (frame.id !== undefined) respondError(frame.id, e?.message ?? String(e));
+        });
       break;
     default:
       if (frame.id !== undefined) respondError(frame.id, `unknown method: ${frame.method}`);

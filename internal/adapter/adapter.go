@@ -42,6 +42,10 @@ type Adapter interface {
 	ID() string
 	Meta() HarnessMeta
 	Models() []ModelMeta
+	// PermissionModes returns the permission presets this harness offers, most
+	// permissive last. The id is opaque to the server and the UI; only the
+	// adapter interprets it.
+	PermissionModes() []PermissionModeMeta
 	// Probe reports whether this harness can start right now. It must be
 	// cheap, must not mutate anything, and must never block for long: it runs
 	// at startup and whenever a UI asks to re-check.
@@ -65,6 +69,22 @@ type HarnessMeta struct {
 type ModelMeta struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
+}
+
+// PermissionModeMeta is one permission preset a harness offers. Like
+// ModelMeta, it travels from the adapter to the UI as opaque data: the server
+// never interprets the id, and a harness with a different permission shape
+// (one enum, two axes, whatever) maps its own ids in its own adapter.
+type PermissionModeMeta struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+	// Danger marks a mode a UI should render with a warning treatment and
+	// confirm before entering.
+	Danger bool `json:"danger,omitempty"`
+	// Default marks the mode selected when the user has expressed no
+	// preference. It matches what an empty CreateOptions.Mode does.
+	Default bool `json:"default,omitempty"`
 }
 
 // Availability states.
@@ -111,6 +131,14 @@ type Session interface {
 	// Events is closed when the harness is disposed.
 	Events() <-chan proto.Emission
 	Close() error
+}
+
+// ModeSwitcher is implemented by sessions whose harness can change permission
+// mode mid-conversation. The mode is one of the adapter's own
+// PermissionModes ids. A harness that cannot switch simply does not implement
+// this, and the host reports that legibly instead of silently ignoring it.
+type ModeSwitcher interface {
+	SetMode(ctx context.Context, mode string) error
 }
 
 // PermissionRequest is what an adapter asks a human, via the host.

@@ -15,7 +15,15 @@ import { HarnessBadge } from "./components/HarnessBadge";
 import { IconButton } from "./components/IconButton";
 import { StatusDot } from "./components/StatusDot";
 import { Button } from "./components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./components/ui/tooltip";
+import { cn } from "./lib/utils";
 import { PanelLeftIcon, PlusIcon, SettingsIcon } from "lucide-react";
 import { toast } from "sonner";
 
@@ -190,6 +198,39 @@ export function App() {
   }, []);
 
   const meta = useMemo(() => sessions.find((s) => s.id === activeId), [sessions, activeId]);
+
+  // The permission modes for the attached session's harness. Everything the UI
+  // knows about them came from the adapter via the server; ids stay opaque.
+  const modeOptions = useMemo(
+    () => harnesses.find((h) => h.id === state?.harness)?.permissionModes ?? [],
+    [harnesses, state?.harness],
+  );
+  // An empty recorded mode means the harness default; render it as such.
+  const currentModeId =
+    (modeOptions.some((m) => m.id === state?.mode) ? state?.mode : undefined) ??
+    modeOptions.find((m) => m.default)?.id ??
+    modeOptions[0]?.id ??
+    "";
+  const currentMode = modeOptions.find((m) => m.id === currentModeId);
+
+  const switchMode = useCallback(
+    (modeId: string) => {
+      if (!activeId) return;
+      const m = modeOptions.find((x) => x.id === modeId);
+      if (
+        m?.danger &&
+        !window.confirm(
+          `Switch this session to "${m.label}"?\n\n${m.description ?? ""}\n\nThe agent will act without asking you first.`,
+        )
+      ) {
+        return;
+      }
+      clientRef.current?.command("set_mode", { sessionId: activeId, mode: modeId }).catch((e) => {
+        toast.error("Could not switch permission mode", { description: e.message });
+      });
+    },
+    [activeId, modeOptions],
+  );
   const accentOf = useCallback(
     (id: string) => harnesses.find((h) => h.id === id)?.accent,
     [harnesses],
@@ -249,6 +290,34 @@ export function App() {
                   {state.model && ` · ${state.model}`}
                 </p>
               </div>
+
+              {modeOptions.length > 0 && !state.closed && (
+                <Select value={currentModeId} onValueChange={switchMode}>
+                  <SelectTrigger
+                    aria-label="Permission mode"
+                    className={cn(
+                      "h-8 w-auto shrink-0 gap-1 px-2 text-[11px]",
+                      // A danger mode stays visibly marked for as long as it is
+                      // active, not just at the moment it was chosen.
+                      currentMode?.danger &&
+                        "border-destructive text-destructive [&_svg]:text-destructive",
+                    )}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {modeOptions.map((m) => (
+                      <SelectItem
+                        key={m.id}
+                        value={m.id}
+                        className={cn(m.danger && "text-destructive")}
+                      >
+                        {m.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
 
               {state.usage.output > 0 && (
                 <span className="text-muted-foreground hidden font-mono text-[10px] sm:block">
