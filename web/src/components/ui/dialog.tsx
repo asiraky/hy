@@ -47,21 +47,42 @@ function DialogOverlay({
   )
 }
 
+// A centred card is a pointer idiom: it assumes a window to float inside and
+// room around the edges. A phone has neither, so a dialog that is really a
+// task — new session, project settings — takes the whole screen there and is
+// a card again from `md` up. Rows are header / scrolling body / footer, so
+// the body scrolls under a pinned footer rather than the page scrolling away
+// from its own primary action.
+const fullscreenMobile = [
+  "max-md:inset-0 max-md:h-[100dvh] max-md:max-h-none max-md:w-screen max-md:max-w-none",
+  "max-md:translate-x-0 max-md:translate-y-0 max-md:rounded-none max-md:border-0",
+  // The close X follows the header's padding down past the notch.
+  "max-md:[&>[data-slot=dialog-close]]:top-[calc(0.5rem+env(safe-area-inset-top))]",
+  // Zooming a full-bleed surface reads as a glitch; it slides up instead.
+  "max-md:data-[state=open]:zoom-in-100 max-md:data-[state=closed]:zoom-out-100",
+  "max-md:data-[state=open]:slide-in-from-bottom-4",
+].join(" ")
+
 function DialogContent({
   className,
   children,
   showCloseButton = true,
+  fullscreenOnMobile = false,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
+  /** Below `md`, fill the screen instead of floating as a card. */
+  fullscreenOnMobile?: boolean
 }) {
   return (
     <DialogPortal data-slot="dialog-portal">
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
+        data-fullscreen-mobile={fullscreenOnMobile ? "" : undefined}
         className={cn(
           "fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] grid-cols-[minmax(0,1fr)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border bg-background p-6 shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
+          fullscreenOnMobile && fullscreenMobile,
           className
         )}
         {...props}
@@ -70,7 +91,8 @@ function DialogContent({
         {showCloseButton && (
           <DialogPrimitive.Close
             data-slot="dialog-close"
-            className="absolute top-4 right-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+            // 44px on a phone so it is a real target, not a 16px glyph.
+            className="absolute top-1.5 right-1.5 flex size-11 items-center justify-center rounded-md opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none md:top-2 md:right-2 md:size-8 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
           >
             <XIcon />
             <span className="sr-only">Close</span>

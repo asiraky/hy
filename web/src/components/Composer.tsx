@@ -167,7 +167,7 @@ export function Composer({
                   variant="ghost"
                   disabled={disabled}
                   aria-label="Model"
-                  className="text-muted-foreground hover:text-foreground h-8 gap-1 px-2 text-[12px] font-normal"
+                  className="text-muted-foreground hover:text-foreground h-11 gap-1 px-2 text-[12px] font-normal md:h-8"
                 >
                   <span className="text-foreground/80">{modelLabel || "Default"}</span>
                   {effort && <span className="capitalize">{effort}</span>}

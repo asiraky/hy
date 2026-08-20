@@ -74,7 +74,7 @@ function BranchFormatField({ value, onChange }: { value: string; onChange: (v: s
         onChange={(e) => onChange(e.target.value)}
         spellCheck={false}
         rows={4}
-        className="scroll-thin font-mono text-[11px]"
+        className="scroll-thin font-mono md:text-[11px]"
       />
       <p
         className={cn(
@@ -130,7 +130,7 @@ function HookField({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={`scripts/hy-${label.toLowerCase()}`}
-          className="min-w-0 flex-1 font-mono text-[12px]"
+          className="min-w-0 flex-1 font-mono md:text-[12px]"
         />
         <Button
           variant="outline"
@@ -243,8 +243,11 @@ export function ProjectSettings({
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       {/* Header and footer stay put; only the form between them scrolls. */}
-      <DialogContent className="flex max-h-[min(90dvh,44rem)] flex-col gap-0 p-0 sm:max-w-lg">
-        <DialogHeader className="border-b px-6 py-4">
+      <DialogContent
+        fullscreenOnMobile
+        className="flex max-h-[min(90dvh,44rem)] flex-col gap-0 p-0 sm:max-w-lg"
+      >
+        <DialogHeader className="border-b px-6 py-4 pt-[calc(1rem+env(safe-area-inset-top))] pr-16 text-left md:pt-4 md:pr-6">
           <DialogTitle>{project ? `${cfg.name} settings` : "Add project"}</DialogTitle>
           <DialogDescription>
             {project
@@ -261,7 +264,7 @@ export function ProjectSettings({
                 id="project-root"
                 value={root}
                 onChange={(e) => setRoot(e.target.value)}
-                className="font-mono text-[12px]"
+                className="font-mono md:text-[12px]"
               />
             </div>
           ) : (
@@ -413,7 +416,7 @@ export function ProjectSettings({
                     value={cfg.defaults.baseBranch ?? ""}
                     onChange={(e) => defaults({ baseBranch: e.target.value })}
                     placeholder="main"
-                    className="font-mono text-[12px]"
+                    className="font-mono md:text-[12px]"
                   />
                 </div>
                 <HookField
@@ -448,7 +451,7 @@ export function ProjectSettings({
           )}
         </div>
 
-        <DialogFooter className="border-t px-6 py-4">
+        <DialogFooter className="border-t px-6 py-4 pb-[calc(1rem+env(safe-area-inset-bottom))] md:pb-4">
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>

@@ -185,16 +185,25 @@ export function NewSession({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="scroll-thin max-h-[85dvh] gap-0 overflow-y-auto sm:max-w-md">
-        <DialogHeader>
+      {/* A phone gets the whole screen: this is a task, not an aside, and a
+          centred card on a 390px viewport is a card with no margins anyway.
+          Header and footer stay put; only the form between them scrolls, so
+          "Start" is never scrolled off the bottom. */}
+      <DialogContent
+        fullscreenOnMobile
+        className="flex max-h-[min(85dvh,44rem)] flex-col gap-0 p-0 sm:max-w-md"
+      >
+        <DialogHeader className="px-6 py-4 pt-[calc(1rem+env(safe-area-inset-top))] pr-16 text-left md:pt-4 md:pr-6">
           <DialogTitle>New session</DialogTitle>
           <DialogDescription>
             Pick a project. Hy prepares its workspace before starting the agent.
           </DialogDescription>
         </DialogHeader>
 
+        <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-6 pt-1 pb-5">
+
         {projects.length === 0 ? (
-          <div className="mt-5 rounded-xl border border-dashed p-6 text-center">
+          <div className="rounded-xl border border-dashed p-6 text-center">
             <p className="text-muted-foreground text-[13px]">
               Add a project once, then create every session from here.
             </p>
@@ -204,7 +213,7 @@ export function NewSession({
             </Button>
           </div>
         ) : (
-          <div className="mt-5 space-y-4">
+          <div className="space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="new-session-project">Project</Label>
               <div className="flex gap-2">
@@ -233,7 +242,6 @@ export function NewSession({
                   size="icon"
                   aria-label="Project settings"
                   title="Project settings"
-                  className="size-11 md:size-8"
                   onClick={() => project && onSettings(project)}
                 >
                   <SettingsIcon />
@@ -243,7 +251,6 @@ export function NewSession({
                   size="icon"
                   aria-label="Add project"
                   title="Add project"
-                  className="size-11 md:size-8"
                   onClick={onAddProject}
                 >
                   <PlusIcon />
@@ -409,13 +416,14 @@ export function NewSession({
           </div>
         )}
 
-        {error && (
-          <Alert variant="destructive" className="mt-4">
-            <AlertDescription className="font-mono text-[11px]">{error}</AlertDescription>
-          </Alert>
-        )}
+          {error && (
+            <Alert variant="destructive" className="mt-4">
+              <AlertDescription className="font-mono text-[11px]">{error}</AlertDescription>
+            </Alert>
+          )}
+        </div>
 
-        <DialogFooter className="mt-6">
+        <DialogFooter className="border-t px-6 py-4 pb-[calc(1rem+env(safe-area-inset-bottom))] md:pb-4">
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>

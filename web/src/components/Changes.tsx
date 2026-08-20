@@ -228,7 +228,6 @@ function ChangesBody({ open, onClose, expanded: panelExpanded, onToggleExpanded,
       <div
         className={cn(
           "flex items-center gap-1.5 border-b px-2 pt-[calc(0.5rem+env(safe-area-inset-top))] pb-2",
-          inSheet && "pr-12",
         )}
       >
         <FileDiffIcon className="text-muted-foreground ml-1 size-4 shrink-0" />
@@ -250,11 +249,12 @@ function ChangesBody({ open, onClose, expanded: panelExpanded, onToggleExpanded,
             {panelExpanded ? <Minimize2Icon /> : <Maximize2Icon />}
           </IconButton>
         )}
-        {!inSheet && (
-          <IconButton label="Close changes" onClick={onClose}>
-            <XIcon />
-          </IconButton>
-        )}
+        {/* The sheet's own X used to sit here instead, a different size and
+            off the row's baseline. This is the same control at the same size
+            as the two beside it, docked or not. */}
+        <IconButton label="Close changes" onClick={onClose}>
+          <XIcon />
+        </IconButton>
       </div>
 
       <div className="flex items-center gap-2 border-b px-3 py-2">
@@ -359,7 +359,16 @@ export function Changes(props: ChangesProps) {
   if (!isDesktop) {
     return (
       <Sheet open onOpenChange={(v) => !v && props.onClose()}>
-        <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-none">
+        <SheetContent
+          side="right"
+          className="w-full gap-0 p-0 sm:max-w-none"
+          // The panel header carries its own close button, aligned with the
+          // rest of the row.
+          showCloseButton={false}
+          // Radix otherwise focuses the first control inside, which on a
+          // touch screen pops its tooltip open and leaves it there.
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
           <SheetTitle className="sr-only">Changed files</SheetTitle>
           <ChangesBody {...props} inSheet />
         </SheetContent>

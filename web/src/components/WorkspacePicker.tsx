@@ -214,13 +214,13 @@ export function WorkspacePicker({
         onMouseEnter={() => setActive(i)}
         onClick={() => choose(r)}
         className={cn(
-          "flex w-full flex-col gap-0.5 px-3 py-1.5 text-left text-[12px]",
+          "flex min-h-11 w-full flex-col justify-center gap-0.5 px-3 py-1.5 text-left text-[13px] md:min-h-0",
           i === active && !busy && "bg-accent text-accent-foreground",
           busy && "opacity-40",
         )}
       >
         <span className="flex w-full items-baseline gap-2">
-          <span className="min-w-0 truncate font-mono">
+          <span className="min-w-0 truncate">
             {r.kind === "existing" ? label(r.workspace) : r.branch}
           </span>
           {r.kind === "existing" && r.workspace.isRoot && (
@@ -276,7 +276,7 @@ export function WorkspacePicker({
               // 16px on touch screens: iOS Safari auto-zooms any focused field
               // smaller than that, which distorts the page and leaves the
               // portaled list misaligned with where taps actually land.
-              className="w-full pr-8 font-mono text-[16px] md:text-[12px]"
+              className="w-full pr-8 text-[16px] md:text-[13px]"
             />
             <ChevronDownIcon
               aria-hidden

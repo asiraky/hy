@@ -198,28 +198,26 @@ function SessionList({
   );
 }
 
-/** The panel itself, identical whether it is docked or in the mobile sheet. */
-function SidebarPanel({ inSheet, ...props }: SidebarProps & { inSheet?: boolean }) {
+/**
+ * The panel itself, identical whether it is docked or in the mobile sheet.
+ *
+ * `showCollapse` is the one difference, and it is not a platform difference:
+ * the collapse control is only offered when there is something behind the
+ * panel to go back to. On a phone with no session selected there is nothing,
+ * so the row is just the title and the one action.
+ */
+function SidebarPanel({ showCollapse, ...props }: SidebarProps & { showCollapse: boolean }) {
   return (
     <div className="bg-sidebar text-sidebar-foreground flex h-full min-h-0 flex-col">
       {/* One quiet header row: what the panel is, and the one action it
           offers. Branding and the status dot earn no space up here — the dot
           lives in the footer, still one click from the access panel. */}
-      <div
-        className={cn(
-          "flex items-center gap-2 px-3 pt-[calc(0.5rem+env(safe-area-inset-top))] pb-1.5",
-          // The sheet puts its own close button in this corner, so the new-
-          // session button moves out from under it rather than behind it.
-          inSheet && "pr-12",
-        )}
-      >
+      <div className="flex items-center gap-2 px-3 pt-[calc(0.5rem+env(safe-area-inset-top))] pb-1.5">
         <span className="flex-1 px-1.5 font-mono text-sm font-semibold tracking-tight">hy</span>
         <IconButton label="New session" onClick={props.onNew} className="text-muted-foreground hover:text-foreground">
           <PlusIcon />
         </IconButton>
-        {/* The sheet already has a close X in this corner; only the docked
-            panel needs its own collapse control. */}
-        {!inSheet && (
+        {showCollapse && (
           <IconButton
             label="Hide sessions"
             onClick={() => props.onOpenChange(false)}
@@ -246,7 +244,9 @@ function SidebarPanel({ inSheet, ...props }: SidebarProps & { inSheet?: boolean 
               type="button"
               onClick={props.onShowAccess}
               aria-label="How to reach this server"
-              className="focus-visible:ring-ring flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full outline-none focus-visible:ring-2"
+              // The dot stays a dot; the target around it is thumb-sized on a
+              // phone and shrinks to the dot again for a pointer.
+              className="focus-visible:ring-ring flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full outline-none focus-visible:ring-2 md:size-6"
             >
               <StatusDot status={props.status} />
             </button>
@@ -271,10 +271,22 @@ export function Sidebar(props: SidebarProps) {
       <Sheet open={props.open} onOpenChange={props.onOpenChange}>
         <SheetContent
           side="left"
-          className="w-[min(20rem,85vw)] gap-0 p-0 pl-[env(safe-area-inset-left)]"
+          // Full-bleed on a phone. A 15% sliver of dimmed transcript is not
+          // context, it is a target for a mis-tap, and with no session
+          // selected there is nothing behind the panel at all.
+          className="w-screen max-w-none gap-0 border-r-0 p-0 pl-[env(safe-area-inset-left)]"
+          // The sheet's own X would be a second close control in the same
+          // corner as the collapse button, misaligned with it and present
+          // even when there is nothing to close back to. One control, and it
+          // lives in the panel header where the docked sidebar puts it.
+          showCloseButton={false}
+          // Radix otherwise focuses the first control inside, which on a
+          // touch screen pops its tooltip open and leaves it there.
+          onOpenAutoFocus={(e) => e.preventDefault()}
         >
           <SheetTitle className="sr-only">Sessions</SheetTitle>
-          <SidebarPanel {...props} inSheet />
+          {/* Nothing behind the panel means nothing to collapse to. */}
+          <SidebarPanel {...props} showCollapse={props.activeId !== null} />
         </SheetContent>
       </Sheet>
     );
@@ -335,7 +347,7 @@ function DockedSidebar(props: SidebarProps) {
         !resizing && "transition-[margin] duration-200 motion-reduce:transition-none",
       )}
     >
-      <SidebarPanel {...props} />
+      <SidebarPanel {...props} showCollapse />
       <div
         role="separator"
         aria-orientation="vertical"
