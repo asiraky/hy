@@ -231,7 +231,6 @@ export function App() {
     modeOptions.find((m) => m.default)?.id ??
     modeOptions[0]?.id ??
     "";
-  const currentMode = modeOptions.find((m) => m.id === currentModeId);
 
   const switchMode = useCallback(
     (modeId: string) => {
@@ -323,25 +322,18 @@ export function App() {
 
               {modeOptions.length > 0 && !state.closed && (
                 <Select value={currentModeId} onValueChange={switchMode}>
+                  {/* Every mode gets the same chip: one that changed shape or
+                      colour by mode would jitter the header and shout at the
+                      user about a choice they already made deliberately. */}
                   <SelectTrigger
                     aria-label="Permission mode"
-                    className={cn(
-                      "h-8 w-auto shrink-0 gap-1 px-2 text-[11px]",
-                      // A danger mode stays visibly marked for as long as it is
-                      // active, not just at the moment it was chosen.
-                      currentMode?.danger &&
-                        "border-destructive text-destructive [&_svg]:text-destructive",
-                    )}
+                    className="h-8 w-auto shrink-0 gap-1 px-2 text-[11px]"
                   >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     {modeOptions.map((m) => (
-                      <SelectItem
-                        key={m.id}
-                        value={m.id}
-                        className={cn(m.danger && "text-destructive")}
-                      >
+                      <SelectItem key={m.id} value={m.id}>
                         {m.label}
                       </SelectItem>
                     ))}

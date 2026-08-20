@@ -292,34 +292,23 @@ export function NewSession({
             {modes.length > 0 && (
               <div className="space-y-1.5">
                 <Label htmlFor="new-session-mode">Permissions</Label>
+                {/* Modes all render alike: the description below says what each
+                    one does, and the confirm on create is where a danger mode
+                    earns its extra step. Colouring the control adds nothing. */}
                 <Select value={displayModeId} onValueChange={setChosenMode}>
-                  <SelectTrigger
-                    id="new-session-mode"
-                    className={cn("w-full", modeMeta?.danger && "text-destructive")}
-                  >
+                  <SelectTrigger id="new-session-mode" className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     {modes.map((m) => (
-                      <SelectItem
-                        key={m.id}
-                        value={m.id}
-                        className={cn(m.danger && "text-destructive")}
-                      >
+                      <SelectItem key={m.id} value={m.id}>
                         {m.label}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
                 {modeMeta?.description && (
-                  <p
-                    className={cn(
-                      "text-[11px]",
-                      modeMeta.danger ? "text-destructive" : "text-muted-foreground",
-                    )}
-                  >
-                    {modeMeta.description}
-                  </p>
+                  <p className="text-muted-foreground text-[11px]">{modeMeta.description}</p>
                 )}
               </div>
             )}
