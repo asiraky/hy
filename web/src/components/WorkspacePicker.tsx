@@ -273,7 +273,10 @@ export function WorkspacePicker({
               aria-controls={listId}
               aria-autocomplete="list"
               aria-activedescendant={open && rows[active] ? `${listId}-${active}` : undefined}
-              className="w-full pr-8 font-mono text-[12px]"
+              // 16px on touch screens: iOS Safari auto-zooms any focused field
+              // smaller than that, which distorts the page and leaves the
+              // portaled list misaligned with where taps actually land.
+              className="w-full pr-8 font-mono text-[16px] md:text-[12px]"
             />
             <ChevronDownIcon
               aria-hidden
@@ -297,7 +300,15 @@ export function WorkspacePicker({
           onInteractOutside={(e) => {
             if (box.current?.contains(e.target as Node)) e.preventDefault();
           }}
-          className="scroll-thin max-h-[min(16rem,var(--radix-popover-content-available-height))] w-[var(--radix-popover-trigger-width)] overflow-y-auto p-0 py-1"
+          // The dialog's scroll lock (react-remove-scroll) preventDefaults any
+          // wheel or touchmove that bubbles to document from outside the dialog
+          // subtree — which this portaled list is. Its listeners are
+          // bubble-phase, so stopping propagation here lets the list scroll
+          // natively; overscroll containment keeps the gesture from chaining
+          // to the page behind.
+          onWheel={(e) => e.stopPropagation()}
+          onTouchMove={(e) => e.stopPropagation()}
+          className="scroll-thin max-h-[min(16rem,var(--radix-popover-content-available-height))] w-[var(--radix-popover-trigger-width)] touch-pan-y overscroll-contain overflow-y-auto p-0 py-1"
         >
           {loading && (
             <p className="text-muted-foreground px-3 py-2 text-[12px]">Loading worktrees…</p>
