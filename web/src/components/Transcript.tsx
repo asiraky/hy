@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
 
+import { Markdown } from "~/components/Markdown";
 import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
 import { cn } from "~/lib/utils";
@@ -213,21 +214,23 @@ function Message({ item, streaming, recovered }: { item: Item; streaming: boolea
 
   if (item.contentKind === "thought") {
     return (
-      <div className="fade-in text-thought border-l-2 pl-3 text-[13px] leading-relaxed break-words whitespace-pre-wrap italic">
-        {text}
-      </div>
+      <Markdown
+        text={text}
+        className="fade-in text-thought border-l-2 pl-3 text-[13px] leading-relaxed break-words italic"
+      />
     );
   }
 
   return (
-    <div
+    <Markdown
+      text={text}
       className={cn(
-        "fade-in text-[14px] leading-relaxed break-words whitespace-pre-wrap",
-        streaming && "caret",
+        "fade-in text-[14px] leading-relaxed break-words",
+        // The caret belongs at the end of the prose, not below it, so it hangs
+        // off the last block rather than the message container.
+        streaming && "caret-block",
       )}
-    >
-      {text}
-    </div>
+    />
   );
 }
 

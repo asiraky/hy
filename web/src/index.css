@@ -199,8 +199,11 @@
     scrollbar-color: color-mix(in oklch, var(--muted-foreground) 45%, transparent) transparent;
   }
 
-  /* The block cursor trailing streaming text. */
-  .caret::after {
+  /* The block cursor trailing streaming text. Markdown output is a stack of
+     block elements, so there the caret hangs off the last of them — otherwise
+     it would sit on a line of its own below the prose. */
+  .caret::after,
+  .caret-block > :last-child::after {
     content: "";
     display: inline-block;
     width: 0.5ch;
