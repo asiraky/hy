@@ -51,6 +51,41 @@ export interface Item {
   content?: ToolContent[];
 }
 
+/** One file the session changed, aggregated across the whole session. */
+export interface ChangedFile {
+  path: string;
+  /** The name the file had at the base, for a rename. */
+  oldPath?: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "copied";
+  additions: number;
+  deletions: number;
+  binary?: boolean;
+  untracked?: boolean;
+}
+
+/** The PR-style file list for a session's checkout, measured by Git itself. */
+export interface SessionChanges {
+  root: string;
+  branch?: string;
+  baseRef?: string;
+  base?: string;
+  files: ChangedFile[];
+  additions: number;
+  deletions: number;
+  truncated?: boolean;
+  /** Why the list is empty, when the reason is not "nothing changed". */
+  warning?: string;
+}
+
+export interface FileDiff {
+  path: string;
+  oldPath?: string;
+  status: string;
+  patch: string;
+  binary?: boolean;
+  truncated?: boolean;
+}
+
 export interface TurnRecovery {
   resumeOf: string;
   attempt: number;

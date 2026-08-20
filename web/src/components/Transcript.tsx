@@ -90,6 +90,98 @@ function ToolCard({ item }: { item: Item }) {
   );
 }
 
+// A tool call is loud but rarely interesting. Consecutive settled calls fold
+// into one summary row so the conversation is what you read; anything that
+// still needs a human — a failure, or a call still running — is left out of the
+// fold and rendered on its own.
+function isProminent(item: Item) {
+  return item.status === "failed" || item.status === "pending" || item.status === "in_progress";
+}
+
+type Row = { kind: "item"; item: Item } | { kind: "group"; id: string; items: Item[] };
+
+function groupRows(items: Item[]): Row[] {
+  const rows: Row[] = [];
+  for (const item of items) {
+    if (item.kind !== "tool" || isProminent(item)) {
+      rows.push({ kind: "item", item });
+      continue;
+    }
+    const last = rows[rows.length - 1];
+    if (last?.kind === "group") last.items.push(item);
+    else rows.push({ kind: "group", id: item.id, items: [item] });
+  }
+  return rows;
+}
+
+// One phrase per tool kind, in the order they read best in a summary. These
+// count calls, not files: one call can touch several paths and five calls can
+// touch one, so "Edited 3 files" would be a claim this cannot make. The Changes
+// panel is where the honest per-file count lives.
+const SUMMARY: { kind: string; one: string; many: (n: number) => string }[] = [
+  { kind: "read", one: "1 read", many: (n) => `${n} reads` },
+  { kind: "edit", one: "1 edit", many: (n) => `${n} edits` },
+  { kind: "delete", one: "1 delete", many: (n) => `${n} deletes` },
+  { kind: "move", one: "1 move", many: (n) => `${n} moves` },
+  { kind: "search", one: "1 search", many: (n) => `${n} searches` },
+  { kind: "execute", one: "1 command", many: (n) => `${n} commands` },
+  { kind: "fetch", one: "1 fetch", many: (n) => `${n} fetches` },
+  { kind: "think", one: "1 thought", many: (n) => `${n} thoughts` },
+  { kind: "other", one: "1 other call", many: (n) => `${n} other calls` },
+];
+
+function summarise(items: Item[]): string {
+  const counts = new Map<string, number>();
+  for (const it of items) {
+    const kind = it.toolKind && SUMMARY.some((s) => s.kind === it.toolKind) ? it.toolKind : "other";
+    counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  }
+  return SUMMARY.filter((s) => counts.has(s.kind))
+    .map((s) => {
+      const n = counts.get(s.kind)!;
+      return n === 1 ? s.one : s.many(n);
+    })
+    .join(" · ");
+}
+
+function ToolGroup({ items }: { items: Item[] }) {
+  const [open, setOpen] = useState(false);
+  const kinds = Array.from(new Set(items.map((i) => i.toolKind ?? "other")));
+
+  if (items.length === 1) return <ToolCard item={items[0]} />;
+
+  return (
+    <div className="fade-in">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="hover:bg-accent/40 focus-visible:ring-ring text-muted-foreground flex min-h-11 w-full items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-left transition-colors outline-none focus-visible:ring-2 md:min-h-0"
+      >
+        <span className="flex shrink-0 items-center gap-1">
+          {kinds.slice(0, 4).map((k) => {
+            const Icon = TOOL_ICON[k] ?? CircleIcon;
+            return <Icon key={k} className="size-3.5" />;
+          })}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[12px]">{summarise(items)}</span>
+        <span className="flex shrink-0 items-center gap-1 font-mono text-[10px]">
+          {open ? "hide" : `${items.length} calls`}
+          <ChevronDownIcon className={cn("size-3 transition-transform", open && "rotate-180")} />
+        </span>
+      </button>
+
+      {open && (
+        <div className="mt-2 space-y-2 border-l pl-3">
+          {items.map((item) => (
+            <ToolCard key={item.id} item={item} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Message({ item, streaming, recovered }: { item: Item; streaming: boolean; recovered: boolean }) {
   // Paced reveal, so a harness that delivers a line at a time still reads as
   // continuous output. Inactive messages render whole.
@@ -346,13 +438,15 @@ export function Transcript({
 
   // Only the final agent block is still growing; everything above it is
   // settled and renders in full.
-  const lastAgentIndex = (() => {
+  const lastAgentId = useMemo(() => {
     for (let i = state.items.length - 1; i >= 0; i--) {
       const it = state.items[i];
-      if (it.kind === "message" && it.role === "agent") return i;
+      if (it.kind === "message" && it.role === "agent") return it.id;
     }
-    return -1;
-  })();
+    return undefined;
+  }, [state.items]);
+
+  const rows = useMemo(() => groupRows(state.items), [state.items]);
 
   // Only the newest turn can be continued, and only once nothing is running:
   // an error further back was already answered by whatever came after it.
@@ -384,20 +478,22 @@ export function Transcript({
           </div>
         )}
 
-        {state.items.map((item, i) =>
-          item.kind === "tool" ? (
-            <ToolCard key={item.id} item={item} />
+        {rows.map((row) =>
+          row.kind === "group" ? (
+            <ToolGroup key={row.id} items={row.items} />
+          ) : row.item.kind === "tool" ? (
+            <ToolCard key={row.item.id} item={row.item} />
           ) : (
             <Message
-              key={item.id}
-              item={item}
-              streaming={state.phase === "turn" && i === lastAgentIndex}
-              recovered={!!item.turnId && recoveredTurns.has(item.turnId)}
+              key={row.item.id}
+              item={row.item}
+              streaming={state.phase === "turn" && row.item.id === lastAgentId}
+              recovered={!!row.item.turnId && recoveredTurns.has(row.item.turnId)}
             />
           ),
         )}
 
-        {state.phase === "turn" && lastAgentIndex === -1 && (
+        {state.phase === "turn" && lastAgentId === undefined && (
           <div className="text-muted-foreground flex items-center gap-2 text-sm">
             <Spinner className="text-primary size-3.5" /> thinking…
           </div>

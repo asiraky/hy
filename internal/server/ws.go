@@ -424,6 +424,28 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 		issues, issuesErr := c.srv.mgr.ListIssues(ctx, a.ProjectID)
 		return map[string]any{"workspaces": spaces, "issues": issues, "issuesError": issuesErr}, nil
 
+	case "session_changes":
+		var a sessionArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		changes, err := c.srv.mgr.SessionChanges(ctx, a.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"changes": changes}, nil
+
+	case "session_file_diff":
+		var a fileDiffArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		diff, err := c.srv.mgr.SessionFileDiff(ctx, a.SessionID, a.Path)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"diff": diff}, nil
+
 	case "get_user_config":
 		cfg, err := userconfig.Load()
 		if err != nil {
