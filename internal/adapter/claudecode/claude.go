@@ -364,6 +364,28 @@ func (s *session) currentTurn() string {
 	return s.turnID
 }
 
+// ensureTurn returns the active turn id, opening a harness-initiated turn if
+// none is open. The SDK can resume work without being prompted — a background
+// task completing, an auto-continuation — and that work is a real turn: it
+// needs an id so its events can be grouped, and a turn.started so projections
+// know the session is no longer idle. A turn opened here has no prompt; that
+// is what marks it as the harness's own doing.
+func (s *session) ensureTurn() string {
+	s.mu.Lock()
+	if s.turnID != "" {
+		id := s.turnID
+		s.mu.Unlock()
+		return id
+	}
+	id := uuid.NewString()
+	s.turnID = id
+	s.sawResult = false
+	s.mu.Unlock()
+
+	s.emit(proto.Emit(proto.TurnStarted, proto.TurnStartedPayload{TurnID: id}))
+	return id
+}
+
 // handleRequest services the bridge's only inbound request: a permission
 // decision, which the host routes to a human and answers from any presenter.
 func (s *session) handleRequest(ctx context.Context, method string, params json.RawMessage) (any, error) {
@@ -472,7 +494,6 @@ func (s *session) handleStreamEvent(msg map[string]json.RawMessage) {
 	}
 	remarshal(msg, &wrapper)
 	ev := wrapper.Event
-	turn := s.currentTurn()
 
 	switch ev.Type {
 	case "message_start":
@@ -482,6 +503,10 @@ func (s *session) handleStreamEvent(msg map[string]json.RawMessage) {
 		s.mu.Unlock()
 
 	case "content_block_start":
+		// Output is starting. If no turn is open — the harness resumed work
+		// by itself, without a prompt — this opens one, so the events below
+		// never carry an empty turn id.
+		turn := s.ensureTurn()
 		s.mu.Lock()
 		b := &block{kind: ev.ContentBlock.Type}
 		switch ev.ContentBlock.Type {
@@ -510,6 +535,7 @@ func (s *session) handleStreamEvent(msg map[string]json.RawMessage) {
 		if b == nil {
 			return
 		}
+		turn := s.ensureTurn()
 		switch ev.Delta.Type {
 		case "text_delta":
 			s.emit(proto.Emit(proto.MessageChunk, proto.MessageChunkPayload{
@@ -615,6 +641,13 @@ func (s *session) handleResult(msg map[string]json.RawMessage) {
 	s.sawResult = true
 	s.turnID = ""
 	s.mu.Unlock()
+
+	// A result for a turn that was never started — no prompt, and no output
+	// that would have opened one — has nothing to finish. Emitting it anyway
+	// would put an unmatched turn.finished in the log.
+	if turn == "" {
+		return
+	}
 
 	s.emit(proto.Emit(proto.TurnFinished, proto.TurnFinishedPayload{TurnID: turn, StopReason: stop}))
 }

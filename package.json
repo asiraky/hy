@@ -26,7 +26,7 @@
     "start": "./hy",
     "test": "npm run test:go && npm run test:web",
     "test:go": "go test -race ./...",
-    "test:web": "./scripts/web tsc -b",
+    "test:web": "./scripts/web tsc -b && ./scripts/web vitest run",
     "clean": "rm -f hy && rm -rf cmd/hy/webdist/assets cmd/hy/webdist/index.html && touch cmd/hy/webdist/.gitkeep"
   },
   "devDependencies": {

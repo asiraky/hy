@@ -90,13 +90,17 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
         // names the session.
         title: s.title || (p.recovery ? "" : p.prompt?.slice(0, 60) || ""),
         turns: [...s.turns, { id: p.turnId, prompt: p.prompt, done: false, recovery: p.recovery }],
-        items: upsert(s, `prompt:${p.turnId}`, (it) => {
-          it.kind = "message";
-          it.role = "user";
-          it.contentKind = "text";
-          it.text = p.prompt;
-          it.turnId = p.turnId;
-        }),
+        // A harness-initiated turn has no prompt — nobody asked anything —
+        // so there is no prompt item to add.
+        items: p.prompt
+          ? upsert(s, `prompt:${p.turnId}`, (it) => {
+              it.kind = "message";
+              it.role = "user";
+              it.contentKind = "text";
+              it.text = p.prompt;
+              it.turnId = p.turnId;
+            })
+          : s.items,
       };
 
     case "turn.finished":
@@ -125,6 +129,10 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
     case "message.chunk":
       return {
         ...s,
+        // Streaming while idle means a turn is running that the log did not
+        // announce. Trusting the activity over the phase keeps a lifecycle
+        // desync from freezing the UI. Mirrors internal/projection/state.go.
+        phase: s.phase === "idle" ? "turn" : s.phase,
         items: upsert(s, p.blockId, (it) => {
           it.kind = "message";
           it.role = p.role;
@@ -137,6 +145,8 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
     case "tool_call.started":
       return {
         ...s,
+        // Same defence as message.chunk: a tool starting is a turn running.
+        phase: s.phase === "idle" ? "turn" : s.phase,
         items: upsert(s, p.toolCallId, (it) => {
           it.kind = "tool";
           it.turnId = p.turnId;

@@ -60,7 +60,10 @@ export function useSmoothText(text: string, active: boolean): string {
       const backlog = total - revealedRef.current;
 
       if (backlog <= 0) {
-        // Caught up. Keep the loop alive only while more text may arrive.
+        // Caught up. While inactive the loop stops here — but it must not
+        // stop *permanently*: text can still arrive after a block goes
+        // inactive (a lifecycle desync, or a block that mounts between
+        // turns), which is why the effect below re-runs on text growth.
         if (!activeRef.current) return;
         frame = requestAnimationFrame(tick);
         return;
@@ -87,7 +90,13 @@ export function useSmoothText(text: string, active: boolean): string {
 
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [active]);
+    // text.length is a dependency because the loop exits once it has caught
+    // up on an inactive block. A block that mounts inactive and then grows —
+    // its first chunk landed before the turn was announced — would otherwise
+    // freeze at that first chunk forever: `active` never changes, so nothing
+    // restarts the loop. Restarting on growth costs one cancel/schedule per
+    // chunk and nothing else.
+  }, [active, text.length]);
 
   const shown = Math.min(Math.floor(revealed), text.length);
   // Once the buffer is drained the full string is returned, so a settled
