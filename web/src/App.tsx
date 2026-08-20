@@ -15,6 +15,7 @@ import { Transcript } from "./components/Transcript";
 import { IconButton } from "./components/IconButton";
 import { ThemePreview } from "./components/ThemePreview";
 import { Button } from "./components/ui/button";
+import { Spinner } from "./components/ui/spinner";
 import {
   Select,
   SelectContent,
@@ -23,7 +24,7 @@ import {
   SelectValue,
 } from "./components/ui/select";
 import { cn } from "./lib/utils";
-import { FileDiffIcon, PanelLeftIcon, PlusIcon, SettingsIcon } from "lucide-react";
+import { CoffeeIcon, FileDiffIcon, MessagesSquareIcon, PanelLeftIcon, PlusIcon, SettingsIcon } from "lucide-react";
 import { toast } from "sonner";
 
 const LAST_SESSION = "hy.lastSession";
@@ -34,6 +35,11 @@ const LAST_SESSION = "hy.lastSession";
 const SHOW_MODE_SWITCHER = false;
 
 export function App() {
+  // The socket callbacks below outlive any single render, so they read the
+  // attached session from a ref rather than a captured closure. The ref is
+  // written after commit, never during render, so it can only ever hold a
+  // value the UI actually rendered.
+  const activeRef = useRef<string | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [harnesses, setHarnesses] = useState<HarnessMeta[]>([]);
@@ -42,10 +48,34 @@ export function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [state, setState] = useState<SessionState | null>(null);
   const isDesktop = useIsDesktop();
-  // Open is the desktop default; on a phone the drawer starts closed so the
-  // transcript is what you land on. Crossing the breakpoint resets it.
-  const [sidebarOpen, setSidebarOpen] = useState(isDesktop);
-  useEffect(() => setSidebarOpen(isDesktop), [isDesktop]);
+  // Whether the last-session key was set at boot. Read once, before anything
+  // can write it, because it decides what the very first frame shows. Storage
+  // can be denied outright (Safari with cookies blocked), and a throw here
+  // would take the whole mount with it.
+  const [hadLastSession] = useState(() => {
+    try {
+      return localStorage.getItem(LAST_SESSION) !== null;
+    } catch {
+      return false;
+    }
+  });
+  // True until the first session list lands, which is when we know whether
+  // the stored session still exists. Until then a phone must not flash the
+  // sidebar open and then shut it again a moment later.
+  const [sessionsLoaded, setSessionsLoaded] = useState(false);
+  const restoreAttempted = useRef(false);
+  // Open is the desktop default. On a phone the sidebar *is* the landing
+  // screen: with nothing selected there is nothing behind it to look at, so
+  // it starts open unless we are about to restore straight into a session.
+  const [sidebarOpen, setSidebarOpen] = useState(() => isDesktop || !hadLastSession);
+  // Crossing the breakpoint resets it — but only on an actual crossing. On
+  // mount this must leave the initial choice above alone.
+  const wasDesktop = useRef(isDesktop);
+  useEffect(() => {
+    if (wasDesktop.current === isDesktop) return;
+    wasDesktop.current = isDesktop;
+    setSidebarOpen(isDesktop || activeRef.current === null);
+  }, [isDesktop]);
   const [creating, setCreating] = useState(false);
   const [projectSettings, setProjectSettings] = useState<Project | "add" | null>(null);
   const [userConfig, setUserConfig] = useState<UserConfig | null>(null);
@@ -78,11 +108,6 @@ export function App() {
   const clientRef = useRef<Client | null>(null);
   const forcePromptedRef = useRef<string | null>(null);
 
-  // The socket callbacks below outlive any single render, so they read the
-  // attached session from a ref rather than a captured closure. The ref is
-  // written after commit, never during render, so it can only ever hold a
-  // value the UI actually rendered.
-  const activeRef = useRef<string | null>(activeId);
   useEffect(() => {
     activeRef.current = activeId;
   }, [activeId]);
@@ -90,7 +115,10 @@ export function App() {
   useEffect(() => {
     const client = new Client(wsURL(), {
       onStatus: setStatus,
-      onSessions: setSessions,
+      onSessions: (list) => {
+        setSessions(list);
+        setSessionsLoaded(true);
+      },
       onHarnesses: (h, cwd) => {
         setHarnesses(h);
         // A harness-only push carries no cwd; keep the one the welcome frame
@@ -117,14 +145,24 @@ export function App() {
     clientRef.current?.command("get_user_config", {}).then(res => setUserConfig(res.userConfig)).catch(() => {});
   }, [status, userConfig]);
 
-  // Restore the last session once the list arrives.
+  // Restore the last session once the list arrives. This runs once: after it,
+  // "no session selected" is a state the user chose, not one we have yet to
+  // resolve, and re-opening the sidebar under them would be wrong.
   useEffect(() => {
-    if (activeId || sessions.length === 0) return;
+    if (!sessionsLoaded || restoreAttempted.current) return;
+    restoreAttempted.current = true;
+    if (activeId) return;
     const last = localStorage.getItem(LAST_SESSION);
     const pick = sessions.find((s) => s.id === last && s.phase !== "closed") ?? null;
     if (pick) select(pick.id);
+    // Nothing to restore into, so the phone lands on the sidebar after all.
+    else if (!isDesktop) setSidebarOpen(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions]);
+  }, [sessionsLoaded, sessions]);
+  // Until the first list lands we do not know whether there is anything to
+  // show, so the content column holds the space rather than announcing "all
+  // caught up" to someone with six sessions on a slow connection.
+  const restoring = !sessionsLoaded;
 
   const select = useCallback(
     (id: string) => {
@@ -145,10 +183,10 @@ export function App() {
     [isDesktop],
   );
 
-  const startNew = useCallback(() => {
-    setCreating(true);
-    if (!isDesktop) setSidebarOpen(false);
-  }, [isDesktop]);
+  // The sidebar stays as it was: on a phone the new-session screen covers it
+  // completely, so closing it would only mean cancelling drops you onto an
+  // empty screen instead of back where you started.
+  const startNew = useCallback(() => setCreating(true), []);
 
   const create = useCallback(
     async (input: NewSessionInput) => {
@@ -309,10 +347,30 @@ export function App() {
     forceDelete(activeId);
   }, [activeId, state, forceDelete]);
 
+  // The attached session went away (deleted elsewhere, or torn down here).
+  //
+  // "Absent from the list" only means gone if it was ever in the list: a
+  // session we just created is attached before the broadcast carrying it
+  // arrives, and treating that gap as a disappearance would detach the
+  // session the user is watching being born. So it has to have been seen
+  // first. Waiting for `state` instead would be the wrong test — deleting a
+  // row that is not the open one selects it first, which clears state, so a
+  // delete landing before the first snapshot would leave the app attached to
+  // nothing and stuck on "Attaching…" forever.
+  //
+  // On a phone this also leaves nothing behind the sidebar, so it comes back.
+  const seenActive = useRef<string | null>(null);
   useEffect(() => {
-    if (!activeId || !state || sessions.some((s) => s.id === activeId)) return;
+    if (!activeId) return;
+    if (sessions.some((s) => s.id === activeId)) {
+      seenActive.current = activeId;
+      return;
+    }
+    if (seenActive.current !== activeId) return;
+    seenActive.current = null;
     setActiveId(null); setState(null); clientRef.current?.detach();
-  }, [sessions, activeId, state]);
+    if (!isDesktop) setSidebarOpen(true);
+  }, [sessions, activeId, isDesktop]);
 
   if (themePreview) return <ThemePreview />;
 
@@ -346,7 +404,7 @@ export function App() {
           <IconButton
             label="Show sessions"
             onClick={() => setSidebarOpen(true)}
-            className={cn(sidebarOpen && "md:hidden")}
+            className={cn(sidebarOpen && "hidden")}
           >
             <PanelLeftIcon />
           </IconButton>
@@ -398,7 +456,7 @@ export function App() {
             </>
           ) : (
             <span className="text-muted-foreground flex-1 text-[13px]">
-              {meta ? "Attaching…" : "No session selected"}
+              {meta ? "Attaching…" : restoring ? "" : "No session selected"}
             </span>
           )}
         </header>
@@ -450,18 +508,11 @@ export function App() {
             </div>
           </div>
         ) : (
-          <div className="flex flex-1 flex-col items-center justify-center gap-5 px-6 text-center">
-            <div>
-              <p className="font-mono text-3xl font-semibold tracking-tight">hy</p>
-              <p className="text-muted-foreground mt-2 text-[13px]">
-                One server, several harnesses, any number of screens.
-              </p>
-            </div>
-            <Button size="lg" onClick={startNew}>
-              <PlusIcon />
-              New session
-            </Button>
-          </div>
+          <EmptyState
+            restoring={restoring}
+            hasSessions={sessions.length > 0}
+            onNew={startNew}
+          />
         )}
       </main>
 
@@ -520,6 +571,67 @@ export function App() {
           onClose={() => setProjectSettings(null)}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * What the content column shows with nothing attached.
+ *
+ * There are three of these and they are genuinely different situations, so
+ * they say different things. A single oversized "New session" button was
+ * answering all three with a call to action nobody asked for — on a phone it
+ * was the whole landing screen, and on a desktop with sessions in the list it
+ * was pointing away from them.
+ */
+function EmptyState({
+  restoring,
+  hasSessions,
+  onNew,
+}: {
+  restoring: boolean;
+  hasSessions: boolean;
+  onNew: () => void;
+}) {
+  // Mid-restore. Saying anything here would only be contradicted a moment
+  // later, so it says nothing and just holds the space.
+  if (restoring) {
+    return (
+      <div className="flex flex-1 items-center justify-center" aria-busy="true">
+        <span className="sr-only">Reopening your last session…</span>
+        <Spinner className="text-muted-foreground/60 size-5" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 pb-16 text-center">
+      {hasSessions ? (
+        <>
+          <MessagesSquareIcon aria-hidden className="text-muted-foreground/40 size-7" />
+          <div className="max-w-xs">
+            <p className="text-[15px] font-medium">Nothing open</p>
+            <p className="text-muted-foreground mt-1.5 text-[13px] leading-relaxed">
+              Pick a session from the list to jump back into it.
+            </p>
+          </div>
+        </>
+      ) : (
+        <>
+          <CoffeeIcon aria-hidden className="text-muted-foreground/40 size-7" />
+          <div className="max-w-xs">
+            <p className="text-[15px] font-medium">All caught up</p>
+            <p className="text-muted-foreground mt-1.5 text-[13px] leading-relaxed">
+              Nothing is running. Put your feet up — or start something new.
+            </p>
+          </div>
+        </>
+      )}
+      {/* Offered, not insisted on — but still a real target for a thumb. */}
+      <Button variant="outline" size="sm" className="h-11 md:h-8" onClick={onNew}>
+        <PlusIcon />
+        New session
+      </Button>
     </div>
   );
 }

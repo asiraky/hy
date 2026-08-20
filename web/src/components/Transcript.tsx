@@ -358,7 +358,7 @@ function WorkspaceCard({
           type="button"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
-          className="focus-visible:ring-ring min-w-0 flex-1 rounded-sm text-left outline-none focus-visible:ring-2"
+          className="focus-visible:ring-ring min-h-11 min-w-0 flex-1 rounded-sm text-left outline-none focus-visible:ring-2 md:min-h-0"
         >
           <span className="text-muted-foreground block text-[11px]">Workspace provisioner</span>
           <span className="block text-[13px]">

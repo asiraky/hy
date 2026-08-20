@@ -164,7 +164,7 @@ export function Composer({
               disabled={disabled}
               value={{ harness, instance, model }}
               onChange={(next) => onSwitchModel?.(next.model)}
-              className="text-muted-foreground hover:text-foreground h-8 w-auto min-w-0 max-w-[45%] border-0 px-2 shadow-none md:min-h-8"
+              className="text-muted-foreground hover:text-foreground h-11 w-auto max-w-[45%] min-w-0 border-0 px-2 shadow-none md:h-8 md:min-h-8"
             />
           )}
           {effort && (
