@@ -69,6 +69,15 @@ func (m *Manager) ListWorkspaces(ctx context.Context, projectID string) ([]Works
 		if s.Phase == "closed" || s.Cwd == "" {
 			continue
 		}
+		// A managed session's Cwd is only a placeholder until its worktree
+		// exists, and the placeholder is the project root. Counting it would
+		// report the root busy for the length of every provision, and forever
+		// after one that failed. Local and borrowed sessions hold their
+		// checkout from the moment they are created, because they never
+		// move.
+		if s.WorkspaceMode == "managed" && (s.Phase == "creating" || s.Phase == "provisioning" || s.Phase == "provision_failed") {
+			continue
+		}
 		abs, absErr := filepath.Abs(s.Cwd)
 		if absErr != nil {
 			continue

@@ -69,6 +69,9 @@ export function NewSession({
   const [chosenModel, setChosenModel] = useState("");
   const [chosenMode, setChosenMode] = useState("");
   const [choice, setChoice] = useState<WorkspaceChoice>({ branch: "", attachPath: "" });
+  // "" defers to the project default; picking either side pins it for this
+  // session only.
+  const [chosenKind, setChosenKind] = useState<"" | "worktree" | "main">("");
   const [listing, setListing] = useState<WorkspaceListing>({
     workspaces: [],
     issues: [],
@@ -102,15 +105,25 @@ export function NewSession({
       : "";
   const displayModeId = mode || (modes.find((m) => m.default)?.id ?? modes[0]?.id ?? "");
   const modeMeta = modes.find((m) => m.id === displayModeId);
-  // Typing a branch name is itself the instruction to create a worktree, so it
-  // outranks the project default; attaching overrides both and the server
-  // decides the mode from the path.
-  const branch = choice.attachPath ? "" : choice.branch.trim();
-  const workspace = choice.attachPath
-    ? ""
-    : branch
-      ? "managed"
-      : (project?.config.defaults.workspace ?? "local");
+  // The project root is offered as the "Main checkout" side of the toggle, so
+  // listing it again inside the picker would be a second door to the same
+  // room. Its busy flag still matters: it is what blocks a second session in
+  // the directory a live one is already editing.
+  const root = listing.workspaces.find((w) => w.isRoot);
+  const rootBusy = !!root?.busy;
+  const kind: "worktree" | "main" =
+    chosenKind || (project?.config.defaults.workspace === "managed" ? "worktree" : "main");
+  // A busy root cannot be used however it was reached, so the toggle falls
+  // back rather than offering a choice that would only fail on submit.
+  const effectiveKind: "worktree" | "main" = kind === "main" && rootBusy ? "worktree" : kind;
+  const attachable = listing.workspaces.filter((w) => !w.isRoot);
+
+  // Main checkout runs where the user already works: no branch, no worktree,
+  // nothing to tear down. Otherwise attaching lets the server decide the mode
+  // from the path, and anything else is a worktree hy manages.
+  const branch = effectiveKind === "main" || choice.attachPath ? "" : choice.branch.trim();
+  const workspace = effectiveKind === "main" ? "local" : choice.attachPath ? "" : "managed";
+  const workspacePath = effectiveKind === "main" ? "" : choice.attachPath;
   const ready = status === "online" && !!project && selected?.availability.state === "ready";
 
   const create = async () => {
@@ -134,7 +147,7 @@ export function NewSession({
         mode,
         branch,
         workspace,
-        workspacePath: choice.attachPath,
+        workspacePath,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -149,6 +162,7 @@ export function NewSession({
     let live = true;
     setLoadingSpaces(true);
     setChoice({ branch: "", attachPath: "" });
+    setChosenKind("");
     onListWorkspaces(project.id)
       .then((r) => {
         if (live) setListing(r);
@@ -334,20 +348,75 @@ export function NewSession({
               </div>
             )}
 
-            <div className="space-y-1.5">
-              <Label htmlFor="new-session-workspace">Workspace</Label>
-              <WorkspacePicker
-                id="new-session-workspace"
-                value={choice}
-                onChange={setChoice}
-                workspaces={listing.workspaces}
-                issues={listing.issues}
-                issuesError={listing.issuesError}
-                userConfig={userConfig}
-                loading={loadingSpaces}
-                placeholder="issue/482-fix-login"
-              />
-            </div>
+            <fieldset className="space-y-1.5">
+              <legend className="text-foreground mb-1.5 text-sm leading-none font-medium">
+                Workspace
+              </legend>
+              <div className="grid grid-cols-2 gap-2">
+                {(
+                  [
+                    {
+                      id: "worktree",
+                      label: "Worktree",
+                      hint: "A fresh checkout on its own branch.",
+                      disabled: false,
+                    },
+                    {
+                      id: "main",
+                      label: "Main checkout",
+                      hint: rootBusy
+                        ? `In use by "${root?.busyTitle}"`
+                        : "Works in the project directory itself.",
+                      disabled: rootBusy,
+                    },
+                  ] as const
+                ).map((k) => (
+                  <button
+                    key={k.id}
+                    type="button"
+                    disabled={k.disabled}
+                    onClick={() => setChosenKind(k.id)}
+                    aria-pressed={effectiveKind === k.id}
+                    className={cn(
+                      "focus-visible:ring-ring flex min-h-11 flex-col justify-center gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors outline-none focus-visible:ring-2",
+                      effectiveKind === k.id
+                        ? "border-primary/60 bg-primary/10"
+                        : "hover:bg-accent/50",
+                      k.disabled && "cursor-not-allowed opacity-50",
+                    )}
+                  >
+                    <span className="text-[13px] leading-tight">{k.label}</span>
+                    <span className="text-muted-foreground text-[11px] leading-tight">
+                      {k.hint}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
+              {effectiveKind === "worktree" ? (
+                <div className="space-y-1.5 pt-1">
+                  <Label htmlFor="new-session-workspace">Branch</Label>
+                  <WorkspacePicker
+                    id="new-session-workspace"
+                    value={choice}
+                    onChange={setChoice}
+                    workspaces={attachable}
+                    issues={listing.issues}
+                    issuesError={listing.issuesError}
+                    userConfig={userConfig}
+                    loading={loadingSpaces}
+                    placeholder="issue/482-fix-login"
+                  />
+                </div>
+              ) : (
+                // The one mode where an agent edits the user's own files, so it
+                // says so plainly rather than leaving it to be inferred.
+                <p className="text-muted-foreground pt-1 text-[11px]">
+                  The agent works directly in {project?.root} on its current branch. No worktree
+                  is created and nothing is removed when the session ends.
+                </p>
+              )}
+            </fieldset>
           </div>
         )}
 

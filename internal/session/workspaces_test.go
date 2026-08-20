@@ -266,3 +266,147 @@ func TestSuggestedRootMayLiveOutsideTheProject(t *testing.T) {
 		t.Fatalf("worktree has no checkout: %v", err)
 	}
 }
+
+// The "Main checkout" side of the new-session toggle: run where the user
+// already works, touch nothing on the way in or out.
+func TestLocalSessionRunsInTheProjectRootAndSkipsHooks(t *testing.T) {
+	root, _, _ := gitRepo(t)
+	st, p := testProject(t, root)
+	// A provision hook that would be destructive against a live checkout: if
+	// it runs, it leaves evidence.
+	for _, name := range []string{"provision", "deprovision"} {
+		script := "#!/bin/sh\ntouch \"$HY_PROJECT_ROOT/" + name + "-ran\"\n"
+		if err := os.WriteFile(filepath.Join(root, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p.Config.Defaults.Workspace = "local"
+	p.Config.Workspace.Provision = "provision"
+	p.Config.Workspace.Deprovision = "deprovision"
+	if err := st.PutProject(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	fa := &fakeAdapter{}
+	mgr := NewManager(st, func(string, ...any) {}, fa)
+	defer mgr.Shutdown()
+
+	a, err := mgr.CreateProject(context.Background(), CreateProjectOptions{ProjectID: p.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		m, e := st.Session(context.Background(), a.ID)
+		return e == nil && (m.Phase == "ready" || m.Phase == "provision_failed")
+	})
+	m, err := st.Session(context.Background(), a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Phase != "ready" {
+		t.Fatalf("phase %q, want ready", m.Phase)
+	}
+	if resolve(m.Cwd) != resolve(root) {
+		t.Fatalf("cwd %s, want the project root %s", m.Cwd, root)
+	}
+	if m.WorkspaceMode != "local" {
+		t.Fatalf("workspace mode %q, want local", m.WorkspaceMode)
+	}
+	// The session is on whatever the checkout was already on. No branch was
+	// created, so none may be claimed.
+	if m.Branch != "main" {
+		t.Fatalf("branch %q, want the checkout's own branch main", m.Branch)
+	}
+	// Cleared at creation, not merely skipped at run time: the record itself
+	// must show there is nothing to run.
+	if m.ProvisionScript != "" || m.DeprovisionScript != "" {
+		t.Fatalf("hooks survived onto a local session: %q / %q", m.ProvisionScript, m.DeprovisionScript)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".worktrees")); !os.IsNotExist(err) {
+		t.Fatal("a local session must not create a worktree")
+	}
+	if _, err := os.Stat(filepath.Join(root, "provision-ran")); !os.IsNotExist(err) {
+		t.Fatal("the provision hook ran against the user's own checkout")
+	}
+
+	// Closing it is the dangerous half: nothing hy did not create may go.
+	if err := mgr.Cleanup(context.Background(), a.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		c, e := st.Session(context.Background(), a.ID)
+		return e == nil && c.Phase == "closed"
+	})
+	if _, err := os.Stat(filepath.Join(root, "README")); err != nil {
+		t.Fatalf("cleanup removed files from the main checkout: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "deprovision-ran")); !os.IsNotExist(err) {
+		t.Fatal("the deprovision hook ran against the user's own checkout")
+	}
+}
+
+// Two agents in one directory overwrite each other's edits, so the second is
+// refused rather than merely warned about.
+func TestSecondLocalSessionIsRefusedWhileTheFirstIsLive(t *testing.T) {
+	root, _, _ := gitRepo(t)
+	st, p := testProject(t, root)
+	mgr := NewManager(st, func(string, ...any) {}, &fakeAdapter{})
+	defer mgr.Shutdown()
+
+	first, err := mgr.CreateProject(context.Background(), CreateProjectOptions{ProjectID: p.ID, Workspace: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		m, e := st.Session(context.Background(), first.ID)
+		return e == nil && m.Phase == "ready"
+	})
+
+	if _, err := mgr.CreateProject(context.Background(), CreateProjectOptions{ProjectID: p.ID, Workspace: "local"}); err == nil {
+		t.Fatal("a second local session in the same checkout should be refused")
+	}
+	// A worktree session is unaffected: it has a directory of its own.
+	if _, err := mgr.CreateProject(context.Background(), CreateProjectOptions{
+		ProjectID: p.ID, Workspace: "managed", Branch: "issue/9-elsewhere",
+	}); err != nil {
+		t.Fatalf("a managed session should still be allowed: %v", err)
+	}
+
+	// Once the holder closes, the checkout is free again.
+	if err := mgr.Cleanup(context.Background(), first.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		m, e := st.Session(context.Background(), first.ID)
+		return e == nil && m.Phase == "closed"
+	})
+	if _, err := mgr.CreateProject(context.Background(), CreateProjectOptions{ProjectID: p.ID, Workspace: "local"}); err != nil {
+		t.Fatalf("the checkout should be reusable once released: %v", err)
+	}
+}
+
+// Force delete is the one path that removes a worktree without a hook, and it
+// must still recognise a checkout that was never hy's to remove.
+func TestForceDeleteOfALocalSessionRemovesNothing(t *testing.T) {
+	root, _, _ := gitRepo(t)
+	st, p := testProject(t, root)
+	mgr := NewManager(st, func(string, ...any) {}, &fakeAdapter{})
+	defer mgr.Shutdown()
+
+	a, err := mgr.CreateProject(context.Background(), CreateProjectOptions{ProjectID: p.ID, Workspace: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		m, e := st.Session(context.Background(), a.ID)
+		return e == nil && m.Phase == "ready"
+	})
+	if err := st.SetPhase(context.Background(), a.ID, "cleanup_failed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.ForceDelete(context.Background(), a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "README")); err != nil {
+		t.Fatalf("force delete removed files from the main checkout: %v", err)
+	}
+}

@@ -189,6 +189,10 @@ func TestProjectProvisionBlocksHarnessAndStreamsOutput(t *testing.T) {
 	now := proto.NowMillis()
 	p := project.Project{ID: "p1", Root: root, CreatedAt: now, UpdatedAt: now, Config: project.DefaultConfig(root)}
 	p.Config.Defaults.Harness = "fake"
+	// Hooks belong to provisioning, so the session has to be one that
+	// provisions: a local session runs in a checkout that already exists and
+	// deliberately skips them.
+	p.Config.Defaults.Workspace = "managed"
 	p.Config.Workspace.Provision = "provision"
 	p.Config.Workspace.Deprovision = "deprovision"
 	if err := st.PutProject(context.Background(), p); err != nil {

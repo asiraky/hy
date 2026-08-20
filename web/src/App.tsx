@@ -305,9 +305,19 @@ export function App() {
                 <p className="truncate text-[13px] font-medium">
                   {state.title || "Untitled session"}
                 </p>
-                <p className="text-muted-foreground truncate font-mono text-[10px]">
-                  {state.cwd}
-                  {state.model && ` · ${state.model}`}
+                <p className="text-muted-foreground flex items-center gap-1.5 truncate font-mono text-[10px]">
+                  {/* An agent loose in the user's own checkout is the one case
+                      worth calling out, because nothing else on screen
+                      distinguishes it from a disposable worktree. */}
+                  {state.workspace.mode === "local" && (
+                    <span className="border-attention text-attention-foreground shrink-0 rounded border px-1 font-sans text-[9px] leading-[1.4]">
+                      main checkout
+                    </span>
+                  )}
+                  <span className="truncate">
+                    {state.cwd}
+                    {state.model && ` · ${state.model}`}
+                  </span>
                 </p>
               </div>
 

@@ -8,7 +8,7 @@ import { cn } from "~/lib/utils";
 import type { Issue, UserConfig, Workspace } from "~/protocol";
 
 export interface WorkspaceChoice {
-  /** What the user typed: the branch to create. Empty means "use the project default". */
+  /** What the user typed: the branch to create. Empty means "let hy name it". */
   branch: string;
   /** Set only when attaching to a checkout that already exists. */
   attachPath: string;
@@ -337,7 +337,7 @@ export function WorkspacePicker({
           ? `Attaching to ${attached.path}`
           : value.branch.trim()
             ? "Creates a new worktree on this branch."
-            : "Leave empty to use the project default."}
+            : "Leave empty and hy names the branch for you."}
       </p>
     </div>
   );

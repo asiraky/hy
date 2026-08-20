@@ -215,7 +215,8 @@ func (m *Manager) CreateProject(ctx context.Context, o CreateProjectOptions) (*A
 		return nil, fmt.Errorf("deprovision hook: %w", err)
 	}
 	cwd := p.Root
-	if strings.TrimSpace(o.WorkspacePath) != "" {
+	switch {
+	case strings.TrimSpace(o.WorkspacePath) != "":
 		w, resolveErr := m.ResolveWorkspace(ctx, p.ID, o.WorkspacePath)
 		if resolveErr != nil {
 			return nil, resolveErr
@@ -226,6 +227,23 @@ func (m *Manager) CreateProject(ctx context.Context, o CreateProjectOptions) (*A
 		if o.Branch == "" {
 			o.Branch = w.Branch
 		}
+	case o.Workspace == "local":
+		// The main checkout, which hy did not create and must not clean up.
+		// Resolving it as a workspace reuses the attach guard: a checkout a
+		// live session already holds comes back busy, because two harnesses
+		// editing one directory corrupt each other's work.
+		w, resolveErr := m.ResolveWorkspace(ctx, p.ID, p.Root)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		// The hooks exist to prepare a fresh worktree — installing packages,
+		// seeding config. Running them over the directory the user actually
+		// works in is at best redundant, so a local session skips both.
+		cwd, provision, deprovision = w.Path, "", ""
+		// No branch is created: the session is on whatever the checkout is
+		// already on, and reporting that is more honest than reporting a name
+		// nothing acted upon.
+		o.Branch = w.Branch
 	}
 
 	meta := store.SessionMeta{ID: uuid.NewString(), Cwd: cwd, Harness: o.Harness, CreatedAt: proto.NowMillis(), UpdatedAt: proto.NowMillis(), Phase: "creating", ProjectID: p.ID, Branch: o.Branch, Model: o.Model, Mode: o.Mode, Effort: o.Effort, WorkspaceMode: o.Workspace, ProvisionScript: relHook(p.Root, provision), DeprovisionScript: relHook(p.Root, deprovision)}
@@ -606,9 +624,10 @@ func (m *Manager) ForceDelete(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	// A borrowed checkout belongs to whoever made it; forcing the session away
-	// must not take their worktree with it.
-	if meta.WorkspaceMode != "borrowed" {
+	// Only a managed worktree is hy's to destroy. A borrowed checkout belongs
+	// to whoever made it and a local session is the user's own working
+	// directory; forcing either session away must not touch their files.
+	if meta.WorkspaceMode == "managed" {
 		if err := m.removeGitWorktree(ctx, meta, p, nil, true); err != nil {
 			return err
 		}
