@@ -251,13 +251,17 @@ func (s *State) Apply(ev proto.Event) {
 			s.Title = truncate(p.Prompt, 60)
 		}
 		// The prompt itself is a timeline item so the UI shows what was asked.
-		s.upsert("prompt:"+p.TurnID, func(it *Item) {
-			it.Kind = ItemMessage
-			it.Role = "user"
-			it.ContentKind = "text"
-			it.Text = p.Prompt
-			it.TurnID = p.TurnID
-		})
+		// A harness-initiated turn has no prompt — nobody asked anything — so
+		// there is no item to add.
+		if p.Prompt != "" {
+			s.upsert("prompt:"+p.TurnID, func(it *Item) {
+				it.Kind = ItemMessage
+				it.Role = "user"
+				it.ContentKind = "text"
+				it.Text = p.Prompt
+				it.TurnID = p.TurnID
+			})
+		}
 
 	case proto.TurnDiff:
 		var p proto.TurnDiffPayload
@@ -293,6 +297,12 @@ func (s *State) Apply(ev proto.Event) {
 	case proto.MessageChunk:
 		var p proto.MessageChunkPayload
 		decode(ev.Payload, &p)
+		// Streaming while idle means a turn is running that the log did not
+		// announce. Trusting the activity over the phase keeps a lifecycle
+		// desync from freezing every attached UI. Mirrored in web/src/apply.ts.
+		if s.Phase == "idle" {
+			s.Phase = "turn"
+		}
 		s.upsert(p.BlockID, func(it *Item) {
 			it.Kind = ItemMessage
 			it.Role = p.Role
@@ -304,6 +314,10 @@ func (s *State) Apply(ev proto.Event) {
 	case proto.ToolCallStarted:
 		var p proto.ToolCallStartedPayload
 		decode(ev.Payload, &p)
+		// Same defence as message.chunk: a tool starting is a turn running.
+		if s.Phase == "idle" {
+			s.Phase = "turn"
+		}
 		s.upsert(p.ToolCallID, func(it *Item) {
 			it.Kind = ItemTool
 			it.TurnID = p.TurnID

@@ -618,8 +618,8 @@ func (a *Actor) handle(c command) (stop bool) {
 		}
 		cancelBase()
 
+		// append records the phase change; no SetPhase needed here.
 		a.append(proto.Emit(proto.TurnStarted, proto.TurnStartedPayload{TurnID: turnID, Prompt: c.prompt, Recovery: c.recovery}))
-		_ = a.store.SetPhase(ctx, a.ID, "turn")
 		// A recovery prompt is the server talking to itself; naming a session
 		// after it would bury what the human actually asked for.
 		if c.recovery == nil {
@@ -806,16 +806,34 @@ func (a *Actor) append(em proto.Emission) {
 	a.head = ev.Seq
 	a.mu.Unlock()
 
-	if em.Type == proto.TurnFinished {
-		// Only a turn whose baseline was taken can be measured. A turn.finished
-		// closing out a turn a restart interrupted, or one whose baseline never
-		// settled, has nothing honest to be compared against.
-		if a.measuring != "" && a.measuring == a.turnActive {
-			a.checkpoints.turnEnded(a.turnActive)
+	if em.Type == proto.TurnStarted {
+		// A turn the actor did not start itself is the harness resuming work
+		// on its own — a background task completing, an auto-continuation.
+		// Track it like any other turn so prompts are refused while it runs
+		// and cancel has something to interrupt.
+		if p, ok := em.Payload.(proto.TurnStartedPayload); ok && a.turnActive == "" {
+			a.turnActive = p.TurnID
 		}
-		a.measuring = ""
-		a.turnActive = ""
-		_ = a.store.SetPhase(ctx, a.ID, "idle")
+		_ = a.store.SetPhase(ctx, a.ID, "turn")
+	}
+	if em.Type == proto.TurnFinished {
+		// Only the finish of the turn that is actually active may clear it. A
+		// finish for some other turn — a stale close from the adapter, or the
+		// resolution of an interleaving the actor has already moved past —
+		// must not release the busy guard while different work is running.
+		p, ok := em.Payload.(proto.TurnFinishedPayload)
+		if a.turnActive == "" || (ok && p.TurnID == a.turnActive) {
+			// Only a turn whose baseline was taken can be measured. A
+			// turn.finished closing out a turn a restart interrupted, or one
+			// whose baseline never settled, has nothing honest to be compared
+			// against.
+			if a.measuring != "" && a.measuring == a.turnActive {
+				a.checkpoints.turnEnded(a.turnActive)
+			}
+			a.measuring = ""
+			a.turnActive = ""
+			_ = a.store.SetPhase(ctx, a.ID, "idle")
+		}
 	}
 	if em.Type == proto.TurnFinished || em.Type == proto.TurnStarted {
 		a.mu.Lock()

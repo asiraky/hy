@@ -1107,3 +1107,51 @@ func TestGetCannotResumeWhileCloseIsInProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestHarnessInitiatedTurnIsTracked covers work the harness starts by itself —
+// a background task completing and waking the agent without a prompt. The
+// adapter opens a turn for it; the actor must track that turn like any other:
+// the phase moves to turn, prompts are refused while it runs, and the phase
+// returns to idle when it finishes.
+func TestHarnessInitiatedTurnIsTracked(t *testing.T) {
+	actor, fa, st := newTestActor(t)
+	ctx := context.Background()
+
+	// The harness resumes work on its own: turn.started with no prompt.
+	fa.session().emit(proto.Emit(proto.TurnStarted, proto.TurnStartedPayload{TurnID: "harness-turn"}))
+	fa.session().emit(proto.Emit(proto.MessageChunk, proto.MessageChunkPayload{
+		TurnID: "harness-turn", Role: "agent", Kind: "text", BlockID: "b1", Delta: "The web",
+	}))
+
+	waitFor(t, func() bool {
+		state, err := actor.State(ctx)
+		return err == nil && state.Phase == "turn"
+	})
+
+	// The turn is real: a prompt while it runs is busy, not accepted.
+	if _, err := actor.Prompt(ctx, "hello"); err != ErrBusy {
+		t.Fatalf("prompt during harness-initiated turn: err = %v, want ErrBusy", err)
+	}
+
+	// The store's phase follows too, so the session list agrees.
+	meta, err := st.Session(ctx, actor.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Phase != "turn" {
+		t.Fatalf("stored phase = %q, want turn", meta.Phase)
+	}
+
+	fa.session().emit(proto.Emit(proto.TurnFinished, proto.TurnFinishedPayload{
+		TurnID: "harness-turn", StopReason: proto.StopEndTurn,
+	}))
+	waitFor(t, func() bool {
+		state, err := actor.State(ctx)
+		return err == nil && state.Phase == "idle" && len(state.Turns) == 1 && state.Turns[0].Done
+	})
+
+	// And the session is promptable again.
+	if _, err := actor.Prompt(ctx, "hello"); err != nil {
+		t.Fatalf("prompt after harness-initiated turn finished: %v", err)
+	}
+}

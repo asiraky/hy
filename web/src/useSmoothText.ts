@@ -41,13 +41,16 @@ export function useSmoothText(text: string, active: boolean): string {
   // render that React went on to discard.
   const textRef = useRef(text);
   const activeRef = useRef(active);
-  useEffect(() => {
-    textRef.current = text;
-    activeRef.current = active;
-  });
+
+  // frameRef is the pending animation frame, 0 when the loop is dormant.
+  // kickRef restarts a dormant loop; it exists so text arriving after the
+  // loop has stopped can wake it without tearing the effect down — cancelling
+  // and rescheduling the frame on every chunk would starve the loop entirely
+  // when chunks arrive faster than frames.
+  const frameRef = useRef(0);
+  const kickRef = useRef(() => {});
 
   useEffect(() => {
-    let frame = 0;
     let prev = performance.now();
 
     const tick = (now: number) => {
@@ -60,9 +63,15 @@ export function useSmoothText(text: string, active: boolean): string {
       const backlog = total - revealedRef.current;
 
       if (backlog <= 0) {
-        // Caught up. Keep the loop alive only while more text may arrive.
-        if (!activeRef.current) return;
-        frame = requestAnimationFrame(tick);
+        // Caught up. While inactive the loop goes dormant — not permanently:
+        // text can still arrive after a block goes inactive (a lifecycle
+        // desync, or a block that mounts between turns), and the effect below
+        // kicks the loop awake when it does.
+        if (!activeRef.current) {
+          frameRef.current = 0;
+          return;
+        }
+        frameRef.current = requestAnimationFrame(tick);
         return;
       }
 
@@ -82,12 +91,32 @@ export function useSmoothText(text: string, active: boolean): string {
         Math.floor(revealedRef.current) > Math.floor(r) ? revealedRef.current : r,
       );
 
-      frame = requestAnimationFrame(tick);
+      frameRef.current = requestAnimationFrame(tick);
     };
 
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
+    kickRef.current = () => {
+      if (frameRef.current) return; // already running
+      prev = performance.now();
+      frameRef.current = requestAnimationFrame(tick);
+    };
+
+    kickRef.current();
+    return () => {
+      cancelAnimationFrame(frameRef.current);
+      frameRef.current = 0;
+    };
   }, [active]);
+
+  useEffect(() => {
+    textRef.current = text;
+    activeRef.current = active;
+    // A block that mounts inactive and then grows — its first chunk landed
+    // before the turn was announced — has a dormant loop and nothing else to
+    // restart it: `active` never changes, so the effect above never re-runs.
+    // Waking the loop here is what keeps such a block from freezing at its
+    // first chunk forever.
+    if (text.length > revealedRef.current) kickRef.current();
+  });
 
   const shown = Math.min(Math.floor(revealed), text.length);
   // Once the buffer is drained the full string is returned, so a settled

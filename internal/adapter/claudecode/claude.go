@@ -291,6 +291,16 @@ func (s *session) Events() <-chan proto.Emission { return s.events }
 
 func (s *session) Prompt(ctx context.Context, in adapter.PromptInput) error {
 	s.mu.Lock()
+	// The actor believed the session was idle when it accepted this prompt,
+	// but the harness may have started work by itself in the meantime — the
+	// turn it opened is queued on the event channel and the actor has not
+	// seen it yet. Overwriting that turn's id here would label the harness's
+	// in-flight work with this prompt's turn and leave the open turn
+	// unfinished forever. Refuse instead; the caller can retry when idle.
+	if s.turnID != "" && s.turnID != in.TurnID {
+		s.mu.Unlock()
+		return errors.New("the harness resumed work on its own; wait for it to finish")
+	}
 	s.turnID = in.TurnID
 	s.sawResult = false
 	s.mu.Unlock()
@@ -362,6 +372,28 @@ func (s *session) currentTurn() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.turnID
+}
+
+// ensureTurn returns the active turn id, opening a harness-initiated turn if
+// none is open. The SDK can resume work without being prompted — a background
+// task completing, an auto-continuation — and that work is a real turn: it
+// needs an id so its events can be grouped, and a turn.started so projections
+// know the session is no longer idle. A turn opened here has no prompt; that
+// is what marks it as the harness's own doing.
+func (s *session) ensureTurn() string {
+	s.mu.Lock()
+	if s.turnID != "" {
+		id := s.turnID
+		s.mu.Unlock()
+		return id
+	}
+	id := uuid.NewString()
+	s.turnID = id
+	s.sawResult = false
+	s.mu.Unlock()
+
+	s.emit(proto.Emit(proto.TurnStarted, proto.TurnStartedPayload{TurnID: id}))
+	return id
 }
 
 // handleRequest services the bridge's only inbound request: a permission
@@ -472,7 +504,6 @@ func (s *session) handleStreamEvent(msg map[string]json.RawMessage) {
 	}
 	remarshal(msg, &wrapper)
 	ev := wrapper.Event
-	turn := s.currentTurn()
 
 	switch ev.Type {
 	case "message_start":
@@ -482,6 +513,10 @@ func (s *session) handleStreamEvent(msg map[string]json.RawMessage) {
 		s.mu.Unlock()
 
 	case "content_block_start":
+		// Output is starting. If no turn is open — the harness resumed work
+		// by itself, without a prompt — this opens one, so the events below
+		// never carry an empty turn id.
+		turn := s.ensureTurn()
 		s.mu.Lock()
 		b := &block{kind: ev.ContentBlock.Type}
 		switch ev.ContentBlock.Type {
@@ -510,6 +545,7 @@ func (s *session) handleStreamEvent(msg map[string]json.RawMessage) {
 		if b == nil {
 			return
 		}
+		turn := s.ensureTurn()
 		switch ev.Delta.Type {
 		case "text_delta":
 			s.emit(proto.Emit(proto.MessageChunk, proto.MessageChunkPayload{
@@ -615,6 +651,13 @@ func (s *session) handleResult(msg map[string]json.RawMessage) {
 	s.sawResult = true
 	s.turnID = ""
 	s.mu.Unlock()
+
+	// A result for a turn that was never started — no prompt, and no output
+	// that would have opened one — has nothing to finish. Emitting it anyway
+	// would put an unmatched turn.finished in the log.
+	if turn == "" {
+		return
+	}
 
 	s.emit(proto.Emit(proto.TurnFinished, proto.TurnFinishedPayload{TurnID: turn, StopReason: stop}))
 }
@@ -730,5 +773,3 @@ func flattenContent(raw json.RawMessage) string {
 	}
 	return string(raw)
 }
-
-var _ = errors.New
