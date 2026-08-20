@@ -65,16 +65,6 @@ func (a *Adapter) Meta() adapter.HarnessMeta {
 	}
 }
 
-func (a *Adapter) Models() []adapter.ModelMeta {
-	return []adapter.ModelMeta{
-		{ID: "", Label: "Default"},
-		{ID: "fable", Label: "Fable"},
-		{ID: "opus", Label: "Opus"},
-		{ID: "sonnet", Label: "Sonnet"},
-		{ID: "haiku", Label: "Haiku"},
-	}
-}
-
 // PermissionModes are the Agent SDK's PermissionMode values, verbatim: the id
 // is what the sidecar passes as `permissionMode`. The SDK spells the manual
 // mode `default` (the CLI alias `manual` is CLI-only), and it is what hy sends.
@@ -89,8 +79,11 @@ func (a *Adapter) PermissionModes() []adapter.PermissionModeMeta {
 	}
 }
 
-// Probe reports whether a Claude session could start right now.
-func (a *Adapter) Probe(ctx context.Context) adapter.Availability {
+// Probe reports whether a Claude session could start right now. Discovery of
+// the runtime and the Claude Code install is machine-level, not per-account,
+// so the instance env does not change the answer today; it is accepted so a
+// future credential check can be per instance.
+func (a *Adapter) Probe(ctx context.Context, env map[string]string) adapter.Availability {
 	_, avail := a.resolve(ctx)
 	return avail
 }
@@ -163,6 +156,9 @@ func moduleInstalled(dir string, parts ...string) bool {
 // sidecarConfig is what the bridge needs to start a session. It is passed as
 // one JSON argument so the sidecar has no bespoke flag parsing.
 type sidecarConfig struct {
+	// Op selects what the bridge does. Empty runs a session; "models" runs the
+	// one-shot listing and exits.
+	Op             string `json:"op,omitempty"`
 	Cwd            string `json:"cwd"`
 	Model          string `json:"model,omitempty"`
 	PermissionMode string `json:"permissionMode,omitempty"`
@@ -221,7 +217,10 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 	args := append(append([]string{}, r.runtimeArgs...), string(blob))
 	cmd := exec.Command(r.runtime, args...)
 	cmd.Dir = o.Cwd
-	cmd.Env = append(os.Environ(), "CLAUDE_CODE_ENTRYPOINT=sdk-ts")
+	// The instance's overlay over the ambient environment is the entire
+	// credential mechanism: CLAUDE_CONFIG_DIR, CLAUDE_CODE_OAUTH_TOKEN, or
+	// ANTHROPIC_API_KEY select the account per process.
+	cmd.Env = append(adapter.MergeEnv(os.Environ(), o.Env), "CLAUDE_CODE_ENTRYPOINT=sdk-ts")
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -666,10 +665,10 @@ func (s *session) handleResult(msg map[string]json.RawMessage) {
 	}
 
 	s.emit(proto.Emit(proto.UsageUpdated, proto.UsageUpdatedPayload{
-		Input:      r.Usage.InputTokens,
-		Output:     r.Usage.OutputTokens,
-		CacheRead:  r.Usage.CacheReadInputTokens,
-		CacheWrite: r.Usage.CacheCreationInputTokens,
+		Input:         r.Usage.InputTokens,
+		Output:        r.Usage.OutputTokens,
+		CacheRead:     r.Usage.CacheReadInputTokens,
+		CacheWrite:    r.Usage.CacheCreationInputTokens,
 		Cost:          r.TotalCostUSD,
 		ContextPct:    pct,
 		ContextUsed:   used,

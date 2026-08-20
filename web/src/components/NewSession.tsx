@@ -2,7 +2,7 @@ import { PlusIcon, RefreshCwIcon, SettingsIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type { ConnectionStatus } from "~/client";
-import { HarnessBadge } from "~/components/HarnessBadge";
+import { ModelPicker, type ModelSelection } from "~/components/ModelPicker";
 import { Alert, AlertDescription } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import {
@@ -21,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "~/components/ui/select";
+import { defaultModel, pickerInstances, resolveInstance } from "~/lib/models";
 import { cn } from "~/lib/utils";
 import type { HarnessMeta, Issue, Project, UserConfig, Workspace } from "~/protocol";
 import { WorkspacePicker, type WorkspaceChoice } from "./WorkspacePicker";
@@ -28,6 +29,8 @@ import { WorkspacePicker, type WorkspaceChoice } from "./WorkspacePicker";
 export interface NewSessionInput {
   projectId: string;
   harness: string;
+  /** The provider instance to run under; empty means the harness's default. */
+  instance: string;
   model: string;
   mode: string;
   branch: string;
@@ -65,8 +68,9 @@ export function NewSession({
   status: ConnectionStatus;
 }) {
   const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
-  const [chosenHarness, setChosenHarness] = useState("");
-  const [chosenModel, setChosenModel] = useState("");
+  // One selection covers both: picking a model picks the account it lives
+  // under, so there is nothing to keep in step.
+  const [chosen, setChosen] = useState<ModelSelection | null>(null);
   const [chosenMode, setChosenMode] = useState("");
   const [choice, setChoice] = useState<WorkspaceChoice>({ branch: "", attachPath: "" });
   // "" defers to the project default; picking either side pins it for this
@@ -82,16 +86,30 @@ export function NewSession({
   const [error, setError] = useState<string | null>(null);
 
   const project = projects.find((p) => p.id === projectId) ?? projects[0];
-  const harnessId =
-    chosenHarness ||
+  const instances = pickerInstances(harnesses);
+  // Until the user picks, the project's defaults decide — and where it has
+  // none, the first account that could actually start a session.
+  const fallbackHarness =
     project?.config.defaults.harness ||
     harnesses.find((h) => h.availability.state === "ready")?.id ||
     harnesses[0]?.id ||
     "";
+  const instance =
+    (chosen && instances.find((i) => i.id === chosen.instance)) ??
+    resolveInstance(instances, "", fallbackHarness);
+  const harnessId = instance?.driver ?? fallbackHarness;
   const selected = harnesses.find((h) => h.id === harnessId);
-  const model = selected?.models.some((m) => m.id === chosenModel)
-    ? chosenModel
-    : (project?.config.defaults.model ?? "");
+  // A model the account no longer offers is not sent: the harness's own
+  // default is a better answer than a name it has stopped serving.
+  const preferred = chosen?.model || (chosen ? "" : (project?.config.defaults.model ?? ""));
+  const model = instance?.models.some((m) => m.id === preferred)
+    ? preferred
+    : (defaultModel(instance)?.id ?? "");
+  const selection: ModelSelection = {
+    harness: harnessId,
+    instance: instance?.id ?? "",
+    model,
+  };
   // Modes are the selected harness's own presets, repopulated when the harness
   // changes — the same shape as the model picker. Only an expressed preference
   // (picked here, or a project default) is sent; otherwise the mode stays ""
@@ -124,7 +142,7 @@ export function NewSession({
   const branch = effectiveKind === "main" || choice.attachPath ? "" : choice.branch.trim();
   const workspace = effectiveKind === "main" ? "local" : choice.attachPath ? "" : "managed";
   const workspacePath = effectiveKind === "main" ? "" : choice.attachPath;
-  const ready = status === "online" && !!project && selected?.availability.state === "ready";
+  const ready = status === "online" && !!project && instance?.availability?.state === "ready";
 
   const create = async () => {
     if (!project) return;
@@ -143,6 +161,7 @@ export function NewSession({
       await onCreate({
         projectId: project.id,
         harness: harnessId,
+        instance: instance?.id ?? "",
         model,
         mode,
         branch,
@@ -221,8 +240,7 @@ export function NewSession({
                   value={project?.id}
                   onValueChange={(v) => {
                     setProjectId(v);
-                    setChosenHarness("");
-                    setChosenModel("");
+                    setChosen(null);
                     setChosenMode("");
                   }}
                 >
@@ -258,36 +276,23 @@ export function NewSession({
               </div>
             </div>
 
-            <fieldset className="space-y-1.5">
-              <legend className="text-foreground mb-1.5 text-sm leading-none font-medium">
-                Harness
-              </legend>
-              <div className="grid grid-cols-2 gap-2">
-                {harnesses.map((h) => (
-                  <button
-                    key={h.id}
-                    type="button"
-                    onClick={() => setChosenHarness(h.id)}
-                    aria-pressed={harnessId === h.id}
-                    className={cn(
-                      "focus-visible:ring-ring flex min-h-11 items-center gap-2 rounded-lg border px-3 py-2 text-left text-[13px] transition-colors outline-none focus-visible:ring-2",
-                      harnessId === h.id
-                        ? "border-primary/60 bg-primary/10"
-                        : "hover:bg-accent/50",
-                      h.availability.state !== "ready" && "opacity-50",
-                    )}
-                  >
-                    <HarnessBadge harness={h.id} accent={h.accent} />
-                    <span className="truncate">{h.name}</span>
-                  </button>
-                ))}
-              </div>
-            </fieldset>
+            <div className="space-y-1.5">
+              <Label htmlFor="new-session-model">Model</Label>
+              {/* Harness and model in one control: choosing a model already
+                  chooses the account it runs under, and a session cannot have
+                  one without the other. */}
+              <ModelPicker
+                id="new-session-model"
+                harnesses={harnesses}
+                value={selection}
+                onChange={setChosen}
+              />
+            </div>
 
-            {selected?.availability.state !== "ready" && (
+            {instance && instance.availability?.state !== "ready" && (
               <Alert>
                 <AlertDescription>
-                  <span>{selected?.availability.reason}</span>
+                  <span>{instance.availability?.reason}</span>
                   <Button variant="outline" size="sm" className="mt-2" onClick={onRecheck}>
                     <RefreshCwIcon />
                     Check again
@@ -317,30 +322,6 @@ export function NewSession({
                 {modeMeta?.description && (
                   <p className="text-muted-foreground text-[11px]">{modeMeta.description}</p>
                 )}
-              </div>
-            )}
-
-            {(selected?.models.length ?? 0) > 1 && (
-              <div className="space-y-1.5">
-                <Label htmlFor="new-session-model">Model</Label>
-                {/* An empty string is not a legal Radix Select value, so
-                    "default" is its own sentinel and maps back to "". */}
-                <Select
-                  value={model || "default"}
-                  onValueChange={(v) => setChosenModel(v === "default" ? "" : v)}
-                >
-                  <SelectTrigger id="new-session-model" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="default">Default</SelectItem>
-                    {selected?.models.map((m) => (
-                      <SelectItem key={m.id} value={m.id}>
-                        {m.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
               </div>
             )}
 
@@ -408,8 +389,8 @@ export function NewSession({
                 // The one mode where an agent edits the user's own files, so it
                 // says so plainly rather than leaving it to be inferred.
                 <p className="text-muted-foreground pt-1 text-[11px]">
-                  The agent works directly in {project?.root} on its current branch. No worktree
-                  is created and nothing is removed when the session ends.
+                  The agent works directly in {project?.root} on its current branch. No worktree is
+                  created and nothing is removed when the session ends.
                 </p>
               )}
             </fieldset>

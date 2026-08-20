@@ -146,6 +146,13 @@ export class Client {
         this.events.onSessions(f.sessions ?? []);
         break;
 
+      // Harnesses can change after the welcome frame: a model list is read
+      // from the harness in the background and lands seconds later. Without
+      // this the picker would show the fallback list until a reconnect.
+      case "harnesses":
+        this.events.onHarnesses(f.harnesses ?? [], f.cwd ?? "");
+        break;
+
       case "snapshot":
         if (f.sessionId !== this.sessionId || !f.state) return;
         this.state = f.state;

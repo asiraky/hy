@@ -120,6 +120,11 @@ export interface Turn {
   // What the turn changed on disk. Absent until the turn has finished and been
   // measured, and on any turn that changed nothing.
   diff?: TurnDiff;
+  // When the turn started and finished, from the event log's own clock
+  // (epoch milliseconds). The fold over a finished turn is labelled
+  // "Worked for 34s" from these.
+  startedAt?: number;
+  finishedAt?: number;
 }
 
 export interface PermissionOption {
@@ -254,6 +259,12 @@ export interface SessionMeta {
   id: string;
   cwd: string;
   harness: string;
+  /**
+   * The provider instance (account) the session was created under. Absent on
+   * sessions from before instances existed; those resolve to the default
+   * instance of their harness.
+   */
+  providerInstance?: string;
   title: string;
   createdAt: number;
   updatedAt: number;
@@ -266,10 +277,31 @@ export interface SessionMeta {
   workspaceMode?: string;
 }
 
+/**
+ * One selectable model, exactly as the harness describes itself. Everything
+ * but `group` is the harness's own answer — hy asks it what it offers rather
+ * than shipping a list that goes stale — and `group` is the adapter's single
+ * presentation call, since no harness reports what it considers superseded.
+ */
 export interface ModelMeta {
   id: string;
   label: string;
+  /** The generation behind the label: "Opus 5 with 1M context", "5.6". */
+  version?: string;
+  /** The harness's one-line summary of what the model is for. */
+  description?: string;
+  /** What an alias actually runs, so "Default" can name a real model. */
+  resolves?: string;
+  /** "legacy" for a superseded model a picker should fold away. */
+  group?: string;
+  /** The model the harness itself would pick. A picker preselects it. */
+  default?: boolean;
+  /** The reasoning levels this model accepts, most modest first. */
+  efforts?: string[];
 }
+
+/** The group id for models kept for continuity rather than offered first. */
+export const LEGACY_GROUP = "legacy";
 
 /**
  * One permission preset a harness offers. The id is opaque here: only the
@@ -304,6 +336,22 @@ export interface Availability {
  * from the adapter. Nothing here is hardcoded per harness, so adding one needs
  * no client change.
  */
+/**
+ * One configured account for a harness. The id is the routing key — sessions
+ * and create commands name instances, never drivers — while driver selects the
+ * logo and accent, so two Codex accounts look like the same product under
+ * different names. Availability and models are per instance: one account being
+ * logged out must not mark the other unavailable.
+ */
+export interface ProviderInstanceMeta {
+  id: string;
+  driver: string;
+  displayName: string;
+  enabled: boolean;
+  availability: Availability;
+  models?: ModelMeta[];
+}
+
 export interface HarnessMeta {
   id: string;
   name: string;
@@ -312,6 +360,12 @@ export interface HarnessMeta {
   models: ModelMeta[];
   permissionModes: PermissionModeMeta[];
   availability: Availability;
+  /**
+   * Every account configured for this harness, default first. With a single
+   * instance this is one entry whose id equals the harness id, which is why
+   * the one-account case renders exactly as before.
+   */
+  instances: ProviderInstanceMeta[];
 }
 
 export type Reachability = "loopback" | "lan" | "overlay" | "public";
@@ -357,6 +411,7 @@ export interface ServerFrame {
   type:
     | "welcome"
     | "sessions"
+    | "harnesses"
     | "snapshot"
     | "event"
     | "synchronized"

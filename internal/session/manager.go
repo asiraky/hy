@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,15 +17,31 @@ import (
 	"github.com/asiraky/hy/internal/adapter"
 	"github.com/asiraky/hy/internal/project"
 	"github.com/asiraky/hy/internal/proto"
+	"github.com/asiraky/hy/internal/provider"
 	"github.com/asiraky/hy/internal/store"
 )
 
-// Manager owns the set of live actors and the adapter registry.
+// registered pairs a provider instance with the adapter that serves its
+// driver. Adapters stay singletons in code — one codex adapter serves every
+// codex instance — and ad is nil when the driver is unknown to this build,
+// which presents as unavailable rather than failing anything.
+type registered struct {
+	inst provider.Instance
+	ad   adapter.Adapter
+}
+
+// Manager owns the set of live actors and the provider-instance registry.
 type Manager struct {
-	store    *store.Store
-	adapters map[string]adapter.Adapter
-	order    []string
-	logf     func(string, ...any)
+	store *store.Store
+	// drivers maps adapter id to its singleton implementation.
+	drivers     map[string]adapter.Adapter
+	driverOrder []string
+	// instances is keyed by instance id, never by driver: sessions and the
+	// wire protocol route on instance ids.
+	instances     map[string]registered
+	instanceOrder []string
+	secrets       *provider.SecretStore
+	logf          func(string, ...any)
 
 	mu     sync.RWMutex
 	actors map[string]*Actor
@@ -41,77 +58,303 @@ type Manager struct {
 	probeMu sync.Mutex
 	probes  map[string]probeResult
 
+	// modelsMu guards the per-instance model cache. Asking a harness what it
+	// offers costs a process start, so the answer is cached and refreshed off
+	// the request path: a listing never waits on one.
+	modelsMu   sync.Mutex
+	models     map[string]modelResult
+	refreshing map[string]bool
+	// modelGen invalidates listings already in flight. A recheck that cleared
+	// the cache must not be overwritten seconds later by an answer read before
+	// the user installed whatever they were rechecking for.
+	modelGen int
+
 	// Broadcast of session-list changes, so presenters can refresh the sidebar.
 	listMu  sync.Mutex
 	listSub map[string]chan struct{}
+	// Broadcast of harness changes — a model list that arrived after the
+	// welcome frame — so a picker opened later shows the live catalogue
+	// without the user reconnecting.
+	harnessSub map[string]chan struct{}
 }
 
 // probeTTL bounds how stale a readiness answer may be.
 const probeTTL = 30 * time.Second
+
+// modelTTL bounds how stale a model list may be. Catalogues change on the
+// harness's release cadence, not by the minute, and a user who has just
+// installed or upgraded one can force the question with a recheck.
+const modelTTL = 30 * time.Minute
+
+// modelRefreshTimeout bounds one background listing. The adapters apply their
+// own deadlines; this is the backstop for one that does not return at all.
+const modelRefreshTimeout = 90 * time.Second
 
 type probeResult struct {
 	result adapter.Availability
 	at     time.Time
 }
 
+// modelResult is one instance's last model listing. A failed attempt is cached
+// too, with no list: without that, every connection would retry a harness that
+// cannot answer and pay the process start each time.
+type modelResult struct {
+	list []adapter.ModelMeta
+	at   time.Time
+}
+
 func NewManager(st *store.Store, logf func(string, ...any), ads ...adapter.Adapter) *Manager {
 	m := &Manager{
-		store:    st,
-		adapters: map[string]adapter.Adapter{},
-		logf:     logf,
-		actors:   map[string]*Actor{},
-		probes:   map[string]probeResult{},
-		listSub:  map[string]chan struct{}{},
+		store:      st,
+		drivers:    map[string]adapter.Adapter{},
+		instances:  map[string]registered{},
+		logf:       logf,
+		actors:     map[string]*Actor{},
+		probes:     map[string]probeResult{},
+		models:     map[string]modelResult{},
+		refreshing: map[string]bool{},
+		listSub:    map[string]chan struct{}{},
+		harnessSub: map[string]chan struct{}{},
 	}
 	for _, ad := range ads {
-		m.adapters[ad.ID()] = ad
-		m.order = append(m.order, ad.ID())
+		m.drivers[ad.ID()] = ad
+		m.driverOrder = append(m.driverOrder, ad.ID())
+		// The default instance: same id as the driver, ambient environment.
+		// This is why one account per harness looks exactly like today.
+		m.register(registered{inst: provider.Default(ad.ID(), ad.Meta().Name), ad: ad})
 	}
 	return m
 }
 
+// register adds or replaces one instance, preserving order on replacement so a
+// configured entry that overrides a default keeps the default's position.
+func (m *Manager) register(reg registered) {
+	if _, exists := m.instances[reg.inst.ID]; !exists {
+		m.instanceOrder = append(m.instanceOrder, reg.inst.ID)
+	}
+	m.instances[reg.inst.ID] = reg
+}
+
+// ConfigureInstances installs the operator's configured provider instances,
+// on top of the defaults synthesised per adapter. An instance naming a driver
+// this build does not have is registered anyway and presents as unavailable —
+// a config written on another branch must never brick startup. Call this
+// before serving; it is not synchronised against concurrent reads.
+func (m *Manager) ConfigureInstances(instances []provider.Instance, secrets *provider.SecretStore) {
+	m.secrets = secrets
+	seen := map[string]bool{}
+	for _, inst := range instances {
+		// A configured entry may override the same driver's default instance,
+		// but never an instance of a *different* driver: {"id":"codex",
+		// "driver":"claude"} would silently delete the Codex default and break
+		// every session on it. Duplicate ids within the config are a mistake
+		// too; the first entry wins.
+		if existing, ok := m.instances[inst.ID]; ok && (existing.inst.Driver != inst.Driver || seen[inst.ID]) {
+			m.logf("provider instance %q collides with an existing %q instance; entry skipped", inst.ID, existing.inst.Driver)
+			continue
+		}
+		seen[inst.ID] = true
+		ad, known := m.drivers[inst.Driver]
+		if !known {
+			m.logf("provider instance %q names driver %q, which this build does not have; listing it as unavailable", inst.ID, inst.Driver)
+		}
+		m.register(registered{inst: inst, ad: ad})
+	}
+}
+
+// envFor materialises an instance's credential overlay: plain values from the
+// config, sensitive values from the secret store, at spawn (or probe) time.
+// A missing secret is an error, never a silent fall-through to the ambient
+// account.
+func (m *Manager) envFor(inst provider.Instance) (map[string]string, error) {
+	return inst.EnvOverlay(m.secrets)
+}
+
+// instanceFor resolves the instance a session runs under. A session created
+// before instances existed has no ProviderInstance and resolves to the default
+// instance for its harness — that is the whole migration. A session whose
+// instance has since vanished, or whose instance now names a different driver,
+// is refused legibly: resuming a work-account session against a personal
+// account would silently produce a different agent identity.
+func (m *Manager) instanceFor(meta store.SessionMeta) (registered, error) {
+	id := meta.ProviderInstance
+	if id == "" {
+		id = meta.Harness
+	}
+	reg, ok := m.instances[id]
+	if !ok {
+		return registered{}, fmt.Errorf("unknown provider instance %q", id)
+	}
+	if reg.inst.Driver != meta.Harness {
+		return registered{}, fmt.Errorf("provider instance %q now runs driver %q, but this session was created on %q", id, reg.inst.Driver, meta.Harness)
+	}
+	if reg.ad == nil {
+		return registered{}, fmt.Errorf("no %q driver in this build", reg.inst.Driver)
+	}
+	return reg, nil
+}
+
+// cleanupAdapter is the lenient sibling of instanceFor, for workspace cleanup
+// and pending restores: those paths never spawn a harness, so a session whose
+// instance has been removed from the config must still be cleanable — anything
+// stricter strands it in "cleaning" forever. The adapter may be nil.
+func (m *Manager) cleanupAdapter(meta store.SessionMeta) (adapter.Adapter, map[string]string) {
+	if reg, err := m.instanceFor(meta); err == nil {
+		if env, envErr := m.envFor(reg.inst); envErr == nil {
+			return reg.ad, env
+		}
+		return reg.ad, nil
+	}
+	return m.drivers[meta.Harness], nil
+}
+
+// resolveInstance turns a create request into an instance. The instance id
+// wins when given; otherwise the harness id names its default instance.
+func (m *Manager) resolveInstance(instanceID, harness string) (registered, error) {
+	id := instanceID
+	if id == "" {
+		id = harness
+	}
+	reg, ok := m.instances[id]
+	if !ok {
+		return registered{}, fmt.Errorf("unknown harness %q", id)
+	}
+	if harness != "" && reg.inst.Driver != harness {
+		return registered{}, fmt.Errorf("provider instance %q runs driver %q, not %q", id, reg.inst.Driver, harness)
+	}
+	if !reg.inst.Enabled {
+		return registered{}, fmt.Errorf("provider instance %q is disabled", id)
+	}
+	if reg.ad == nil {
+		return registered{}, fmt.Errorf("%s is not available: no %q driver in this build", reg.inst.DisplayName, reg.inst.Driver)
+	}
+	return reg, nil
+}
+
+// InstanceMeta is one provider instance as presented to a UI: the routing key,
+// the driver that supplies its mark and accent, and per-instance health and
+// models. Credential env never appears here — nothing about an instance's
+// environment is client-bound.
+type InstanceMeta struct {
+	ID           string               `json:"id"`
+	Driver       string               `json:"driver"`
+	DisplayName  string               `json:"displayName"`
+	Enabled      bool                 `json:"enabled"`
+	Availability adapter.Availability `json:"availability"`
+	Models       []adapter.ModelMeta  `json:"models"`
+}
+
 // Harness is one registered harness plus its current readiness, as presented
 // to a UI. Everything here comes from the adapter; the core adds nothing and
-// interprets nothing.
+// interprets nothing. The driver-level fields mirror the default instance so
+// existing clients keep working; Instances carries every account.
 type Harness struct {
 	adapter.HarnessMeta
 	Models          []adapter.ModelMeta          `json:"models"`
 	PermissionModes []adapter.PermissionModeMeta `json:"permissionModes"`
 	Availability    adapter.Availability         `json:"availability"`
+	Instances       []InstanceMeta               `json:"instances"`
 }
 
-// Harnesses lists every registered harness, available or not. An unavailable
-// harness is listed with the reason it cannot start, because a silently
-// missing harness reads as a bug.
+// Harnesses lists every registered harness, available or not, each with its
+// provider instances. An unavailable harness is listed with the reason it
+// cannot start, because a silently missing harness reads as a bug — and the
+// same goes for an instance whose driver this build has never heard of.
 func (m *Manager) Harnesses(ctx context.Context) []Harness {
-	out := make([]Harness, 0, len(m.order))
-	for _, id := range m.order {
-		ad := m.adapters[id]
-		out = append(out, Harness{
+	out := make([]Harness, 0, len(m.driverOrder))
+	seenDrivers := map[string]bool{}
+	for _, id := range m.driverOrder {
+		ad := m.drivers[id]
+		seenDrivers[id] = true
+		h := Harness{
 			HarnessMeta:     ad.Meta(),
 			Models:          ad.Models(),
 			PermissionModes: ad.PermissionModes(),
-			Availability:    m.availability(ctx, ad),
+			Instances:       m.instancesOf(ctx, id),
+		}
+		// The driver-level availability and models mirror the default
+		// instance, which is what today's UI renders; one instance being
+		// unhealthy (or offering different models) must not speak for the
+		// others, so each instance also reports its own.
+		for _, inst := range h.Instances {
+			if inst.ID == id {
+				h.Availability = inst.Availability
+				if len(inst.Models) > 0 {
+					h.Models = inst.Models
+				}
+			}
+		}
+		out = append(out, h)
+	}
+	// Instances whose driver is unknown to this build still have to be
+	// visible: they load, present as unavailable, and lose nothing.
+	for _, id := range m.instanceOrder {
+		reg := m.instances[id]
+		if seenDrivers[reg.inst.Driver] {
+			continue
+		}
+		seenDrivers[reg.inst.Driver] = true
+		out = append(out, Harness{
+			HarnessMeta:     adapter.HarnessMeta{ID: reg.inst.Driver, Name: reg.inst.Driver},
+			Models:          []adapter.ModelMeta{},
+			PermissionModes: []adapter.PermissionModeMeta{},
+			Availability:    m.availability(ctx, reg),
+			Instances:       m.instancesOf(ctx, reg.inst.Driver),
 		})
 	}
 	return out
 }
 
-// availability caches a probe result briefly, so that listing harnesses on
-// every connection does not re-run process lookups, while a user who installs
-// a harness still sees it appear without restarting.
-func (m *Manager) availability(ctx context.Context, ad adapter.Adapter) adapter.Availability {
+// instancesOf lists every instance of one driver, in registration order, with
+// independent availability and models.
+func (m *Manager) instancesOf(ctx context.Context, driver string) []InstanceMeta {
+	var out []InstanceMeta
+	for _, id := range m.instanceOrder {
+		reg := m.instances[id]
+		if reg.inst.Driver != driver {
+			continue
+		}
+		im := InstanceMeta{
+			ID:           reg.inst.ID,
+			Driver:       reg.inst.Driver,
+			DisplayName:  reg.inst.DisplayName,
+			Enabled:      reg.inst.Enabled,
+			Availability: m.availability(ctx, reg),
+		}
+		im.Models = m.modelsFor(reg, im.Availability)
+		out = append(out, im)
+	}
+	return out
+}
+
+// availability caches a probe result briefly, per instance, so that listing
+// harnesses on every connection does not re-run process lookups, while a user
+// who installs a harness still sees it appear without restarting.
+func (m *Manager) availability(ctx context.Context, reg registered) adapter.Availability {
+	if reg.ad == nil {
+		return adapter.Unavailable("This build has no " + strconv.Quote(reg.inst.Driver) + " driver. The configuration is kept and will work on a build that has it.")
+	}
+	if !reg.inst.Enabled {
+		return adapter.Unavailable(reg.inst.DisplayName + " is disabled.")
+	}
+
 	m.probeMu.Lock()
-	cached, ok := m.probes[ad.ID()]
+	cached, ok := m.probes[reg.inst.ID]
 	m.probeMu.Unlock()
 	if ok && time.Since(cached.at) < probeTTL {
 		return cached.result
 	}
 
-	result := ad.Probe(ctx)
+	env, err := m.envFor(reg.inst)
+	if err != nil {
+		// Refusing to guess: probing (or spawning) with the ambient credential
+		// in place of a missing secret would report the wrong account's health.
+		return adapter.Unavailable(err.Error())
+	}
+	result := reg.ad.Probe(ctx, env)
 
 	m.probeMu.Lock()
-	m.probes[ad.ID()] = probeResult{result: result, at: time.Now()}
+	m.probes[reg.inst.ID] = probeResult{result: result, at: time.Now()}
 	m.probeMu.Unlock()
 	return result
 }
@@ -122,38 +365,151 @@ func (m *Manager) RecheckHarnesses() {
 	m.probeMu.Lock()
 	m.probes = map[string]probeResult{}
 	m.probeMu.Unlock()
+	// Model lists go with them: a user who has just installed or upgraded a
+	// harness is asking about its catalogue as much as its readiness.
+	m.modelsMu.Lock()
+	m.models = map[string]modelResult{}
+	m.modelGen++
+	m.modelsMu.Unlock()
 	m.notifyList()
 }
 
-// Create starts a new session on the named harness.
-func (m *Manager) Create(ctx context.Context, harness, cwd, model, mode string) (*Actor, error) {
-	ad, ok := m.adapters[harness]
-	if !ok {
-		return nil, fmt.Errorf("unknown harness %q", harness)
+// expireModelsForTest ages every cached listing past its TTL. Tests use it to
+// reach the refresh path without waiting out modelTTL.
+func (m *Manager) expireModelsForTest() {
+	m.modelsMu.Lock()
+	defer m.modelsMu.Unlock()
+	for id, result := range m.models {
+		result.at = time.Now().Add(-2 * modelTTL)
+		m.models[id] = result
+	}
+}
+
+// modelsFor serves an instance's model list from cache, falling back to the
+// adapter's built-in list, and refreshes in the background when the cache is
+// missing or stale. It never blocks: asking a harness costs a process start,
+// and this runs on every connection and every session-list push.
+func (m *Manager) modelsFor(reg registered, avail adapter.Availability) []adapter.ModelMeta {
+	if reg.ad == nil {
+		return nil
+	}
+	m.modelsMu.Lock()
+	cached, ok := m.models[reg.inst.ID]
+	stale := !ok || time.Since(cached.at) > modelTTL
+	// Only one refresh per instance is in flight; the rest of the callers keep
+	// serving what is cached.
+	start := stale && !m.refreshing[reg.inst.ID] && avail.OK() && reg.inst.Enabled
+	gen := m.modelGen
+	if start {
+		m.refreshing[reg.inst.ID] = true
+	}
+	m.modelsMu.Unlock()
+
+	if start {
+		go m.refreshModels(reg, gen)
+	}
+	if len(cached.list) > 0 {
+		return cached.list
+	}
+	// Nothing learned yet — or the harness could not be asked. The adapter's
+	// own list is small and possibly dated, which is better than a picker with
+	// nothing in it.
+	return reg.ad.Models()
+}
+
+// refreshModels asks one instance's harness for its catalogue and caches the
+// answer, telling connected clients when it changed. A failure is cached too,
+// so a harness that cannot answer is not re-asked on every listing.
+func (m *Manager) refreshModels(reg registered, gen int) {
+	ctx, cancel := context.WithTimeout(context.Background(), modelRefreshTimeout)
+	defer cancel()
+
+	var list []adapter.ModelMeta
+	env, err := m.envFor(reg.inst)
+	if err == nil {
+		list, err = reg.ad.ListModels(ctx, env)
+	}
+	if err != nil {
+		m.logf("models: %s: %v", reg.inst.ID, err)
+	}
+
+	m.modelsMu.Lock()
+	defer m.modelsMu.Unlock()
+	delete(m.refreshing, reg.inst.ID)
+	// A recheck since this listing started means the answer predates whatever
+	// the user just changed. Drop it and ask again straight away, so that one
+	// click of "Check again" is enough: waiting for the next listing would
+	// leave the user staring at the fallback with no way to force the issue.
+	if gen != m.modelGen {
+		if !m.refreshing[reg.inst.ID] {
+			m.refreshing[reg.inst.ID] = true
+			current := m.modelGen
+			go m.refreshModels(reg, current)
+		}
+		return
+	}
+	previous := m.models[reg.inst.ID]
+	if err != nil {
+		// A harness that could not answer this time has not withdrawn what it
+		// said last time. Keeping the last good list means a blip does not
+		// silently downgrade a live catalogue to the built-in fallback; only
+		// the timestamp moves, so the retry waits out the TTL.
+		m.models[reg.inst.ID] = modelResult{list: previous.list, at: time.Now()}
+		return
+	}
+	m.models[reg.inst.ID] = modelResult{list: list, at: time.Now()}
+	if !sameModels(previous.list, list) && len(list) > 0 {
+		m.notifyHarnesses()
+	}
+}
+
+func sameModels(a, b []adapter.ModelMeta) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !reflect.DeepEqual(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// Create starts a new session on the named harness, under the named provider
+// instance (empty means the harness's default instance).
+func (m *Manager) Create(ctx context.Context, harness, instance, cwd, model, mode string) (*Actor, error) {
+	reg, err := m.resolveInstance(instance, harness)
+	if err != nil {
+		return nil, err
+	}
+	env, err := m.envFor(reg.inst)
+	if err != nil {
+		return nil, err
 	}
 
 	// Probe fresh here rather than trusting the cache: the answer decides
 	// whether we are about to spawn a process, and it may have changed.
-	if avail := ad.Probe(ctx); !avail.OK() {
+	if avail := reg.ad.Probe(ctx, env); !avail.OK() {
 		m.probeMu.Lock()
-		m.probes[ad.ID()] = probeResult{result: avail, at: time.Now()}
+		m.probes[reg.inst.ID] = probeResult{result: avail, at: time.Now()}
 		m.probeMu.Unlock()
-		return nil, fmt.Errorf("%s is not available: %s", ad.Meta().Name, avail.Reason)
+		return nil, fmt.Errorf("%s is not available: %s", reg.inst.DisplayName, avail.Reason)
 	}
 
 	meta := store.SessionMeta{
-		ID:        uuid.NewString(),
-		Cwd:       cwd,
-		Harness:   harness,
-		CreatedAt: proto.NowMillis(),
-		UpdatedAt: proto.NowMillis(),
-		Phase:     "idle",
+		ID:               uuid.NewString(),
+		Cwd:              cwd,
+		Harness:          reg.inst.Driver,
+		ProviderInstance: reg.inst.ID,
+		CreatedAt:        proto.NowMillis(),
+		UpdatedAt:        proto.NowMillis(),
+		Phase:            "idle",
 	}
 	if err := m.store.CreateSession(ctx, meta); err != nil {
 		return nil, err
 	}
 
-	a, err := Start(ctx, m.store, ad, meta, model, mode, m.logf)
+	a, err := Start(ctx, m.store, reg.ad, meta, model, mode, env, m.logf)
 	if err != nil {
 		_ = m.store.DeleteSession(ctx, meta.ID)
 		return nil, err
@@ -168,6 +524,8 @@ func (m *Manager) Create(ctx context.Context, harness, cwd, model, mode string) 
 type CreateProjectOptions struct {
 	ProjectID string
 	Harness   string
+	// Instance names the provider instance; empty means the harness's default.
+	Instance  string
 	Model     string
 	Mode      string
 	Effort    string
@@ -211,12 +569,16 @@ func (m *Manager) CreateProject(ctx context.Context, o CreateProjectOptions) (*A
 	if o.Workspace != "local" && o.Workspace != "managed" {
 		return nil, fmt.Errorf("unknown workspace mode %q", o.Workspace)
 	}
-	ad, ok := m.adapters[o.Harness]
-	if !ok {
-		return nil, fmt.Errorf("unknown harness %q", o.Harness)
+	reg, err := m.resolveInstance(o.Instance, o.Harness)
+	if err != nil {
+		return nil, err
 	}
-	if avail := ad.Probe(ctx); !avail.OK() {
-		return nil, fmt.Errorf("%s is not available: %s", ad.Meta().Name, avail.Reason)
+	env, err := m.envFor(reg.inst)
+	if err != nil {
+		return nil, err
+	}
+	if avail := reg.ad.Probe(ctx, env); !avail.OK() {
+		return nil, fmt.Errorf("%s is not available: %s", reg.inst.DisplayName, avail.Reason)
 	}
 
 	// Acquiring a checkout is a check followed by a write, and two websocket
@@ -268,11 +630,11 @@ func (m *Manager) CreateProject(ctx context.Context, o CreateProjectOptions) (*A
 		}
 	}
 
-	meta := store.SessionMeta{ID: uuid.NewString(), Cwd: cwd, Harness: o.Harness, CreatedAt: proto.NowMillis(), UpdatedAt: proto.NowMillis(), Phase: "creating", ProjectID: p.ID, Branch: o.Branch, Model: o.Model, Mode: o.Mode, Effort: o.Effort, WorkspaceMode: o.Workspace, ProvisionScript: relHook(p.Root, provision), DeprovisionScript: relHook(p.Root, deprovision)}
+	meta := store.SessionMeta{ID: uuid.NewString(), Cwd: cwd, Harness: reg.inst.Driver, ProviderInstance: reg.inst.ID, CreatedAt: proto.NowMillis(), UpdatedAt: proto.NowMillis(), Phase: "creating", ProjectID: p.ID, Branch: o.Branch, Model: o.Model, Mode: o.Mode, Effort: o.Effort, WorkspaceMode: o.Workspace, ProvisionScript: relHook(p.Root, provision), DeprovisionScript: relHook(p.Root, deprovision)}
 	if err := m.store.CreateSession(ctx, meta); err != nil {
 		return nil, err
 	}
-	a := StartPending(m.store, ad, meta, m.logf)
+	a := StartPending(m.store, reg.ad, meta, env, m.logf)
 	m.adopt(a)
 	m.notifyList()
 	go m.provision(meta, p, a)
@@ -418,11 +780,8 @@ func (m *Manager) Cleanup(ctx context.Context, id string) error {
 		live.Dispose("cleaning workspace")
 	}
 	_ = m.store.SetPhase(ctx, id, "cleaning")
-	ad, ok := m.adapters[meta.Harness]
-	if !ok {
-		return fmt.Errorf("unknown harness %q", meta.Harness)
-	}
-	a, err := RestorePending(ctx, m.store, ad, meta, m.logf)
+	ad, env := m.cleanupAdapter(meta)
+	a, err := RestorePending(ctx, m.store, ad, meta, env, m.logf)
 	if err != nil {
 		return err
 	}
@@ -458,11 +817,11 @@ func (m *Manager) Get(ctx context.Context, id string) (*Actor, error) {
 	if meta.Phase == "closed" {
 		a, err = RestoreClosed(ctx, m.store, meta, m.logf)
 	} else if meta.Phase == "creating" || meta.Phase == "provisioning" || meta.Phase == "provision_failed" || meta.Phase == "cleaning" || meta.Phase == "cleanup_failed" {
-		ad, ok := m.adapters[meta.Harness]
-		if !ok {
-			return nil, fmt.Errorf("unknown harness %q", meta.Harness)
-		}
-		a, err = RestorePending(ctx, m.store, ad, meta, m.logf)
+		// Lenient on purpose: a pending session must stay attachable (and
+		// cleanable) even if its instance has gone from the config. Activation
+		// is where a missing adapter is refused.
+		ad, env := m.cleanupAdapter(meta)
+		a, err = RestorePending(ctx, m.store, ad, meta, env, m.logf)
 		if err == nil && (meta.Phase == "creating" || meta.Phase == "provisioning") {
 			_ = m.store.SetPhase(ctx, meta.ID, "provision_failed")
 			_ = a.Emit(ctx, proto.Emit(proto.WorkspaceFailed, proto.WorkspaceFailedPayload{Hook: "provision", Error: "server restarted while provisioning; retry is safe"}))
@@ -475,11 +834,19 @@ func (m *Manager) Get(ctx context.Context, id string) (*Actor, error) {
 			m.notifyList()
 		}
 	} else {
-		ad, ok := m.adapters[meta.Harness]
-		if !ok {
-			return nil, fmt.Errorf("unknown harness %q", meta.Harness)
+		reg, regErr := m.instanceFor(meta)
+		if regErr != nil {
+			return nil, regErr
 		}
-		a, err = Resume(ctx, m.store, ad, meta, m.logf)
+		// Resume reuses the instance the session was created under: its env is
+		// re-materialised, so the same account backs the same conversation. A
+		// missing secret refuses the resume rather than falling through to the
+		// ambient account.
+		env, envErr := m.envFor(reg.inst)
+		if envErr != nil {
+			return nil, envErr
+		}
+		a, err = Resume(ctx, m.store, reg.ad, meta, env, m.logf)
 	}
 	if err != nil {
 		return nil, err
@@ -621,11 +988,8 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	if err := m.store.SetPhase(ctx, id, "cleaning"); err != nil {
 		return err
 	}
-	ad, ok := m.adapters[meta.Harness]
-	if !ok {
-		return fmt.Errorf("unknown harness %q", meta.Harness)
-	}
-	a, err := RestorePending(ctx, m.store, ad, meta, m.logf)
+	ad, env := m.cleanupAdapter(meta)
+	a, err := RestorePending(ctx, m.store, ad, meta, env, m.logf)
 	if err != nil {
 		return err
 	}
@@ -698,6 +1062,34 @@ func (m *Manager) UnsubscribeList(id string) {
 	m.listMu.Lock()
 	delete(m.listSub, id)
 	m.listMu.Unlock()
+}
+
+// SubscribeHarnesses registers for harness changes: a background model
+// listing landing, and nothing else today.
+func (m *Manager) SubscribeHarnesses() (string, chan struct{}) {
+	id := uuid.NewString()
+	ch := make(chan struct{}, 1)
+	m.listMu.Lock()
+	m.harnessSub[id] = ch
+	m.listMu.Unlock()
+	return id, ch
+}
+
+func (m *Manager) UnsubscribeHarnesses(id string) {
+	m.listMu.Lock()
+	delete(m.harnessSub, id)
+	m.listMu.Unlock()
+}
+
+func (m *Manager) notifyHarnesses() {
+	m.listMu.Lock()
+	defer m.listMu.Unlock()
+	for _, ch := range m.harnessSub {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // NotifyList wakes every list subscriber; used after a title or phase change.

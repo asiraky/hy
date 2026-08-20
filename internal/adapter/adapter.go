@@ -6,6 +6,8 @@ package adapter
 import (
 	"context"
 	"encoding/json"
+	"sort"
+	"strings"
 
 	"github.com/asiraky/hy/internal/proto"
 )
@@ -17,6 +19,12 @@ type CreateOptions struct {
 	Model     string
 	Mode      string
 	Effort    string
+
+	// Env is the provider instance's credential overlay, applied over the
+	// ambient environment when the harness process spawns. It is the entire
+	// multi-account mechanism: adapters never learn what an instance is, they
+	// just export these variables. Nil means ambient credentials.
+	Env map[string]string
 
 	// Resume asks the harness to continue an existing conversation rather
 	// than start a fresh one, so restarting the server does not amnesia the
@@ -41,15 +49,26 @@ type PromptInput struct {
 type Adapter interface {
 	ID() string
 	Meta() HarnessMeta
+	// Models is the built-in fallback list, used only until (or unless) a live
+	// ListModels answer arrives. It is deliberately small: the real list comes
+	// from the harness.
 	Models() []ModelMeta
 	// PermissionModes returns the permission presets this harness offers, most
 	// permissive last. The id is opaque to the server and the UI; only the
 	// adapter interprets it.
 	PermissionModes() []PermissionModeMeta
-	// Probe reports whether this harness can start right now. It must be
+	// ListModels asks the harness which models it offers right now, under the
+	// given instance's environment overlay (nil means ambient). It spawns the
+	// harness, so it is slow and may fail; callers cache the answer and fall
+	// back to Models. An adapter that cannot ask returns an error rather than
+	// a guess.
+	ListModels(ctx context.Context, env map[string]string) ([]ModelMeta, error)
+	// Probe reports whether this harness can start right now, under the given
+	// provider instance's environment overlay (nil means ambient). It must be
 	// cheap, must not mutate anything, and must never block for long: it runs
-	// at startup and whenever a UI asks to re-check.
-	Probe(ctx context.Context) Availability
+	// at startup and whenever a UI asks to re-check. It runs per instance, so
+	// two accounts can report independent health.
+	Probe(ctx context.Context, env map[string]string) Availability
 	CreateSession(ctx context.Context, host HostServices, o CreateOptions) (Session, error)
 }
 
@@ -65,11 +84,39 @@ type HarnessMeta struct {
 	DocsURL string `json:"docsUrl,omitempty"`
 }
 
-// ModelMeta is a selectable model.
+// ModelMeta is a selectable model, as the harness itself describes it.
+//
+// Everything but Group is the harness's own answer: hy does not know what
+// models exist, what they are called, or which one is the default. Group is
+// the adapter's one presentation call — which of its models a UI should fold
+// away as superseded — because no harness reports that today.
 type ModelMeta struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
+	// Version names the generation behind the label ("Opus 5 with 1M
+	// context", "5.6"), so a row can say which Opus it is.
+	Version string `json:"version,omitempty"`
+	// Description is the harness's one-line summary of what the model is for.
+	Description string `json:"description,omitempty"`
+	// Resolves is the concrete model an alias stands for, so a UI can say what
+	// "Default" actually runs.
+	Resolves string `json:"resolves,omitempty"`
+	// Group is "" for a current model and GroupLegacy for a superseded one a
+	// UI should collapse. Any other value is a group name a UI renders
+	// verbatim.
+	Group string `json:"group,omitempty"`
+	// Default marks the model the harness itself would pick. Exactly one row
+	// should carry it; a UI preselects that row rather than inventing a
+	// "Default" entry of its own.
+	Default bool `json:"default,omitempty"`
+	// Efforts are the reasoning levels this model accepts, most modest first.
+	// They are per model — one harness offers "ultra" on its newest models
+	// only — so an effort control reads them rather than assuming a fixed set.
+	Efforts []string `json:"efforts,omitempty"`
 }
+
+// GroupLegacy marks a model kept for continuity rather than offered first.
+const GroupLegacy = "legacy"
 
 // PermissionModeMeta is one permission preset a harness offers. Like
 // ModelMeta, it travels from the adapter to the UI as opaque data: the server
@@ -123,6 +170,35 @@ func Unavailable(reason string, remedy ...Remedy) Availability {
 }
 
 func (a Availability) OK() bool { return a.State == StateReady }
+
+// MergeEnv applies an instance's overlay onto a base environment, replacing
+// any variable the overlay names. Overlay keys are applied in sorted order so
+// the result is deterministic. This is the whole credential mechanism: no
+// value is ever handed to an SDK directly.
+func MergeEnv(base []string, overlay map[string]string) []string {
+	if len(overlay) == 0 {
+		return base
+	}
+	out := make([]string, 0, len(base)+len(overlay))
+	for _, entry := range base {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok {
+			if _, shadowed := overlay[name]; shadowed {
+				continue
+			}
+		}
+		out = append(out, entry)
+	}
+	names := make([]string, 0, len(overlay))
+	for name := range overlay {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		out = append(out, name+"="+overlay[name])
+	}
+	return out
+}
 
 // Session is one live harness process.
 type Session interface {

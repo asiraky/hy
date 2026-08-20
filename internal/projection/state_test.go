@@ -38,6 +38,23 @@ func TestHarnessInitiatedTurnHasNoPromptItem(t *testing.T) {
 	}
 }
 
+// A turn carries when it started and finished, from the events' own clock:
+// the UI labels a folded turn "Worked for 34s" from these. Mirrored by
+// web/src/apply.test.ts.
+func TestTurnRecordsItsTimestamps(t *testing.T) {
+	s := New("s1")
+	started := event(t, 1, proto.TurnStarted, proto.TurnStartedPayload{TurnID: "t1", Prompt: "go"})
+	started.Timestamp = 1000
+	s.Apply(started)
+	finished := event(t, 2, proto.TurnFinished, proto.TurnFinishedPayload{TurnID: "t1", StopReason: proto.StopEndTurn})
+	finished.Timestamp = 35000
+	s.Apply(finished)
+
+	if s.Turns[0].StartedAt != 1000 || s.Turns[0].FinishedAt != 35000 {
+		t.Fatalf("turn timestamps = %d/%d, want 1000/35000", s.Turns[0].StartedAt, s.Turns[0].FinishedAt)
+	}
+}
+
 // A prompted turn still records the prompt as a timeline item.
 func TestPromptedTurnKeepsItsPromptItem(t *testing.T) {
 	s := New("s1")

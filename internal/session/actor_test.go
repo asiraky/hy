@@ -22,8 +22,14 @@ import (
 // fakeAdapter emits scripted events, so the seam can be tested without a real
 // harness process.
 type fakeAdapter struct {
-	mu   sync.Mutex
-	last *fakeSession
+	mu        sync.Mutex
+	last      *fakeSession
+	live      []adapter.ModelMeta
+	liveErr   error
+	listCalls int
+	// listGate, when set, holds the listing open so a test can prove the
+	// caller did not wait for it.
+	listGate chan struct{}
 }
 
 func (f *fakeAdapter) ID() string { return "fake" }
@@ -33,14 +39,40 @@ func (f *fakeAdapter) Meta() adapter.HarnessMeta {
 }
 
 func (f *fakeAdapter) Models() []adapter.ModelMeta {
-	return []adapter.ModelMeta{{ID: "", Label: "Default"}}
+	return []adapter.ModelMeta{{ID: "fallback", Label: "Fallback", Default: true}}
+}
+
+// ListModels stands in for a harness that can be asked. By default it refuses,
+// so tests that care about nothing else never spawn a background listing;
+// live and liveErr let a test drive both outcomes.
+func (f *fakeAdapter) ListModels(ctx context.Context, env map[string]string) ([]adapter.ModelMeta, error) {
+	f.mu.Lock()
+	gate := f.listGate
+	f.listCalls++
+	f.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.liveErr != nil {
+		return nil, f.liveErr
+	}
+	if f.live == nil {
+		return nil, errors.New("this fake cannot list models")
+	}
+	return f.live, nil
 }
 
 func (f *fakeAdapter) PermissionModes() []adapter.PermissionModeMeta {
 	return []adapter.PermissionModeMeta{{ID: "manual", Label: "Manual", Default: true}}
 }
 
-func (f *fakeAdapter) Probe(ctx context.Context) adapter.Availability {
+func (f *fakeAdapter) Probe(ctx context.Context, env map[string]string) adapter.Availability {
 	return adapter.Ready(nil)
 }
 
@@ -89,7 +121,7 @@ func (s *fakeSession) currentMode() string {
 	defer s.mu.Unlock()
 	return s.mode
 }
-func (s *fakeSession) Events() <-chan proto.Emission    { return s.events }
+func (s *fakeSession) Events() <-chan proto.Emission { return s.events }
 func (s *fakeSession) Close() error {
 	s.closeOnce.Do(func() {
 		if s.closeStarted != nil {
@@ -114,7 +146,7 @@ func newTestActor(t *testing.T) (*Actor, *fakeAdapter, *store.Store) {
 
 	fa := &fakeAdapter{}
 	mgr := NewManager(st, func(string, ...any) {}, fa)
-	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	actor, err := mgr.Create(context.Background(), "fake", "", t.TempDir(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -710,7 +742,7 @@ func TestResumeFinishesInterruptedTurnAndCancelsPendingPermission(t *testing.T) 
 
 	fa := &fakeAdapter{}
 	mgr := NewManager(st, func(string, ...any) {}, fa)
-	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	actor, err := mgr.Create(context.Background(), "fake", "", t.TempDir(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -760,7 +792,7 @@ func TestResumeContinuesTheInterruptedWork(t *testing.T) {
 
 	fa := &fakeAdapter{}
 	mgr := NewManager(st, func(string, ...any) {}, fa)
-	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	actor, err := mgr.Create(context.Background(), "fake", "", t.TempDir(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -828,7 +860,7 @@ func TestContinueRestartsWorkAfterTheAutomaticTriesRunOut(t *testing.T) {
 
 	fa := &fakeAdapter{}
 	mgr := NewManager(st, func(string, ...any) {}, fa)
-	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	actor, err := mgr.Create(context.Background(), "fake", "", t.TempDir(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -919,7 +951,7 @@ func TestStartupResumesInterruptedWorkWithoutAnAttach(t *testing.T) {
 
 	fa := &fakeAdapter{}
 	mgr := NewManager(st, func(string, ...any) {}, fa)
-	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	actor, err := mgr.Create(context.Background(), "fake", "", t.TempDir(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -963,7 +995,7 @@ func TestRepeatedlyInterruptedTurnStopsRecoveringItself(t *testing.T) {
 
 	fa := &fakeAdapter{}
 	mgr := NewManager(st, func(string, ...any) {}, fa)
-	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	actor, err := mgr.Create(context.Background(), "fake", "", t.TempDir(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1032,7 +1064,7 @@ func TestClosedSessionRemainsAttachableWithoutHarness(t *testing.T) {
 	mgr := NewManager(st, func(string, ...any) {}, fa)
 	defer mgr.Shutdown()
 
-	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	actor, err := mgr.Create(context.Background(), "fake", "", t.TempDir(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1067,7 +1099,7 @@ func TestGetCannotResumeWhileCloseIsInProgress(t *testing.T) {
 	fa := &fakeAdapter{}
 	mgr := NewManager(st, func(string, ...any) {}, fa)
 	defer mgr.Shutdown()
-	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	actor, err := mgr.Create(context.Background(), "fake", "", t.TempDir(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

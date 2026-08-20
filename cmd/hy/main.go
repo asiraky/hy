@@ -25,9 +25,11 @@ import (
 	"github.com/asiraky/hy/internal/endpoints"
 	"github.com/asiraky/hy/internal/netinfo"
 	"github.com/asiraky/hy/internal/overlay"
+	"github.com/asiraky/hy/internal/provider"
 	"github.com/asiraky/hy/internal/server"
 	"github.com/asiraky/hy/internal/session"
 	"github.com/asiraky/hy/internal/store"
+	"github.com/asiraky/hy/internal/userconfig"
 )
 
 // web/dist is embedded when it has been built. The directory always contains a
@@ -81,6 +83,11 @@ func main() {
 		codexapp.New(*codexBin),
 	)
 	defer mgr.Shutdown()
+
+	// Provider instances: configured accounts layered over the default
+	// (ambient-credential) instance each adapter already has. A broken or
+	// unknowable config degrades to defaults; it never stops the server.
+	configureProviders(mgr, logf)
 
 	// The config stored against a project is a cache of the file in the repo,
 	// so the file wins on startup: pulling a branch that changes .hy/project.json
@@ -206,6 +213,38 @@ func main() {
 	defer cancel()
 	_ = httpSrv.Shutdown(ctx)
 	mgr.Shutdown()
+}
+
+// configureProviders loads provider instances from the user config, sweeping
+// any literal sensitive values into the secret store (and rewriting the config
+// so no secret stays on disk in it), then installs them on the manager.
+func configureProviders(mgr *session.Manager, logf func(string, ...any)) {
+	cfg, err := userconfig.Load()
+	if err != nil {
+		logf("load user config: %v (provider instances skipped)", err)
+		return
+	}
+	secrets, err := provider.OpenSecretStore()
+	if err != nil {
+		logf("open secret store: %v (provider instances skipped)", err)
+		return
+	}
+	instances, rewritten, changed, err := provider.LoadInstances(cfg.Providers, secrets, logf)
+	if err != nil {
+		logf("load provider instances: %v (provider instances skipped)", err)
+		return
+	}
+	if changed {
+		cfg.Providers = rewritten
+		if _, err := userconfig.Save(cfg); err != nil {
+			logf("rewrite user config after sweeping secrets: %v", err)
+		}
+	}
+	// Clearing a variable's sensitive flag deletes its stored secret.
+	if err := secrets.Sync(instances); err != nil {
+		logf("sync secret store: %v", err)
+	}
+	mgr.ConfigureInstances(instances, secrets)
 }
 
 // watchProxy keeps the guard's view of any reverse proxy current.

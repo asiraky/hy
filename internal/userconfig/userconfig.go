@@ -24,6 +24,12 @@ type Config struct {
 	BranchFormat string `json:"branchFormat,omitempty"`
 	// SuggestIssues disables the `gh` lookup for people who do not use it.
 	SuggestIssues *bool `json:"suggestIssues,omitempty"`
+	// Providers declares provider instances — configured accounts for the
+	// harness adapters. Entries are held raw and written back verbatim: an
+	// entry naming a driver this build has never heard of must survive a
+	// load/save cycle untouched, so a config written on another branch is
+	// never destroyed. internal/provider parses them.
+	Providers []json.RawMessage `json:"providers,omitempty"`
 }
 
 func Default() Config {
