@@ -90,16 +90,18 @@ export function NewSession({
     ? chosenModel
     : (project?.config.defaults.model ?? "");
   // Modes are the selected harness's own presets, repopulated when the harness
-  // changes — the same shape as the model picker. A choice that does not exist
-  // on the new harness falls back to the project default, then to the
-  // harness-declared default.
+  // changes — the same shape as the model picker. Only an expressed preference
+  // (picked here, or a project default) is sent; otherwise the mode stays ""
+  // so the harness's own configured default wins rather than being overridden
+  // by an explicit id.
   const modes = selected?.permissionModes ?? [];
   const mode = modes.some((m) => m.id === chosenMode)
     ? chosenMode
     : modes.some((m) => m.id === project?.config.defaults.mode)
       ? (project?.config.defaults.mode ?? "")
-      : (modes.find((m) => m.default)?.id ?? modes[0]?.id ?? "");
-  const modeMeta = modes.find((m) => m.id === mode);
+      : "";
+  const displayModeId = mode || (modes.find((m) => m.default)?.id ?? modes[0]?.id ?? "");
+  const modeMeta = modes.find((m) => m.id === displayModeId);
   // Typing a branch name is itself the instruction to create a worktree, so it
   // outranks the project default; attaching overrides both and the server
   // decides the mode from the path.
@@ -276,7 +278,7 @@ export function NewSession({
             {modes.length > 0 && (
               <div className="space-y-1.5">
                 <Label htmlFor="new-session-mode">Permissions</Label>
-                <Select value={mode} onValueChange={setChosenMode}>
+                <Select value={displayModeId} onValueChange={setChosenMode}>
                   <SelectTrigger
                     id="new-session-mode"
                     className={cn("w-full", modeMeta?.danger && "text-destructive")}

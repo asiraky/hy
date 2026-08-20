@@ -166,8 +166,9 @@ type sidecarConfig struct {
 	Cwd            string `json:"cwd"`
 	Model          string `json:"model,omitempty"`
 	PermissionMode string `json:"permissionMode,omitempty"`
-	// AllowDangerouslySkipPermissions is the SDK's second opt-in: setting
-	// permissionMode to bypassPermissions alone is rejected without it.
+	// AllowDangerouslySkipPermissions is the SDK's second opt-in: without it,
+	// bypassPermissions is rejected both at start and on a later
+	// setPermissionMode. It permits the mode; it does not enable it.
 	AllowDangerouslySkipPermissions bool   `json:"allowDangerouslySkipPermissions,omitempty"`
 	Effort                          string `json:"effort,omitempty"`
 	// SessionID and Resume are mutually exclusive, as the SDK requires: one
@@ -195,9 +196,12 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 		Cwd:            o.Cwd,
 		Model:          o.Model,
 		PermissionMode: o.Mode,
-		// Bypassing is a deliberate two-key turn: the mode alone is rejected
-		// by the SDK. The confirmation happened in the UI before it got here.
-		AllowDangerouslySkipPermissions: o.Mode == "bypassPermissions",
+		// Always allowed as an *option* (the CLI's
+		// --allow-dangerously-skip-permissions semantics), never enabled by it:
+		// the SDK rejects bypassPermissions — at start or via a mid-session
+		// setPermissionMode — unless this was set at launch. hy's own gate is
+		// the confirmation the UI requires before any danger mode.
+		AllowDangerouslySkipPermissions: true,
 		Effort:                          o.Effort,
 		ClaudePath:                      r.claudePath,
 	}

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -563,7 +564,12 @@ func (a *Actor) handle(c command) (stop bool) {
 			c.reply <- cmdResult{err: errors.New("this harness cannot change permission mode mid-session")}
 			return false
 		}
-		if err := switcher.SetMode(ctx, c.mode); err != nil {
+		// Bounded: this is a round-trip to the harness from inside the actor
+		// loop, and a wedged process must not stall the loop forever.
+		modeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		err := switcher.SetMode(modeCtx, c.mode)
+		cancel()
+		if err != nil {
 			c.reply <- cmdResult{err: err}
 			return false
 		}

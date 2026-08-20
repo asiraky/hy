@@ -121,8 +121,9 @@ const session = query({
     canUseTool,
     ...(config.model ? { model: config.model } : {}),
     ...(config.permissionMode ? { permissionMode: config.permissionMode } : {}),
-    // The SDK's deliberate second opt-in for bypassPermissions; the host sets
-    // it only for that mode, after the human confirmed in the UI.
+    // The SDK's deliberate second opt-in for bypassPermissions. It permits the
+    // mode (at start or via a later setPermissionMode) without enabling it;
+    // the host's UI confirms with the human before ever selecting bypass.
     ...(config.allowDangerouslySkipPermissions ? { allowDangerouslySkipPermissions: true } : {}),
     ...(config.effort ? { effort: config.effort } : {}),
     // Mutually exclusive by SDK contract: sessionId names a new conversation,
