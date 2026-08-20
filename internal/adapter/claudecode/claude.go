@@ -75,6 +75,20 @@ func (a *Adapter) Models() []adapter.ModelMeta {
 	}
 }
 
+// PermissionModes are the Agent SDK's PermissionMode values, verbatim: the id
+// is what the sidecar passes as `permissionMode`. The SDK spells the manual
+// mode `default` (the CLI alias `manual` is CLI-only), and it is what hy sends.
+func (a *Adapter) PermissionModes() []adapter.PermissionModeMeta {
+	return []adapter.PermissionModeMeta{
+		{ID: "default", Label: "Manual", Description: "Ask before every edit, command, and network call", Default: true},
+		{ID: "plan", Label: "Plan", Description: "Read and analyze only; no changes"},
+		{ID: "acceptEdits", Label: "Accept edits", Description: "Auto-accept file edits; still ask for commands"},
+		{ID: "auto", Label: "Auto", Description: "A classifier approves routine actions; ask on risk"},
+		{ID: "dontAsk", Label: "Pre-approved only", Description: "Never prompt; deny anything not already allowed"},
+		{ID: "bypassPermissions", Label: "Bypass (yolo)", Description: "Skip all permission checks", Danger: true},
+	}
+}
+
 // Probe reports whether a Claude session could start right now.
 func (a *Adapter) Probe(ctx context.Context) adapter.Availability {
 	_, avail := a.resolve(ctx)
@@ -152,7 +166,11 @@ type sidecarConfig struct {
 	Cwd            string `json:"cwd"`
 	Model          string `json:"model,omitempty"`
 	PermissionMode string `json:"permissionMode,omitempty"`
-	Effort         string `json:"effort,omitempty"`
+	// AllowDangerouslySkipPermissions is the SDK's second opt-in: without it,
+	// bypassPermissions is rejected both at start and on a later
+	// setPermissionMode. It permits the mode; it does not enable it.
+	AllowDangerouslySkipPermissions bool   `json:"allowDangerouslySkipPermissions,omitempty"`
+	Effort                          string `json:"effort,omitempty"`
 	// SessionID and Resume are mutually exclusive, as the SDK requires: one
 	// names a new conversation, the other continues an existing one.
 	SessionID  string `json:"sessionId,omitempty"`
@@ -178,8 +196,14 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 		Cwd:            o.Cwd,
 		Model:          o.Model,
 		PermissionMode: o.Mode,
-		Effort:         o.Effort,
-		ClaudePath:     r.claudePath,
+		// Always allowed as an *option* (the CLI's
+		// --allow-dangerously-skip-permissions semantics), never enabled by it:
+		// the SDK rejects bypassPermissions — at start or via a mid-session
+		// setPermissionMode — unless this was set at launch. hy's own gate is
+		// the confirmation the UI requires before any danger mode.
+		AllowDangerouslySkipPermissions: true,
+		Effort:                          o.Effort,
+		ClaudePath:                      r.claudePath,
 	}
 	// We own session identity: the same id names the conversation on create
 	// and resumes it later, so a server restart continues rather than starting
@@ -276,6 +300,14 @@ func (s *session) Prompt(ctx context.Context, in adapter.PromptInput) error {
 
 func (s *session) Cancel(ctx context.Context) error {
 	return s.conn.Notify("interrupt", map[string]any{})
+}
+
+// SetMode switches the permission mode mid-session via the SDK's
+// setPermissionMode, which needs no restart in streaming input mode. It is a
+// request, not a notification, so a mode the harness refuses (managed settings
+// can disable bypass and auto) comes back as a legible error.
+func (s *session) SetMode(ctx context.Context, mode string) error {
+	return s.conn.Call(ctx, "setPermissionMode", map[string]any{"mode": mode}, nil)
 }
 
 // Close tears down the bridge. Closing stdin is the primary signal: the

@@ -100,6 +100,11 @@ type sessionArgs struct {
 	SessionID string `json:"sessionId"`
 }
 
+type setModeArgs struct {
+	SessionID string `json:"sessionId"`
+	Mode      string `json:"mode"`
+}
+
 type resolveArgs struct {
 	SessionID string `json:"sessionId"`
 	RequestID string `json:"requestId"`

@@ -210,6 +210,21 @@ export interface ModelMeta {
   label: string;
 }
 
+/**
+ * One permission preset a harness offers. The id is opaque here: only the
+ * adapter that declared it knows what it maps onto (Claude's single enum,
+ * Codex's approval-policy × sandbox pair, or whatever a future harness has).
+ */
+export interface PermissionModeMeta {
+  id: string;
+  label: string;
+  description?: string;
+  /** Render with a warning treatment and confirm before entering. */
+  danger?: boolean;
+  /** Selected when the user has expressed no preference. */
+  default?: boolean;
+}
+
 export interface Remedy {
   text: string;
   url?: string;
@@ -234,6 +249,7 @@ export interface HarnessMeta {
   accent: string;
   docsUrl?: string;
   models: ModelMeta[];
+  permissionModes: PermissionModeMeta[];
   availability: Availability;
 }
 

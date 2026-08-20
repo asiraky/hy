@@ -325,12 +325,38 @@ export function ProjectSettings({
                     </SelectContent>
                   </Select>
 
-                  <Input
-                    value={cfg.defaults.mode ?? ""}
-                    onChange={(e) => defaults({ mode: e.target.value })}
-                    placeholder="Permission/runtime mode"
-                    aria-label="Permission or runtime mode"
-                  />
+                  {/* Modes belong to the default harness; the list follows it. */}
+                  <Select
+                    value={cfg.defaults.mode || "default"}
+                    onValueChange={(v) => defaults({ mode: v === "default" ? "" : v })}
+                  >
+                    <SelectTrigger aria-label="Default permission mode" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default">Default permissions</SelectItem>
+                      {(() => {
+                        const modes =
+                          harnesses.find((h) => h.id === (cfg.defaults.harness ?? ""))
+                            ?.permissionModes ?? [];
+                        const items = modes.map((m) => (
+                          <SelectItem key={m.id} value={m.id}>
+                            {m.label}
+                          </SelectItem>
+                        ));
+                        // A saved mode the current harness list does not know
+                        // still renders, verbatim, rather than vanishing.
+                        if (cfg.defaults.mode && !modes.some((m) => m.id === cfg.defaults.mode)) {
+                          items.push(
+                            <SelectItem key={cfg.defaults.mode} value={cfg.defaults.mode}>
+                              {cfg.defaults.mode}
+                            </SelectItem>,
+                          );
+                        }
+                        return items;
+                      })()}
+                    </SelectContent>
+                  </Select>
 
                   <Select
                     value={cfg.defaults.workspace ?? "local"}

@@ -36,6 +36,10 @@ func (f *fakeAdapter) Models() []adapter.ModelMeta {
 	return []adapter.ModelMeta{{ID: "", Label: "Default"}}
 }
 
+func (f *fakeAdapter) PermissionModes() []adapter.PermissionModeMeta {
+	return []adapter.PermissionModeMeta{{ID: "manual", Label: "Manual", Default: true}}
+}
+
 func (f *fakeAdapter) Probe(ctx context.Context) adapter.Availability {
 	return adapter.Ready(nil)
 }
@@ -61,6 +65,9 @@ type fakeSession struct {
 	closeOnce    sync.Once
 	closeStarted chan struct{}
 	closeRelease <-chan struct{}
+
+	mu   sync.Mutex
+	mode string
 }
 
 func (s *fakeSession) Prompt(ctx context.Context, in adapter.PromptInput) error {
@@ -68,6 +75,20 @@ func (s *fakeSession) Prompt(ctx context.Context, in adapter.PromptInput) error 
 	return nil
 }
 func (s *fakeSession) Cancel(ctx context.Context) error { return nil }
+func (s *fakeSession) SetMode(ctx context.Context, mode string) error {
+	if mode == "rejected" {
+		return errors.New("the harness refused this mode")
+	}
+	s.mu.Lock()
+	s.mode = mode
+	s.mu.Unlock()
+	return nil
+}
+func (s *fakeSession) currentMode() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mode
+}
 func (s *fakeSession) Events() <-chan proto.Emission    { return s.events }
 func (s *fakeSession) Close() error {
 	s.closeOnce.Do(func() {
@@ -101,6 +122,40 @@ func newTestActor(t *testing.T) (*Actor, *fakeAdapter, *store.Store) {
 
 	waitFor(t, func() bool { return actor.Head() >= 1 }) // session.created landed
 	return actor, fa, st
+}
+
+// TestSetModeSwitchesHarnessAndRecordsEvent covers the mid-session switch: the
+// harness is told, and the change lands in the log as session.config_changed
+// so every presenter's projection follows.
+func TestSetModeSwitchesHarnessAndRecordsEvent(t *testing.T) {
+	actor, fa, _ := newTestActor(t)
+	ctx := context.Background()
+
+	if err := actor.SetMode(ctx, "acceptEdits"); err != nil {
+		t.Fatal(err)
+	}
+	if got := fa.session().currentMode(); got != "acceptEdits" {
+		t.Fatalf("harness mode = %q, want acceptEdits", got)
+	}
+	state, err := actor.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Mode != "acceptEdits" {
+		t.Fatalf("projection mode = %q, want acceptEdits", state.Mode)
+	}
+
+	// A refused mode is a legible error and leaves the recorded mode alone.
+	if err := actor.SetMode(ctx, "rejected"); err == nil {
+		t.Fatal("expected an error for a mode the harness refuses")
+	}
+	state, err = actor.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Mode != "acceptEdits" {
+		t.Fatalf("projection mode after refusal = %q, want acceptEdits", state.Mode)
+	}
 }
 
 func waitFor(t *testing.T, cond func() bool) {

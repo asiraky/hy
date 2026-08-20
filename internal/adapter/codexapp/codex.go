@@ -82,7 +82,67 @@ func (a *Adapter) Models() []adapter.ModelMeta {
 	}
 }
 
+// PermissionModes are hy's presets over Codex's two orthogonal axes (approval
+// policy × sandbox) plus its reviewer selector. The ids are adapter-internal;
+// modeSettings maps them onto the app-server protocol. Codex has no single
+// "permission mode" — pretending it does would delete the modes that are the
+// point, so each preset pins every axis explicitly.
+func (a *Adapter) PermissionModes() []adapter.PermissionModeMeta {
+	return []adapter.PermissionModeMeta{
+		{ID: "untrusted", Label: "Manual", Description: "Ask before all but trusted read-only commands"},
+		{ID: "read-only", Label: "Plan", Description: "Read and analyze only; ask to go further"},
+		{ID: "on-request", Label: "Ask when needed", Description: "Write in the workspace; the model asks when it needs more", Default: true},
+		{ID: "auto-review", Label: "Auto", Description: "A reviewer subagent approves or denies escalations"},
+		{ID: "sandboxed-auto", Label: "No prompts (sandboxed)", Description: "Never ask; the sandbox contains the damage"},
+		{ID: "full-access", Label: "Bypass (yolo)", Description: "Never ask and no sandbox", Danger: true},
+	}
+}
+
+// modeSettings resolves a preset id to the protocol values. The zero id is
+// today's default, so behaviour is unchanged when no mode is chosen.
+type modeSettings struct {
+	approvalPolicy string
+	sandbox        string         // flat SandboxMode string, for thread/start
+	sandboxPolicy  map[string]any // rich SandboxPolicy object, for thread/settings/update
+	reviewer       string         // ApprovalsReviewer
+}
+
+func settingsFor(mode string) (modeSettings, error) {
+	policy := func(approval, sandbox string, sandboxPolicy map[string]any, reviewer string) modeSettings {
+		return modeSettings{approvalPolicy: approval, sandbox: sandbox, sandboxPolicy: sandboxPolicy, reviewer: reviewer}
+	}
+	readOnly := map[string]any{"type": "readOnly", "networkAccess": false}
+	workspaceWrite := map[string]any{"type": "workspaceWrite", "networkAccess": false}
+	fullAccess := map[string]any{"type": "dangerFullAccess"}
+
+	switch mode {
+	case "untrusted":
+		return policy("untrusted", "read-only", readOnly, "user"), nil
+	case "read-only":
+		return policy("on-request", "read-only", readOnly, "user"), nil
+	case "", "on-request":
+		// on-request means the server asks us before anything outside the
+		// sandbox, which is the whole point of routing permissions to a human.
+		return policy("on-request", "workspace-write", workspaceWrite, "user"), nil
+	case "auto-review":
+		return policy("on-request", "workspace-write", workspaceWrite, "auto_review"), nil
+	case "sandboxed-auto":
+		return policy("never", "workspace-write", workspaceWrite, "user"), nil
+	case "full-access":
+		return policy("never", "danger-full-access", fullAccess, "user"), nil
+	default:
+		return modeSettings{}, fmt.Errorf("codex does not have a %q permission mode", mode)
+	}
+}
+
 func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, o adapter.CreateOptions) (adapter.Session, error) {
+	// Resolve the mode before spawning anything: an unknown id should fail
+	// legibly, not leave an orphaned app-server.
+	mode, err := settingsFor(o.Mode)
+	if err != nil {
+		return nil, err
+	}
+
 	cmd := exec.Command(a.Bin, "app-server")
 	cmd.Dir = o.Cwd
 	cmd.Env = os.Environ()
@@ -132,11 +192,12 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 	}
 
 	startParams := map[string]any{
-		"cwd": o.Cwd,
-		// on-request means the server asks us before anything outside the
-		// sandbox, which is the whole point of routing permissions to a human.
-		"approvalPolicy": "on-request",
-		"sandbox":        "workspace-write",
+		"cwd":            o.Cwd,
+		"approvalPolicy": mode.approvalPolicy,
+		"sandbox":        mode.sandbox,
+	}
+	if mode.reviewer != "user" {
+		startParams["approvalsReviewer"] = mode.reviewer
 	}
 	if o.Model != "" {
 		startParams["model"] = o.Model
@@ -214,6 +275,23 @@ func (s *session) Prompt(ctx context.Context, in adapter.PromptInput) error {
 
 func (s *session) Cancel(ctx context.Context) error {
 	return s.conn.Call(ctx, "turn/interrupt", map[string]any{"threadId": s.threadID}, nil)
+}
+
+// SetMode switches the permission preset mid-thread. thread/settings/update
+// applies "for subsequent turns" natively, so no restart is needed. Every axis
+// is sent explicitly — including the reviewer — so switching away from a mode
+// resets what that mode had set.
+func (s *session) SetMode(ctx context.Context, mode string) error {
+	m, err := settingsFor(mode)
+	if err != nil {
+		return err
+	}
+	return s.conn.Call(ctx, "thread/settings/update", map[string]any{
+		"threadId":          s.threadID,
+		"approvalPolicy":    m.approvalPolicy,
+		"sandboxPolicy":     m.sandboxPolicy,
+		"approvalsReviewer": m.reviewer,
+	}, nil)
 }
 
 func (s *session) Close() error {

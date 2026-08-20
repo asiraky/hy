@@ -29,6 +29,7 @@ export interface NewSessionInput {
   projectId: string;
   harness: string;
   model: string;
+  mode: string;
   branch: string;
   workspace: string;
   workspacePath: string;
@@ -66,6 +67,7 @@ export function NewSession({
   const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
   const [chosenHarness, setChosenHarness] = useState("");
   const [chosenModel, setChosenModel] = useState("");
+  const [chosenMode, setChosenMode] = useState("");
   const [choice, setChoice] = useState<WorkspaceChoice>({ branch: "", attachPath: "" });
   const [listing, setListing] = useState<WorkspaceListing>({
     workspaces: [],
@@ -87,6 +89,19 @@ export function NewSession({
   const model = selected?.models.some((m) => m.id === chosenModel)
     ? chosenModel
     : (project?.config.defaults.model ?? "");
+  // Modes are the selected harness's own presets, repopulated when the harness
+  // changes — the same shape as the model picker. Only an expressed preference
+  // (picked here, or a project default) is sent; otherwise the mode stays ""
+  // so the harness's own configured default wins rather than being overridden
+  // by an explicit id.
+  const modes = selected?.permissionModes ?? [];
+  const mode = modes.some((m) => m.id === chosenMode)
+    ? chosenMode
+    : modes.some((m) => m.id === project?.config.defaults.mode)
+      ? (project?.config.defaults.mode ?? "")
+      : "";
+  const displayModeId = mode || (modes.find((m) => m.default)?.id ?? modes[0]?.id ?? "");
+  const modeMeta = modes.find((m) => m.id === displayModeId);
   // Typing a branch name is itself the instruction to create a worktree, so it
   // outranks the project default; attaching overrides both and the server
   // decides the mode from the path.
@@ -100,6 +115,15 @@ export function NewSession({
 
   const create = async () => {
     if (!project) return;
+    // A danger mode needs a deliberate second step before anything starts.
+    if (
+      modeMeta?.danger &&
+      !window.confirm(
+        `Start this session in "${modeMeta.label}"?\n\n${modeMeta.description ?? ""}\n\nThe agent will act without asking you first.`,
+      )
+    ) {
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -107,6 +131,7 @@ export function NewSession({
         projectId: project.id,
         harness: harnessId,
         model,
+        mode,
         branch,
         workspace,
         workspacePath: choice.attachPath,
@@ -175,6 +200,7 @@ export function NewSession({
                     setProjectId(v);
                     setChosenHarness("");
                     setChosenModel("");
+                    setChosenMode("");
                   }}
                 >
                   <SelectTrigger id="new-session-project" className="min-w-0 flex-1">
@@ -247,6 +273,41 @@ export function NewSession({
                   </Button>
                 </AlertDescription>
               </Alert>
+            )}
+
+            {modes.length > 0 && (
+              <div className="space-y-1.5">
+                <Label htmlFor="new-session-mode">Permissions</Label>
+                <Select value={displayModeId} onValueChange={setChosenMode}>
+                  <SelectTrigger
+                    id="new-session-mode"
+                    className={cn("w-full", modeMeta?.danger && "text-destructive")}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {modes.map((m) => (
+                      <SelectItem
+                        key={m.id}
+                        value={m.id}
+                        className={cn(m.danger && "text-destructive")}
+                      >
+                        {m.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {modeMeta?.description && (
+                  <p
+                    className={cn(
+                      "text-[11px]",
+                      modeMeta.danger ? "text-destructive" : "text-muted-foreground",
+                    )}
+                  >
+                    {modeMeta.description}
+                  </p>
+                )}
+              </div>
             )}
 
             {(selected?.models.length ?? 0) > 1 && (
