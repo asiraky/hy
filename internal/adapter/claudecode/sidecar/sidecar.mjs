@@ -9,7 +9,7 @@
 //
 //   host -> here (notifications):  prompt, interrupt, setModel
 //   host -> here (request):        setPermissionMode -> {} | error
-//   here -> host (notifications):  message, fatal
+//   here -> host (notifications):  message, models, fatal
 //   here -> host (request):        permission  -> {behavior, updatedInput?, message?}
 
 // Imported first, and deliberately so: it installs stdout discipline before
@@ -109,6 +109,46 @@ const canUseTool = (toolName, input, { signal, suggestions }) =>
       params: { toolName, input, suggestions: suggestions ?? [] },
     });
   });
+
+// ---------------------------------------------------------------------------
+// model listing
+//
+// A second, much smaller job this bridge does: ask the SDK which models the
+// installed Claude Code offers, print them, and exit. It runs as its own
+// short-lived process so the host never has to hold a session open to find
+// out — and so a hung query cannot take a live session down with it.
+// ---------------------------------------------------------------------------
+if (config.op === "models") {
+  const listing = query({
+    // The SDK needs a prompt stream; this one never yields, because the
+    // control request below is the only thing we want from the query.
+    prompt: (async function* () {
+      await new Promise(() => {});
+    })(),
+    options: {
+      cwd: config.cwd || process.cwd(),
+      ...(config.claudePath ? { pathToClaudeCodeExecutable: config.claudePath } : {}),
+    },
+  });
+  // Exit only once the frame has actually left the pipe: process.exit would
+  // otherwise truncate a buffered write and the host would see nothing.
+  const finish = (code) => process.stdout.write("", () => die(code));
+  try {
+    notify("models", { models: await listing.supportedModels() });
+    // Ending the generator asks the CLI to shut down. Not awaited: the answer
+    // is already on the wire, and a slow teardown must not delay it.
+    listing.return(undefined).catch(() => {});
+    finish(0);
+  } catch (err) {
+    notify("fatal", { message: err?.stack ?? String(err) });
+    finish(1);
+  }
+  // finish() only *schedules* the exit, for after the write drains. Without
+  // this the module body would run on and start a second Claude Code — a
+  // whole session process spawned by a listing, racing the exit that is about
+  // to kill it.
+  await new Promise(() => {});
+}
 
 // ---------------------------------------------------------------------------
 // the session

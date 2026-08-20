@@ -34,7 +34,36 @@ const sampleIssue: Issue = {
   labels: [{ name: "bug" }],
 };
 
-const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+/**
+ * The effort levels to offer when no model says. Harnesses report their own —
+ * and they differ, Codex's newest models adding "ultra" — so this is only the
+ * floor for a harness that has not been asked yet.
+ */
+const FALLBACK_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
+/**
+ * Radix rejects "" as a value, so "no preference" needs a sentinel — and it
+ * cannot be a plausible id. "default" was one: Claude ships a model *and* a
+ * permission mode called exactly that, so choosing either silently saved "no
+ * preference" instead.
+ */
+const UNSET = "__hy_unset__";
+
+/**
+ * Every effort level the harness's models accept, in the order they report
+ * them. A fixed low…max list would drop levels a harness has and offer ones it
+ * has not — Codex advertises "ultra" on its newest models only.
+ */
+function effortsOf(harnesses: HarnessMeta[], harnessId: string): string[] {
+  const models = harnesses.find((h) => h.id === harnessId)?.models ?? [];
+  const seen: string[] = [];
+  for (const model of models) {
+    for (const effort of model.efforts ?? []) {
+      if (!seen.includes(effort)) seen.push(effort);
+    }
+  }
+  return seen.length > 0 ? seen : FALLBACK_EFFORTS;
+}
 
 /** A section heading, so every group on this screen has the same weight. */
 function SectionHeading({ children, note }: { children: React.ReactNode; note?: string }) {
@@ -299,17 +328,15 @@ export function ProjectSettings({
                     </SelectContent>
                   </Select>
 
-                  {/* Radix rejects "" as a value, so the unset case is a named
-                    sentinel that maps back to "" on the way out. */}
                   <Select
-                    value={cfg.defaults.model || "default"}
-                    onValueChange={(v) => defaults({ model: v === "default" ? "" : v })}
+                    value={cfg.defaults.model || UNSET}
+                    onValueChange={(v) => defaults({ model: v === UNSET ? "" : v })}
                   >
                     <SelectTrigger aria-label="Default model" className="w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="default">Default model</SelectItem>
+                      <SelectItem value={UNSET}>Default model</SelectItem>
                       {(() => {
                         const models =
                           harnesses.find((h) => h.id === (cfg.defaults.harness ?? ""))?.models ??
@@ -317,6 +344,9 @@ export function ProjectSettings({
                         const items = models.map((m) => (
                           <SelectItem key={m.id} value={m.id}>
                             {m.label}
+                            {m.version && (
+                              <span className="text-muted-foreground text-[11px]">{m.version}</span>
+                            )}
                           </SelectItem>
                         ));
                         // A saved model the current harness list does not know
@@ -334,15 +364,17 @@ export function ProjectSettings({
                   </Select>
 
                   <Select
-                    value={cfg.defaults.effort || "default"}
-                    onValueChange={(v) => defaults({ effort: v === "default" ? "" : v })}
+                    value={cfg.defaults.effort || UNSET}
+                    onValueChange={(v) => defaults({ effort: v === UNSET ? "" : v })}
                   >
                     <SelectTrigger aria-label="Default effort" className="w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="default">Default effort</SelectItem>
-                      {EFFORTS.map((e) => (
+                      <SelectItem value={UNSET}>Default effort</SelectItem>
+                      {/* Efforts are per model, so the list is what the default
+                          harness's models actually accept. */}
+                      {effortsOf(harnesses, cfg.defaults.harness ?? "").map((e) => (
                         <SelectItem key={e} value={e}>
                           {e}
                         </SelectItem>
@@ -352,14 +384,14 @@ export function ProjectSettings({
 
                   {/* Modes belong to the default harness; the list follows it. */}
                   <Select
-                    value={cfg.defaults.mode || "default"}
-                    onValueChange={(v) => defaults({ mode: v === "default" ? "" : v })}
+                    value={cfg.defaults.mode || UNSET}
+                    onValueChange={(v) => defaults({ mode: v === UNSET ? "" : v })}
                   >
                     <SelectTrigger aria-label="Default permission mode" className="w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="default">Default permissions</SelectItem>
+                      <SelectItem value={UNSET}>Default permissions</SelectItem>
                       {(() => {
                         const modes =
                           harnesses.find((h) => h.id === (cfg.defaults.harness ?? ""))
@@ -397,8 +429,8 @@ export function ProjectSettings({
                   </Select>
                 </div>
                 <p className="text-muted-foreground text-[11px]">
-                  Defaults only preselect the new-session dialog. Every session can still be
-                  started any other way.
+                  Defaults only preselect the new-session dialog. Every session can still be started
+                  any other way.
                 </p>
               </div>
 

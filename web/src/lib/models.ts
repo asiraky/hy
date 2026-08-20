@@ -1,0 +1,106 @@
+import type { Availability, HarnessMeta, ModelMeta } from "~/protocol";
+import { LEGACY_GROUP } from "~/protocol";
+
+/**
+ * One provider instance, flattened out of the harness list.
+ *
+ * The picker is keyed by instance, never by harness: two Codex accounts are
+ * two entries with their own health and their own model lists. The driver
+ * still travels along, because that is what selects the mark and the accent —
+ * two accounts of one product should look like that product.
+ */
+export interface PickerInstance {
+  id: string;
+  driver: string;
+  name: string;
+  accent?: string;
+  enabled: boolean;
+  availability: Availability;
+  models: ModelMeta[];
+}
+
+/**
+ * Flattens harnesses into the instance list the picker renders. A harness that
+ * reports no instances — an older server, or a build mid-upgrade — still
+ * yields one entry, so the picker never comes up empty because of a protocol
+ * gap.
+ */
+export function pickerInstances(harnesses: HarnessMeta[]): PickerInstance[] {
+  const out: PickerInstance[] = [];
+  for (const h of harnesses) {
+    const instances = h.instances?.length
+      ? h.instances
+      : [
+          {
+            id: h.id,
+            driver: h.id,
+            displayName: h.name,
+            enabled: true,
+            availability: h.availability,
+            models: h.models,
+          },
+        ];
+    for (const inst of instances) {
+      out.push({
+        id: inst.id,
+        driver: inst.driver || h.id,
+        name: inst.displayName || h.name,
+        accent: h.accent,
+        enabled: inst.enabled !== false,
+        availability: inst.availability ?? h.availability,
+        // An instance that has not reported its own catalogue yet shows the
+        // harness's, which is the same list in the one-account case.
+        models: inst.models?.length ? inst.models : h.models,
+      });
+    }
+  }
+  return out;
+}
+
+/** The model a harness would pick for itself, and what the picker preselects. */
+export function defaultModel(instance: PickerInstance | undefined): ModelMeta | undefined {
+  if (!instance) return undefined;
+  return instance.models.find((m) => m.default) ?? instance.models[0];
+}
+
+/**
+ * Resolves a stored selection against the live list.
+ *
+ * A recorded model can outlive the catalogue that offered it — a harness
+ * upgrade drops a name, or the list is still the fallback while the live one
+ * loads. Rather than silently swapping in something else, an unknown id is
+ * returned as a model of its own so the trigger keeps saying what the session
+ * is actually running.
+ */
+export function resolveModel(
+  instance: PickerInstance | undefined,
+  modelId: string,
+): ModelMeta | undefined {
+  if (!instance) return undefined;
+  if (!modelId) return defaultModel(instance);
+  return (
+    instance.models.find((m) => m.id === modelId) ??
+    instance.models.find((m) => m.resolves === modelId) ?? { id: modelId, label: modelId }
+  );
+}
+
+/** Picks the instance a selection refers to, falling back to a usable one. */
+export function resolveInstance(
+  instances: PickerInstance[],
+  instanceId: string,
+  harnessId: string,
+): PickerInstance | undefined {
+  return (
+    instances.find((i) => i.id === instanceId) ??
+    // A session created before instances existed records only its harness; its
+    // default instance is the one whose id matches the driver.
+    instances.find((i) => i.driver === harnessId && i.id === harnessId) ??
+    instances.find((i) => i.driver === harnessId) ??
+    instances.find((i) => i.availability?.state === "ready") ??
+    instances[0]
+  );
+}
+
+export function isLegacy(model: ModelMeta): boolean {
+  return model.group === LEGACY_GROUP;
+}

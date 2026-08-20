@@ -65,16 +65,6 @@ func (a *Adapter) Meta() adapter.HarnessMeta {
 	}
 }
 
-func (a *Adapter) Models() []adapter.ModelMeta {
-	return []adapter.ModelMeta{
-		{ID: "", Label: "Default"},
-		{ID: "fable", Label: "Fable"},
-		{ID: "opus", Label: "Opus"},
-		{ID: "sonnet", Label: "Sonnet"},
-		{ID: "haiku", Label: "Haiku"},
-	}
-}
-
 // PermissionModes are the Agent SDK's PermissionMode values, verbatim: the id
 // is what the sidecar passes as `permissionMode`. The SDK spells the manual
 // mode `default` (the CLI alias `manual` is CLI-only), and it is what hy sends.
@@ -166,6 +156,9 @@ func moduleInstalled(dir string, parts ...string) bool {
 // sidecarConfig is what the bridge needs to start a session. It is passed as
 // one JSON argument so the sidecar has no bespoke flag parsing.
 type sidecarConfig struct {
+	// Op selects what the bridge does. Empty runs a session; "models" runs the
+	// one-shot listing and exits.
+	Op             string `json:"op,omitempty"`
 	Cwd            string `json:"cwd"`
 	Model          string `json:"model,omitempty"`
 	PermissionMode string `json:"permissionMode,omitempty"`
@@ -672,10 +665,10 @@ func (s *session) handleResult(msg map[string]json.RawMessage) {
 	}
 
 	s.emit(proto.Emit(proto.UsageUpdated, proto.UsageUpdatedPayload{
-		Input:      r.Usage.InputTokens,
-		Output:     r.Usage.OutputTokens,
-		CacheRead:  r.Usage.CacheReadInputTokens,
-		CacheWrite: r.Usage.CacheCreationInputTokens,
+		Input:         r.Usage.InputTokens,
+		Output:        r.Usage.OutputTokens,
+		CacheRead:     r.Usage.CacheReadInputTokens,
+		CacheWrite:    r.Usage.CacheCreationInputTokens,
 		Cost:          r.TotalCostUSD,
 		ContextPct:    pct,
 		ContextUsed:   used,

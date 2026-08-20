@@ -58,28 +58,63 @@ type Manager struct {
 	probeMu sync.Mutex
 	probes  map[string]probeResult
 
+	// modelsMu guards the per-instance model cache. Asking a harness what it
+	// offers costs a process start, so the answer is cached and refreshed off
+	// the request path: a listing never waits on one.
+	modelsMu   sync.Mutex
+	models     map[string]modelResult
+	refreshing map[string]bool
+	// modelGen invalidates listings already in flight. A recheck that cleared
+	// the cache must not be overwritten seconds later by an answer read before
+	// the user installed whatever they were rechecking for.
+	modelGen int
+
 	// Broadcast of session-list changes, so presenters can refresh the sidebar.
 	listMu  sync.Mutex
 	listSub map[string]chan struct{}
+	// Broadcast of harness changes — a model list that arrived after the
+	// welcome frame — so a picker opened later shows the live catalogue
+	// without the user reconnecting.
+	harnessSub map[string]chan struct{}
 }
 
 // probeTTL bounds how stale a readiness answer may be.
 const probeTTL = 30 * time.Second
+
+// modelTTL bounds how stale a model list may be. Catalogues change on the
+// harness's release cadence, not by the minute, and a user who has just
+// installed or upgraded one can force the question with a recheck.
+const modelTTL = 30 * time.Minute
+
+// modelRefreshTimeout bounds one background listing. The adapters apply their
+// own deadlines; this is the backstop for one that does not return at all.
+const modelRefreshTimeout = 90 * time.Second
 
 type probeResult struct {
 	result adapter.Availability
 	at     time.Time
 }
 
+// modelResult is one instance's last model listing. A failed attempt is cached
+// too, with no list: without that, every connection would retry a harness that
+// cannot answer and pay the process start each time.
+type modelResult struct {
+	list []adapter.ModelMeta
+	at   time.Time
+}
+
 func NewManager(st *store.Store, logf func(string, ...any), ads ...adapter.Adapter) *Manager {
 	m := &Manager{
-		store:     st,
-		drivers:   map[string]adapter.Adapter{},
-		instances: map[string]registered{},
-		logf:      logf,
-		actors:    map[string]*Actor{},
-		probes:    map[string]probeResult{},
-		listSub:   map[string]chan struct{}{},
+		store:      st,
+		drivers:    map[string]adapter.Adapter{},
+		instances:  map[string]registered{},
+		logf:       logf,
+		actors:     map[string]*Actor{},
+		probes:     map[string]probeResult{},
+		models:     map[string]modelResult{},
+		refreshing: map[string]bool{},
+		listSub:    map[string]chan struct{}{},
+		harnessSub: map[string]chan struct{}{},
 	}
 	for _, ad := range ads {
 		m.drivers[ad.ID()] = ad
@@ -237,12 +272,16 @@ func (m *Manager) Harnesses(ctx context.Context) []Harness {
 			PermissionModes: ad.PermissionModes(),
 			Instances:       m.instancesOf(ctx, id),
 		}
-		// The driver-level availability mirrors the default instance, which is
-		// what today's UI renders; one instance being unhealthy must not mark
-		// the others, so each instance also reports its own.
+		// The driver-level availability and models mirror the default
+		// instance, which is what today's UI renders; one instance being
+		// unhealthy (or offering different models) must not speak for the
+		// others, so each instance also reports its own.
 		for _, inst := range h.Instances {
 			if inst.ID == id {
 				h.Availability = inst.Availability
+				if len(inst.Models) > 0 {
+					h.Models = inst.Models
+				}
 			}
 		}
 		out = append(out, h)
@@ -282,9 +321,7 @@ func (m *Manager) instancesOf(ctx context.Context, driver string) []InstanceMeta
 			Enabled:      reg.inst.Enabled,
 			Availability: m.availability(ctx, reg),
 		}
-		if reg.ad != nil {
-			im.Models = reg.ad.Models()
-		}
+		im.Models = m.modelsFor(reg, im.Availability)
 		out = append(out, im)
 	}
 	return out
@@ -328,7 +365,114 @@ func (m *Manager) RecheckHarnesses() {
 	m.probeMu.Lock()
 	m.probes = map[string]probeResult{}
 	m.probeMu.Unlock()
+	// Model lists go with them: a user who has just installed or upgraded a
+	// harness is asking about its catalogue as much as its readiness.
+	m.modelsMu.Lock()
+	m.models = map[string]modelResult{}
+	m.modelGen++
+	m.modelsMu.Unlock()
 	m.notifyList()
+}
+
+// expireModelsForTest ages every cached listing past its TTL. Tests use it to
+// reach the refresh path without waiting out modelTTL.
+func (m *Manager) expireModelsForTest() {
+	m.modelsMu.Lock()
+	defer m.modelsMu.Unlock()
+	for id, result := range m.models {
+		result.at = time.Now().Add(-2 * modelTTL)
+		m.models[id] = result
+	}
+}
+
+// modelsFor serves an instance's model list from cache, falling back to the
+// adapter's built-in list, and refreshes in the background when the cache is
+// missing or stale. It never blocks: asking a harness costs a process start,
+// and this runs on every connection and every session-list push.
+func (m *Manager) modelsFor(reg registered, avail adapter.Availability) []adapter.ModelMeta {
+	if reg.ad == nil {
+		return nil
+	}
+	m.modelsMu.Lock()
+	cached, ok := m.models[reg.inst.ID]
+	stale := !ok || time.Since(cached.at) > modelTTL
+	// Only one refresh per instance is in flight; the rest of the callers keep
+	// serving what is cached.
+	start := stale && !m.refreshing[reg.inst.ID] && avail.OK() && reg.inst.Enabled
+	gen := m.modelGen
+	if start {
+		m.refreshing[reg.inst.ID] = true
+	}
+	m.modelsMu.Unlock()
+
+	if start {
+		go m.refreshModels(reg, gen)
+	}
+	if len(cached.list) > 0 {
+		return cached.list
+	}
+	// Nothing learned yet — or the harness could not be asked. The adapter's
+	// own list is small and possibly dated, which is better than a picker with
+	// nothing in it.
+	return reg.ad.Models()
+}
+
+// refreshModels asks one instance's harness for its catalogue and caches the
+// answer, telling connected clients when it changed. A failure is cached too,
+// so a harness that cannot answer is not re-asked on every listing.
+func (m *Manager) refreshModels(reg registered, gen int) {
+	ctx, cancel := context.WithTimeout(context.Background(), modelRefreshTimeout)
+	defer cancel()
+
+	var list []adapter.ModelMeta
+	env, err := m.envFor(reg.inst)
+	if err == nil {
+		list, err = reg.ad.ListModels(ctx, env)
+	}
+	if err != nil {
+		m.logf("models: %s: %v", reg.inst.ID, err)
+	}
+
+	m.modelsMu.Lock()
+	defer m.modelsMu.Unlock()
+	delete(m.refreshing, reg.inst.ID)
+	// A recheck since this listing started means the answer predates whatever
+	// the user just changed. Drop it and ask again straight away, so that one
+	// click of "Check again" is enough: waiting for the next listing would
+	// leave the user staring at the fallback with no way to force the issue.
+	if gen != m.modelGen {
+		if !m.refreshing[reg.inst.ID] {
+			m.refreshing[reg.inst.ID] = true
+			current := m.modelGen
+			go m.refreshModels(reg, current)
+		}
+		return
+	}
+	previous := m.models[reg.inst.ID]
+	if err != nil {
+		// A harness that could not answer this time has not withdrawn what it
+		// said last time. Keeping the last good list means a blip does not
+		// silently downgrade a live catalogue to the built-in fallback; only
+		// the timestamp moves, so the retry waits out the TTL.
+		m.models[reg.inst.ID] = modelResult{list: previous.list, at: time.Now()}
+		return
+	}
+	m.models[reg.inst.ID] = modelResult{list: list, at: time.Now()}
+	if !sameModels(previous.list, list) && len(list) > 0 {
+		m.notifyHarnesses()
+	}
+}
+
+func sameModels(a, b []adapter.ModelMeta) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !reflect.DeepEqual(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // Create starts a new session on the named harness, under the named provider
@@ -381,8 +525,8 @@ type CreateProjectOptions struct {
 	ProjectID string
 	Harness   string
 	// Instance names the provider instance; empty means the harness's default.
-	Instance string
-	Model    string
+	Instance  string
+	Model     string
 	Mode      string
 	Effort    string
 	Branch    string
@@ -918,6 +1062,34 @@ func (m *Manager) UnsubscribeList(id string) {
 	m.listMu.Lock()
 	delete(m.listSub, id)
 	m.listMu.Unlock()
+}
+
+// SubscribeHarnesses registers for harness changes: a background model
+// listing landing, and nothing else today.
+func (m *Manager) SubscribeHarnesses() (string, chan struct{}) {
+	id := uuid.NewString()
+	ch := make(chan struct{}, 1)
+	m.listMu.Lock()
+	m.harnessSub[id] = ch
+	m.listMu.Unlock()
+	return id, ch
+}
+
+func (m *Manager) UnsubscribeHarnesses(id string) {
+	m.listMu.Lock()
+	delete(m.harnessSub, id)
+	m.listMu.Unlock()
+}
+
+func (m *Manager) notifyHarnesses() {
+	m.listMu.Lock()
+	defer m.listMu.Unlock()
+	for _, ch := range m.harnessSub {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // NotifyList wakes every list subscriber; used after a title or phase change.
