@@ -4,7 +4,7 @@ import {
   applyTheme,
   readStoredTheme,
   resolveTheme,
-  THEME_STORAGE_KEY,
+  storeTheme,
   ThemeContext,
   watchSystemTheme,
   type Theme,
@@ -31,7 +31,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [theme]);
 
   const setTheme = useCallback((next: Theme) => {
-    localStorage.setItem(THEME_STORAGE_KEY, next);
+    storeTheme(next);
     setThemeState(next);
   }, []);
 

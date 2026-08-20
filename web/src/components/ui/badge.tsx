@@ -20,11 +20,13 @@ const badgeVariants = cva(
         link: "text-primary underline-offset-4 [a&]:hover:underline",
         // Coloured by whoever renders it, through `--badge-accent`, so a new
         // harness styles itself without this file learning its name. The text
-        // is pulled toward the theme's own foreground, which is what keeps a
-        // bright server-supplied accent legible on a light background and a
-        // dark one on a dark background — one expression, both themes.
+        // is mixed toward the theme's own foreground rather than used raw:
+        // server accents are chosen to glow on a dark background, and at 10px
+        // they fall under 4.5:1 on a light one unless they are darkened hard.
+        // Light mixes half the foreground in; dark only a little, which is
+        // enough to lift a dim accent off the card.
         accent:
-          "bg-[color-mix(in_oklch,var(--badge-accent)_14%,transparent)] text-[color-mix(in_oklch,var(--badge-accent)_72%,var(--foreground))] border-[color-mix(in_oklch,var(--badge-accent)_32%,transparent)]",
+          "bg-[color-mix(in_oklch,var(--badge-accent)_14%,transparent)] text-[color-mix(in_oklch,var(--badge-accent)_45%,var(--foreground))] border-[color-mix(in_oklch,var(--badge-accent)_32%,transparent)] dark:bg-[color-mix(in_oklch,var(--badge-accent)_16%,transparent)] dark:text-[color-mix(in_oklch,var(--badge-accent)_85%,var(--foreground))]",
       },
     },
     defaultVariants: {

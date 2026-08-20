@@ -23,9 +23,28 @@ export function watchSystemTheme(onChange: (resolved: ResolvedTheme) => void): (
   return () => mq.removeEventListener("change", handler);
 }
 
+/**
+ * Storage access throws outright in a browser with cookies blocked, and the
+ * theme is not worth taking the whole app down for: an unreadable store just
+ * means "system", and an unwritable one means the choice lasts this tab only.
+ * The inline boot script makes the same allowance.
+ */
 export function readStoredTheme(): Theme {
-  const stored = localStorage.getItem(THEME_STORAGE_KEY);
+  let stored: string | null = null;
+  try {
+    stored = localStorage.getItem(THEME_STORAGE_KEY);
+  } catch {
+    return "system";
+  }
   return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+}
+
+export function storeTheme(theme: Theme) {
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  } catch {
+    /* Not persisted. The choice still applies for this page. */
+  }
 }
 
 export function resolveTheme(theme: Theme): ResolvedTheme {

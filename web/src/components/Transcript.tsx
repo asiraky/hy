@@ -196,6 +196,7 @@ function WorkspaceCard({
             variant="ghost"
             size="icon-sm"
             aria-label="Dismiss workspace activity"
+            className="size-11 md:size-8"
             onClick={() => setDismissed(true)}
           >
             <XIcon />

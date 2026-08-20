@@ -250,6 +250,7 @@ export function WorkspacePicker({
           variant="outline"
           size="icon"
           aria-label={open ? "Hide worktrees" : "Show worktrees"}
+          className="size-11 md:size-9"
           onClick={() => setOpen(!open)}
         >
           <ChevronsUpDownIcon />

@@ -193,6 +193,7 @@ export function NewSession({
                   size="icon"
                   aria-label="Project settings"
                   title="Project settings"
+                  className="size-11 md:size-9"
                   onClick={() => project && onSettings(project)}
                 >
                   <SettingsIcon />
@@ -202,6 +203,7 @@ export function NewSession({
                   size="icon"
                   aria-label="Add project"
                   title="Add project"
+                  className="size-11 md:size-9"
                   onClick={onAddProject}
                 >
                   <PlusIcon />

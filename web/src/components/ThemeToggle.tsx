@@ -8,6 +8,7 @@ import {
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
 import { useTheme, type Theme } from "~/lib/theme";
+import { cn } from "~/lib/utils";
 
 const OPTIONS: { value: Theme; label: string; Icon: typeof SunIcon }[] = [
   { value: "light", label: "Light", Icon: SunIcon },
@@ -25,7 +26,7 @@ export function ThemeToggle({ className }: { className?: string }) {
         <Button
           variant="ghost"
           size="icon"
-          className={className}
+          className={cn("size-11 md:size-9", className)}
           // Icon-only, so the control has to say what it is out loud.
           aria-label={`Theme: ${current.label}`}
           title={`Theme: ${current.label}`}
