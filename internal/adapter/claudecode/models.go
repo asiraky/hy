@@ -18,14 +18,18 @@ import (
 // serves a cached or fallback list while this runs.
 const modelListTimeout = 60 * time.Second
 
-// Models is the fallback list: the aliases Claude Code has accepted for as
-// long as hy has existed, used only until a live answer arrives or when the
-// harness cannot be asked. It deliberately carries no versions — claiming a
-// version we did not read from the harness is how the old hardcoded list went
-// stale.
+// Models is the fallback list, used only until a live answer arrives or when
+// the harness cannot be asked. It is family aliases and nothing else: no
+// versions, because claiming a version we did not read from the harness is how
+// the old hardcoded list went stale, and no specific model ids, because an id
+// this build believes in may not be one the installed Claude Code serves.
+//
+// The default row carries no id at all. That is deliberate: an empty model
+// means "whatever the harness picks", which is the only default that cannot be
+// wrong — and it says so, rather than being an unexplained "Default".
 func (a *Adapter) Models() []adapter.ModelMeta {
 	return []adapter.ModelMeta{
-		{ID: "default", Label: "Default", Default: true},
+		{ID: "", Label: "Default", Version: "chosen by Claude Code", Description: "No model is named, so the harness starts whatever it is set to use", Default: true},
 		{ID: "opus", Label: "Opus"},
 		{ID: "sonnet", Label: "Sonnet"},
 		{ID: "haiku", Label: "Haiku"},

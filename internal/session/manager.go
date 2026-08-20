@@ -64,6 +64,10 @@ type Manager struct {
 	modelsMu   sync.Mutex
 	models     map[string]modelResult
 	refreshing map[string]bool
+	// modelGen invalidates listings already in flight. A recheck that cleared
+	// the cache must not be overwritten seconds later by an answer read before
+	// the user installed whatever they were rechecking for.
+	modelGen int
 
 	// Broadcast of session-list changes, so presenters can refresh the sidebar.
 	listMu  sync.Mutex
@@ -365,8 +369,20 @@ func (m *Manager) RecheckHarnesses() {
 	// harness is asking about its catalogue as much as its readiness.
 	m.modelsMu.Lock()
 	m.models = map[string]modelResult{}
+	m.modelGen++
 	m.modelsMu.Unlock()
 	m.notifyList()
+}
+
+// expireModelsForTest ages every cached listing past its TTL. Tests use it to
+// reach the refresh path without waiting out modelTTL.
+func (m *Manager) expireModelsForTest() {
+	m.modelsMu.Lock()
+	defer m.modelsMu.Unlock()
+	for id, result := range m.models {
+		result.at = time.Now().Add(-2 * modelTTL)
+		m.models[id] = result
+	}
 }
 
 // modelsFor serves an instance's model list from cache, falling back to the
@@ -383,13 +399,14 @@ func (m *Manager) modelsFor(reg registered, avail adapter.Availability) []adapte
 	// Only one refresh per instance is in flight; the rest of the callers keep
 	// serving what is cached.
 	start := stale && !m.refreshing[reg.inst.ID] && avail.OK() && reg.inst.Enabled
+	gen := m.modelGen
 	if start {
 		m.refreshing[reg.inst.ID] = true
 	}
 	m.modelsMu.Unlock()
 
 	if start {
-		go m.refreshModels(reg)
+		go m.refreshModels(reg, gen)
 	}
 	if len(cached.list) > 0 {
 		return cached.list
@@ -403,7 +420,7 @@ func (m *Manager) modelsFor(reg registered, avail adapter.Availability) []adapte
 // refreshModels asks one instance's harness for its catalogue and caches the
 // answer, telling connected clients when it changed. A failure is cached too,
 // so a harness that cannot answer is not re-asked on every listing.
-func (m *Manager) refreshModels(reg registered) {
+func (m *Manager) refreshModels(reg registered, gen int) {
 	ctx, cancel := context.WithTimeout(context.Background(), modelRefreshTimeout)
 	defer cancel()
 
@@ -417,12 +434,31 @@ func (m *Manager) refreshModels(reg registered) {
 	}
 
 	m.modelsMu.Lock()
-	changed := !sameModels(m.models[reg.inst.ID].list, list)
-	m.models[reg.inst.ID] = modelResult{list: list, at: time.Now()}
+	defer m.modelsMu.Unlock()
 	delete(m.refreshing, reg.inst.ID)
-	m.modelsMu.Unlock()
-
-	if changed && len(list) > 0 {
+	// A recheck since this listing started means the answer predates whatever
+	// the user just changed. Drop it and ask again straight away, so that one
+	// click of "Check again" is enough: waiting for the next listing would
+	// leave the user staring at the fallback with no way to force the issue.
+	if gen != m.modelGen {
+		if !m.refreshing[reg.inst.ID] {
+			m.refreshing[reg.inst.ID] = true
+			current := m.modelGen
+			go m.refreshModels(reg, current)
+		}
+		return
+	}
+	previous := m.models[reg.inst.ID]
+	if err != nil {
+		// A harness that could not answer this time has not withdrawn what it
+		// said last time. Keeping the last good list means a blip does not
+		// silently downgrade a live catalogue to the built-in fallback; only
+		// the timestamp moves, so the retry waits out the TTL.
+		m.models[reg.inst.ID] = modelResult{list: previous.list, at: time.Now()}
+		return
+	}
+	m.models[reg.inst.ID] = modelResult{list: list, at: time.Now()}
+	if !sameModels(previous.list, list) && len(list) > 0 {
 		m.notifyHarnesses()
 	}
 }

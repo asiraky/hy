@@ -143,6 +143,11 @@ if (config.op === "models") {
     notify("fatal", { message: err?.stack ?? String(err) });
     finish(1);
   }
+  // finish() only *schedules* the exit, for after the write drains. Without
+  // this the module body would run on and start a second Claude Code — a
+  // whole session process spawned by a listing, racing the exit that is about
+  // to kill it.
+  await new Promise(() => {});
 }
 
 // ---------------------------------------------------------------------------

@@ -94,6 +94,57 @@ func TestFailedListingIsNotRetriedEveryListing(t *testing.T) {
 	}
 }
 
+// A harness that answered once and then blips must not have its catalogue
+// quietly downgraded to the built-in fallback until the next TTL.
+func TestAFailedRefreshKeepsTheLastGoodList(t *testing.T) {
+	fa := &fakeAdapter{live: []adapter.ModelMeta{{ID: "live", Label: "Live", Default: true}}}
+	mgr := modelsTestManager(t, fa)
+
+	id, ch := mgr.SubscribeHarnesses()
+	defer mgr.UnsubscribeHarnesses(id)
+	mgr.Harnesses(context.Background())
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first listing never landed")
+	}
+
+	// Expire the cache, then make the harness unanswerable.
+	fa.mu.Lock()
+	fa.liveErr = errors.New("harness is restarting")
+	fa.mu.Unlock()
+	mgr.expireModelsForTest()
+
+	mgr.Harnesses(context.Background())
+	waitForListing(t, fa, 2)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		h := mgr.Harnesses(context.Background())[0]
+		if len(h.Models) != 1 || h.Models[0].ID != "live" {
+			t.Fatalf("models = %v, want the last good live list kept", h.Models)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// One click of "Check again" has to produce a fresh answer even when a listing
+// was already in flight, or the user has no way to force the question.
+func TestRecheckDuringAListingStillReasks(t *testing.T) {
+	fa := &fakeAdapter{live: []adapter.ModelMeta{{ID: "live", Label: "Live"}}}
+	fa.listGate = make(chan struct{})
+	mgr := modelsTestManager(t, fa)
+
+	mgr.Harnesses(context.Background()) // starts a listing, which now blocks
+	waitForListing(t, fa, 1)
+
+	mgr.RecheckHarnesses()
+	close(fa.listGate) // the in-flight listing returns its pre-recheck answer
+
+	// That answer predates the recheck, so it is dropped and another asked for.
+	waitForListing(t, fa, 2)
+}
+
 // A recheck is a user saying "I just installed something": it re-asks for
 // models as well as readiness.
 func TestRecheckDropsCachedModels(t *testing.T) {

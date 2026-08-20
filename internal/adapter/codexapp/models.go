@@ -21,16 +21,14 @@ import (
 const modelListTimeout = 20 * time.Second
 
 // Models is the fallback list, used only until a live answer arrives or when
-// the CLI cannot be asked. Codex reports its own catalogue through model/list,
-// which is where every real answer comes from; this exists so the picker
-// degrades to something usable rather than to nothing.
-//
-// Reviewed against codex-cli 0.148.0.
+// the CLI cannot be asked. Codex has no aliases — every id names one released
+// model — so naming any of them here would be guessing at what the installed
+// CLI serves, and sending a guess is how a session fails to start. The one row
+// therefore has no id: an empty model is "whatever Codex picks", which no
+// version of the CLI can reject, and it says as much.
 func (a *Adapter) Models() []adapter.ModelMeta {
 	return []adapter.ModelMeta{
-		{ID: "gpt-5.6-sol", Label: "GPT-5.6-Sol", Version: "5.6", Default: true},
-		{ID: "gpt-5.6-terra", Label: "GPT-5.6-Terra", Version: "5.6"},
-		{ID: "gpt-5.6-luna", Label: "GPT-5.6-Luna", Version: "5.6"},
+		{ID: "", Label: "Default", Version: "chosen by Codex", Description: "No model is named, so the harness starts whatever it is set to use", Default: true},
 	}
 }
 
@@ -116,7 +114,10 @@ func (a *Adapter) ListModels(ctx context.Context, env map[string]string) ([]adap
 			return nil, fmt.Errorf("codex model/list: %w", err)
 		}
 		rows = append(rows, res.Data...)
-		if res.NextCursor == "" || len(res.Data) == 0 {
+		// Stop on the end of the catalogue, an empty page, or a cursor that
+		// has not moved: a server that keeps handing back the same cursor
+		// would otherwise spin until the deadline, appending as it went.
+		if res.NextCursor == "" || res.NextCursor == cursor || len(res.Data) == 0 {
 			break
 		}
 		cursor = res.NextCursor
