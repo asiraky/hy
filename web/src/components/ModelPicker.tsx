@@ -164,7 +164,10 @@ export function ModelPicker({
       aria-expanded={open}
       aria-label="Harness and model"
       disabled={disabled}
-      className={cn("h-auto min-h-11 w-full justify-start gap-2 px-3 py-2 md:min-h-10", className)}
+      // Same field height as every other control in the form it sits in: 44px
+      // on a phone, 36px from md up. It was a 40px control in a column of
+      // 36px ones.
+      className={cn("h-auto min-h-11 w-full justify-start gap-2 px-3 py-2 md:min-h-9", className)}
     >
       {selectedInstance && <ProviderLogo provider={selectedInstance.driver} />}
       <span className="min-w-0 flex-1 truncate text-left text-[13px]">
