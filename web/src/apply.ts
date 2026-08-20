@@ -89,7 +89,7 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
         // A recovery prompt is the server talking to itself, so it never
         // names the session.
         title: s.title || (p.recovery ? "" : p.prompt?.slice(0, 60) || ""),
-        turns: [...s.turns, { id: p.turnId, prompt: p.prompt, done: false, recovery: p.recovery }],
+        turns: [...s.turns, { id: p.turnId, prompt: p.prompt, done: false, recovery: p.recovery, startedAt: ev.timestamp }],
         // A harness-initiated turn has no prompt — nobody asked anything —
         // so there is no prompt item to add.
         items: p.prompt
@@ -109,7 +109,9 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
         ...s,
         phase: "idle",
         turns: s.turns.map((t) =>
-          t.id === p.turnId ? { ...t, done: true, stopReason: p.stopReason, error: p.error } : t,
+          t.id === p.turnId
+            ? { ...t, done: true, stopReason: p.stopReason, error: p.error, finishedAt: ev.timestamp }
+            : t,
         ),
         items: s.items.map((it) =>
           it.kind === "tool" && (it.status === "in_progress" || it.status === "pending")

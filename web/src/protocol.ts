@@ -120,6 +120,11 @@ export interface Turn {
   // What the turn changed on disk. Absent until the turn has finished and been
   // measured, and on any turn that changed nothing.
   diff?: TurnDiff;
+  // When the turn started and finished, from the event log's own clock
+  // (epoch milliseconds). The fold over a finished turn is labelled
+  // "Worked for 34s" from these.
+  startedAt?: number;
+  finishedAt?: number;
 }
 
 export interface PermissionOption {

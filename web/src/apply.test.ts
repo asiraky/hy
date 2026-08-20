@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { applyEvent, emptyState } from "./apply";
 import type { Event } from "./protocol";
 
-function ev(seq: number, type: string, payload: Record<string, unknown>): Event {
-  return { sessionId: "s1", seq, timestamp: 0, type, payload } as Event;
+function ev(seq: number, type: string, payload: Record<string, unknown>, timestamp = 0): Event {
+  return { sessionId: "s1", seq, timestamp, type, payload } as Event;
 }
 
 // These mirror internal/projection/state_test.go: the client reducer and the
@@ -20,6 +20,14 @@ describe("applyEvent turn lifecycle", () => {
     s = applyEvent(s, ev(2, "turn.finished", { turnId: "t1", stopReason: "end_turn" }));
     expect(s.phase).toBe("idle");
     expect(s.turns[0].done).toBe(true);
+  });
+
+  it("stamps the turn with when it started and finished", () => {
+    let s = emptyState("s1");
+    s = applyEvent(s, ev(1, "turn.started", { turnId: "t1", prompt: "go" }, 1000));
+    s = applyEvent(s, ev(2, "turn.finished", { turnId: "t1", stopReason: "end_turn" }, 35_000));
+    expect(s.turns[0].startedAt).toBe(1000);
+    expect(s.turns[0].finishedAt).toBe(35_000);
   });
 
   it("keeps the prompt item on a prompted turn", () => {

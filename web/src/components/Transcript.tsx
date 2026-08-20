@@ -30,6 +30,7 @@ import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
 import { cn } from "~/lib/utils";
 import type { Item, SessionState, ToolStatus, Turn } from "~/protocol";
+import { buildRows, foldLabel, rowTurnID, summarise } from "~/rows";
 import { useSmoothText } from "~/useSmoothText";
 
 // One icon per tool kind the protocol defines. Anything new falls through to
@@ -101,126 +102,45 @@ function ToolCard({ item }: { item: Item }) {
   );
 }
 
-// A tool call is loud but rarely interesting. Runs of settled calls fold into
-// one summary row so the conversation is what you read; anything that still
-// needs a human — a failure, or a call still running — is left out of the fold
-// and rendered on its own.
-function isProminent(item: Item) {
-  return item.status === "failed" || item.status === "pending" || item.status === "in_progress";
+// The expanded body of a run or a fold: the cards and text a summary row
+// stands in for. Everything renders the way it would in the open — the same
+// content shown two different ways in one transcript is a seam the reader has
+// to notice.
+function ExpandedItems({ items }: { items: Item[] }) {
+  return (
+    <div className="mt-2 space-y-2 border-l pl-3">
+      {items.map((item) =>
+        item.kind === "tool" ? (
+          <ToolCard key={item.id} item={item} />
+        ) : (
+          <Markdown
+            key={item.id}
+            text={item.text ?? ""}
+            className={cn(
+              "text-[13px] leading-relaxed break-words",
+              item.contentKind === "thought" ? "text-thought italic" : "text-muted-foreground",
+            )}
+          />
+        ),
+      )}
+    </div>
+  );
 }
 
-function isFoldableTool(item: Item) {
-  return item.kind === "tool" && !isProminent(item);
-}
-
-// A harness narrates between its calls, and a run of fifty polls comes back as
-// fifty calls with "Waiting." between each pair. Folding only consecutive tool
-// items means one such word breaks every run, so a poll loop folds into
-// nothing. Brief narration therefore rides along inside the fold — but only
-// brief narration: a real explanation still breaks the run and stays where the
-// reader can see it without opening anything.
-const NARRATION_MAX = 200;
-
-function isNarration(item: Item) {
-  if (item.kind !== "message" || item.role !== "agent") return false;
-  const text = (item.text ?? "").trim();
-  return text.length > 0 && text.length <= NARRATION_MAX && !text.includes("\n");
-}
-
-// A harness can open a message block it never fills — a thought whose text the
-// model kept to itself. There is nothing to render and nothing to hide, so it
-// is dropped rather than left to print a blank line and cut a run in half.
-function isEmptyMessage(item: Item) {
-  return item.kind === "message" && (item.text ?? "").trim() === "";
-}
-
-type Row = { kind: "item"; item: Item } | { kind: "group"; id: string; items: Item[] };
-
-function groupRows(items: Item[]): Row[] {
-  const rows: Row[] = [];
-  // The run being built, the narration trailing it that no later call has
-  // claimed yet, and how many of the run's items are actually tool calls.
-  let run: Item[] = [];
-  let trailing: Item[] = [];
-  let calls = 0;
-
-  // A run ends at its last tool call: narration after that is the agent
-  // talking to the reader, not labelling work, so it never gets folded away.
-  // One call is not a run — it reads better as the card itself.
-  const flush = () => {
-    if (calls > 1) rows.push({ kind: "group", id: run[0].id, items: run });
-    else for (const it of run) rows.push({ kind: "item", item: it });
-    for (const it of trailing) rows.push({ kind: "item", item: it });
-    run = [];
-    trailing = [];
-    calls = 0;
-  };
-
-  for (const item of items) {
-    if (isEmptyMessage(item)) continue;
-    if (isFoldableTool(item)) {
-      run.push(...trailing, item);
-      trailing = [];
-      calls++;
-      continue;
-    }
-    if (calls > 0 && isNarration(item)) {
-      trailing.push(item);
-      continue;
-    }
-    flush();
-    rows.push({ kind: "item", item });
-  }
-  flush();
-  return rows;
-}
-
-// A row belongs to the turn its last item came from: that is the turn whose
-// card, if it has one, comes next.
-function rowTurnID(row: Row): string | undefined {
-  if (row.kind === "item") return row.item.turnId;
-  return row.items[row.items.length - 1]?.turnId;
-}
-
-// One phrase per tool kind, in the order they read best in a summary. These
-// count calls, not files: one call can touch several paths and five calls can
-// touch one, so "Edited 3 files" would be a claim this cannot make. The Changes
-// panel is where the honest per-file count lives.
-const SUMMARY: { kind: string; one: string; many: (n: number) => string }[] = [
-  { kind: "read", one: "1 read", many: (n) => `${n} reads` },
-  { kind: "edit", one: "1 edit", many: (n) => `${n} edits` },
-  { kind: "delete", one: "1 delete", many: (n) => `${n} deletes` },
-  { kind: "move", one: "1 move", many: (n) => `${n} moves` },
-  { kind: "search", one: "1 search", many: (n) => `${n} searches` },
-  { kind: "execute", one: "1 command", many: (n) => `${n} commands` },
-  { kind: "fetch", one: "1 fetch", many: (n) => `${n} fetches` },
-  { kind: "think", one: "1 thought", many: (n) => `${n} thoughts` },
-  { kind: "other", one: "1 other call", many: (n) => `${n} other calls` },
-];
-
-function summarise(items: Item[]): string {
-  const counts = new Map<string, number>();
-  for (const it of items) {
-    if (it.kind !== "tool") continue;
-    const kind = it.toolKind && SUMMARY.some((s) => s.kind === it.toolKind) ? it.toolKind : "other";
-    counts.set(kind, (counts.get(kind) ?? 0) + 1);
-  }
-  return SUMMARY.filter((s) => counts.has(s.kind))
-    .map((s) => {
-      const n = counts.get(s.kind)!;
-      return n === 1 ? s.one : s.many(n);
-    })
-    .join(" · ");
-}
-
-function ToolGroup({ items }: { items: Item[] }) {
+// One unbroken run of tool calls in the turn that is running, as a single
+// line. Live, it names the call happening right now and updates in place;
+// once the narration has moved past it, it becomes a summary of what ran.
+// Either way it expands to the cards, and either way the row never leaves —
+// the fix this design carries: nothing at the tail of a working transcript
+// disappears out from under the reader.
+function ToolRun({ items, live }: { items: Item[]; live: boolean }) {
   const [open, setOpen] = useState(false);
-  // A group can carry the narration that ran between its calls; the count and
-  // the icons describe the work, so both only look at the calls.
-  const calls = items.filter((i) => i.kind === "tool");
-  const kinds = Array.from(new Set(calls.map((i) => i.toolKind ?? "other")));
-
-  if (calls.length === 1) return <ToolCard item={calls[0]} />;
+  const active =
+    items.filter((i) => i.status === "in_progress" || i.status === "pending").pop() ??
+    items[items.length - 1];
+  const failed = items.some((i) => i.status === "failed");
+  const kinds = Array.from(new Set(items.map((i) => i.toolKind ?? "other")));
+  const ActiveIcon = TOOL_ICON[active?.toolKind ?? "other"] ?? CircleIcon;
 
   return (
     <div className="fade-in">
@@ -228,42 +148,60 @@ function ToolGroup({ items }: { items: Item[] }) {
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="hover:bg-accent/40 focus-visible:ring-ring text-muted-foreground flex min-h-11 w-full items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-left transition-colors outline-none focus-visible:ring-2 md:min-h-0"
+        className="hover:bg-accent/40 focus-visible:ring-ring text-muted-foreground flex min-h-11 w-full items-center gap-2 rounded-lg px-1.5 py-1.5 text-left transition-colors outline-none focus-visible:ring-2 md:min-h-0"
       >
-        <span className="flex shrink-0 items-center gap-1">
-          {kinds.slice(0, 4).map((k) => {
-            const Icon = TOOL_ICON[k] ?? CircleIcon;
-            return <Icon key={k} className="size-3.5" />;
-          })}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-[12px]">{summarise(items)}</span>
+        {live ? (
+          <>
+            <Spinner className="text-primary size-3.5 shrink-0" />
+            <ActiveIcon className="size-3.5 shrink-0" />
+            <span className="min-w-0 flex-1 truncate font-mono text-[12px]">
+              {active?.title || "working"}
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="flex shrink-0 items-center gap-1">
+              {failed && <XIcon aria-label="A call failed" className="text-destructive size-3.5" />}
+              {kinds.slice(0, 4).map((k) => {
+                const Icon = TOOL_ICON[k] ?? CircleIcon;
+                return <Icon key={k} className="size-3.5" />;
+              })}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-[12px]">{summarise(items)}</span>
+          </>
+        )}
         <span className="flex shrink-0 items-center gap-1 font-mono text-[10px]">
-          {open ? "hide" : `${calls.length} calls`}
+          {open ? "hide" : items.length === 1 ? "" : `${items.length} calls`}
           <ChevronDownIcon className={cn("size-3 transition-transform", open && "rotate-180")} />
         </span>
       </button>
 
-      {open && (
-        <div className="mt-2 space-y-2 border-l pl-3">
-          {items.map((item) =>
-            item.kind === "tool" ? (
-              <ToolCard key={item.id} item={item} />
-            ) : (
-              // Narration reads the same inside the fold as it does outside it:
-              // the same text rendered two different ways in one transcript is
-              // a seam the reader has to notice.
-              <Markdown
-                key={item.id}
-                text={item.text ?? ""}
-                className={cn(
-                  "text-[13px] leading-relaxed break-words",
-                  item.contentKind === "thought" ? "text-thought italic" : "text-muted-foreground",
-                )}
-              />
-            ),
-          )}
-        </div>
-      )}
+      {open && <ExpandedItems items={items} />}
+    </div>
+  );
+}
+
+// A finished turn's work, behind one quiet line. What the reader keeps is the
+// prompt above and the answer below; "Worked for 34s" is the receipt for
+// everything in between, and opens to all of it — thoughts, calls, failures.
+function TurnFold({ turn, items }: { turn: Turn; items: Item[] }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="fade-in">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="hover:text-foreground focus-visible:ring-ring text-muted-foreground flex items-center gap-1 rounded-md px-1 py-0.5 text-left text-[13px] transition-colors outline-none focus-visible:ring-2"
+      >
+        <span>{foldLabel(turn)}</span>
+        <ChevronDownIcon
+          className={cn("size-3.5 transition-transform", !open && "-rotate-90")}
+        />
+      </button>
+
+      {open && <ExpandedItems items={items} />}
     </div>
   );
 }
@@ -572,16 +510,23 @@ export function Transcript({
   // Only the final agent block is still growing; everything above it is
   // settled and renders in full. A block the harness opened but never filled is
   // not it: nothing of it is on screen, so treating it as the growing one would
-  // leave the turn looking idle while the agent works.
-  const lastAgentId = useMemo(() => {
+  // leave the turn looking idle while the agent works. And a block whose turn
+  // has finished is not it either — the newest text being settled means
+  // nothing is streaming, however the phase got confused.
+  const liveAgentId = useMemo(() => {
     for (let i = state.items.length - 1; i >= 0; i--) {
       const it = state.items[i];
-      if (it.kind === "message" && it.role === "agent" && (it.text ?? "").trim() !== "") return it.id;
+      if (it.kind !== "message" || it.role !== "agent" || (it.text ?? "").trim() === "") continue;
+      const turn = it.turnId ? state.turns.find((t) => t.id === it.turnId) : undefined;
+      return turn?.done ? undefined : it.id;
     }
     return undefined;
-  }, [state.items]);
+  }, [state.items, state.turns]);
 
-  const rows = useMemo(() => groupRows(state.items), [state.items]);
+  const rows = useMemo(
+    () => buildRows(state.items, state.turns, state.phase),
+    [state.items, state.turns, state.phase],
+  );
 
   // Only the newest turn can be continued, and only once nothing is running:
   // an error further back was already answered by whatever came after it.
@@ -624,7 +569,7 @@ export function Transcript({
         )}
 
         {rows.map((row, i) => {
-          const key = row.kind === "group" ? row.id : row.item.id;
+          const key = row.kind === "item" ? row.item.id : row.id;
           // The card goes after the last row of the turn it describes, which is
           // the row whose successor belongs to a different turn.
           const turnID = rowTurnID(row);
@@ -633,14 +578,16 @@ export function Transcript({
 
           return (
             <Fragment key={key}>
-              {row.kind === "group" ? (
-                <ToolGroup items={row.items} />
+              {row.kind === "fold" ? (
+                <TurnFold turn={row.turn} items={row.items} />
+              ) : row.kind === "run" ? (
+                <ToolRun items={row.items} live={row.live} />
               ) : row.item.kind === "tool" ? (
                 <ToolCard item={row.item} />
               ) : (
                 <Message
                   item={row.item}
-                  streaming={state.phase === "turn" && row.item.id === lastAgentId}
+                  streaming={state.phase === "turn" && row.item.id === liveAgentId}
                   recovered={!!row.item.turnId && recoveredTurns.has(row.item.turnId)}
                 />
               )}
@@ -651,11 +598,13 @@ export function Transcript({
           );
         })}
 
-        {state.phase === "turn" && lastAgentId === undefined && (
-          <div className="text-muted-foreground flex items-center gap-2 text-sm">
-            <Spinner className="text-primary size-3.5" /> thinking…
-          </div>
-        )}
+        {state.phase === "turn" &&
+          liveAgentId === undefined &&
+          !rows.some((r) => r.kind === "run" && r.live) && (
+            <div className="text-muted-foreground flex items-center gap-2 text-sm">
+              <Spinner className="text-primary size-3.5" /> thinking…
+            </div>
+          )}
 
         {interrupted && <InterruptedCard turn={interrupted} onContinue={onContinue} />}
       </div>
