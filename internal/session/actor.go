@@ -43,7 +43,11 @@ type Actor struct {
 
 	store   *store.Store
 	adapter adapter.Adapter
-	sess    adapter.Session
+	// env is the provider instance's credential overlay, applied whenever this
+	// actor spawns its harness — at start, at activation, and on resume. It is
+	// fixed for the actor's lifetime, like the instance it came from.
+	env  map[string]string
+	sess adapter.Session
 
 	inbox chan command
 	quit  chan struct{}
@@ -141,14 +145,16 @@ var ErrNotReady = errors.New("workspace is not ready")
 // ack, not a failure: the request was answered, just not by this presenter.
 var ErrAlreadyResolved = errors.New("already_resolved")
 
-// Start creates a harness session and its actor goroutine.
-func Start(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store.SessionMeta, model, mode string, logf func(string, ...any)) (*Actor, error) {
+// Start creates a harness session and its actor goroutine. env is the
+// provider instance's credential overlay; nil means ambient credentials.
+func Start(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store.SessionMeta, model, mode string, env map[string]string, logf func(string, ...any)) (*Actor, error) {
 	a := &Actor{
 		ID:            meta.ID,
 		Harness:       meta.Harness,
 		Cwd:           meta.Cwd,
 		store:         st,
 		adapter:       ad,
+		env:           env,
 		inbox:         make(chan command, 64),
 		quit:          make(chan struct{}),
 		state:         projection.New(meta.ID),
@@ -159,7 +165,7 @@ func Start(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store.
 	}
 
 	sess, err := ad.CreateSession(ctx, hostServices{a}, adapter.CreateOptions{
-		SessionID: meta.ID, Cwd: meta.Cwd, Model: model, Mode: mode, Effort: meta.Effort,
+		SessionID: meta.ID, Cwd: meta.Cwd, Model: model, Mode: mode, Effort: meta.Effort, Env: env,
 	})
 	if err != nil {
 		return nil, err
@@ -181,8 +187,8 @@ func Start(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store.
 
 // StartPending creates an attachable actor without starting a harness. The
 // lifecycle runner activates it only after provisioning has completed.
-func StartPending(st *store.Store, ad adapter.Adapter, meta store.SessionMeta, logf func(string, ...any)) *Actor {
-	a := &Actor{ID: meta.ID, Harness: meta.Harness, Cwd: meta.Cwd, store: st, adapter: ad,
+func StartPending(st *store.Store, ad adapter.Adapter, meta store.SessionMeta, env map[string]string, logf func(string, ...any)) *Actor {
+	a := &Actor{ID: meta.ID, Harness: meta.Harness, Cwd: meta.Cwd, store: st, adapter: ad, env: env,
 		inbox: make(chan command, 64), quit: make(chan struct{}), state: projection.New(meta.ID),
 		pendingPerm: map[string]chan adapter.PermissionOutcome{}, pendingElicit: map[string]chan adapter.ElicitationResult{},
 		subs: map[string]*Subscriber{}, logf: logf}
@@ -194,7 +200,7 @@ func StartPending(st *store.Store, ad adapter.Adapter, meta store.SessionMeta, l
 
 // Resume rebuilds an actor for an existing session id, replaying its log into
 // the projection before starting a fresh harness process.
-func Resume(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store.SessionMeta, logf func(string, ...any)) (*Actor, error) {
+func Resume(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store.SessionMeta, env map[string]string, logf func(string, ...any)) (*Actor, error) {
 	state, err := loadState(ctx, st, meta.ID)
 	if err != nil {
 		return nil, err
@@ -206,6 +212,7 @@ func Resume(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store
 		Cwd:           meta.Cwd,
 		store:         st,
 		adapter:       ad,
+		env:           env,
 		inbox:         make(chan command, 64),
 		quit:          make(chan struct{}),
 		state:         state,
@@ -231,6 +238,7 @@ func Resume(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store
 		Effort:           state.Effort,
 		Resume:           true,
 		HarnessSessionID: state.HarnessSessionID,
+		Env:              env,
 	})
 	if err != nil {
 		return nil, err
@@ -294,12 +302,12 @@ func RestoreClosed(ctx context.Context, st *store.Store, meta store.SessionMeta,
 	return a, nil
 }
 
-func RestorePending(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store.SessionMeta, logf func(string, ...any)) (*Actor, error) {
+func RestorePending(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store.SessionMeta, env map[string]string, logf func(string, ...any)) (*Actor, error) {
 	state, err := loadState(ctx, st, meta.ID)
 	if err != nil {
 		return nil, err
 	}
-	a := &Actor{ID: meta.ID, Harness: meta.Harness, Cwd: meta.Cwd, store: st, adapter: ad, inbox: make(chan command, 64), quit: make(chan struct{}), state: state, head: state.Seq, pendingPerm: map[string]chan adapter.PermissionOutcome{}, pendingElicit: map[string]chan adapter.ElicitationResult{}, subs: map[string]*Subscriber{}, logf: logf}
+	a := &Actor{ID: meta.ID, Harness: meta.Harness, Cwd: meta.Cwd, store: st, adapter: ad, env: env, inbox: make(chan command, 64), quit: make(chan struct{}), state: state, head: state.Seq, pendingPerm: map[string]chan adapter.PermissionOutcome{}, pendingElicit: map[string]chan adapter.ElicitationResult{}, subs: map[string]*Subscriber{}, logf: logf}
 	a.wg.Add(1)
 	go a.run()
 	return a, nil
@@ -554,7 +562,7 @@ func (a *Actor) handle(c command) (stop bool) {
 			c.reply <- cmdResult{}
 			return false
 		}
-		sess, err := a.adapter.CreateSession(ctx, hostServices{a}, adapter.CreateOptions{SessionID: a.ID, Cwd: c.prompt, Model: c.model, Mode: c.mode, Effort: c.effort})
+		sess, err := a.adapter.CreateSession(ctx, hostServices{a}, adapter.CreateOptions{SessionID: a.ID, Cwd: c.prompt, Model: c.model, Mode: c.mode, Effort: c.effort, Env: a.env})
 		if err != nil {
 			c.reply <- cmdResult{err: err}
 			return false

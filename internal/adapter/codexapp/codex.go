@@ -46,8 +46,10 @@ func (a *Adapter) Meta() adapter.HarnessMeta {
 
 // Probe reports whether a Codex session could start right now. Codex needs
 // only its own CLI: it exposes app-server as a documented programmatic
-// interface, so there is no sidecar and no runtime to find.
-func (a *Adapter) Probe(ctx context.Context) adapter.Availability {
+// interface, so there is no sidecar and no runtime to find. The instance's
+// env overlay is applied to the probe run so a per-account CODEX_HOME is
+// checked, not the ambient one.
+func (a *Adapter) Probe(ctx context.Context, env map[string]string) adapter.Availability {
 	path, err := exec.LookPath(a.Bin)
 	if err != nil {
 		return adapter.Unavailable(
@@ -59,7 +61,9 @@ func (a *Adapter) Probe(ctx context.Context) adapter.Availability {
 
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(probeCtx, path, "--version").Output()
+	probe := exec.CommandContext(probeCtx, path, "--version")
+	probe.Env = adapter.MergeEnv(os.Environ(), env)
+	out, err := probe.Output()
 	if err != nil {
 		return adapter.Unavailable(
 			"The Codex CLI was found at "+path+" but did not run.",
@@ -145,7 +149,9 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 
 	cmd := exec.Command(a.Bin, "app-server")
 	cmd.Dir = o.Cwd
-	cmd.Env = os.Environ()
+	// The instance's overlay over the ambient environment is the entire
+	// credential mechanism: a per-account CODEX_HOME isolates config and login.
+	cmd.Env = adapter.MergeEnv(os.Environ(), o.Env)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

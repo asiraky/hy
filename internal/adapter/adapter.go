@@ -6,6 +6,8 @@ package adapter
 import (
 	"context"
 	"encoding/json"
+	"sort"
+	"strings"
 
 	"github.com/asiraky/hy/internal/proto"
 )
@@ -17,6 +19,12 @@ type CreateOptions struct {
 	Model     string
 	Mode      string
 	Effort    string
+
+	// Env is the provider instance's credential overlay, applied over the
+	// ambient environment when the harness process spawns. It is the entire
+	// multi-account mechanism: adapters never learn what an instance is, they
+	// just export these variables. Nil means ambient credentials.
+	Env map[string]string
 
 	// Resume asks the harness to continue an existing conversation rather
 	// than start a fresh one, so restarting the server does not amnesia the
@@ -46,10 +54,12 @@ type Adapter interface {
 	// permissive last. The id is opaque to the server and the UI; only the
 	// adapter interprets it.
 	PermissionModes() []PermissionModeMeta
-	// Probe reports whether this harness can start right now. It must be
+	// Probe reports whether this harness can start right now, under the given
+	// provider instance's environment overlay (nil means ambient). It must be
 	// cheap, must not mutate anything, and must never block for long: it runs
-	// at startup and whenever a UI asks to re-check.
-	Probe(ctx context.Context) Availability
+	// at startup and whenever a UI asks to re-check. It runs per instance, so
+	// two accounts can report independent health.
+	Probe(ctx context.Context, env map[string]string) Availability
 	CreateSession(ctx context.Context, host HostServices, o CreateOptions) (Session, error)
 }
 
@@ -123,6 +133,35 @@ func Unavailable(reason string, remedy ...Remedy) Availability {
 }
 
 func (a Availability) OK() bool { return a.State == StateReady }
+
+// MergeEnv applies an instance's overlay onto a base environment, replacing
+// any variable the overlay names. Overlay keys are applied in sorted order so
+// the result is deterministic. This is the whole credential mechanism: no
+// value is ever handed to an SDK directly.
+func MergeEnv(base []string, overlay map[string]string) []string {
+	if len(overlay) == 0 {
+		return base
+	}
+	out := make([]string, 0, len(base)+len(overlay))
+	for _, entry := range base {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok {
+			if _, shadowed := overlay[name]; shadowed {
+				continue
+			}
+		}
+		out = append(out, entry)
+	}
+	names := make([]string, 0, len(overlay))
+	for name := range overlay {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		out = append(out, name+"="+overlay[name])
+	}
+	return out
+}
 
 // Session is one live harness process.
 type Session interface {

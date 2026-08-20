@@ -40,7 +40,7 @@ func (f *fakeAdapter) PermissionModes() []adapter.PermissionModeMeta {
 	return []adapter.PermissionModeMeta{{ID: "manual", Label: "Manual", Default: true}}
 }
 
-func (f *fakeAdapter) Probe(ctx context.Context) adapter.Availability {
+func (f *fakeAdapter) Probe(ctx context.Context, env map[string]string) adapter.Availability {
 	return adapter.Ready(nil)
 }
 
@@ -114,7 +114,7 @@ func newTestActor(t *testing.T) (*Actor, *fakeAdapter, *store.Store) {
 
 	fa := &fakeAdapter{}
 	mgr := NewManager(st, func(string, ...any) {}, fa)
-	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	actor, err := mgr.Create(context.Background(), "fake", "", t.TempDir(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -710,7 +710,7 @@ func TestResumeFinishesInterruptedTurnAndCancelsPendingPermission(t *testing.T) 
 
 	fa := &fakeAdapter{}
 	mgr := NewManager(st, func(string, ...any) {}, fa)
-	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	actor, err := mgr.Create(context.Background(), "fake", "", t.TempDir(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -760,7 +760,7 @@ func TestResumeContinuesTheInterruptedWork(t *testing.T) {
 
 	fa := &fakeAdapter{}
 	mgr := NewManager(st, func(string, ...any) {}, fa)
-	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	actor, err := mgr.Create(context.Background(), "fake", "", t.TempDir(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -828,7 +828,7 @@ func TestContinueRestartsWorkAfterTheAutomaticTriesRunOut(t *testing.T) {
 
 	fa := &fakeAdapter{}
 	mgr := NewManager(st, func(string, ...any) {}, fa)
-	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	actor, err := mgr.Create(context.Background(), "fake", "", t.TempDir(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -919,7 +919,7 @@ func TestStartupResumesInterruptedWorkWithoutAnAttach(t *testing.T) {
 
 	fa := &fakeAdapter{}
 	mgr := NewManager(st, func(string, ...any) {}, fa)
-	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	actor, err := mgr.Create(context.Background(), "fake", "", t.TempDir(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -963,7 +963,7 @@ func TestRepeatedlyInterruptedTurnStopsRecoveringItself(t *testing.T) {
 
 	fa := &fakeAdapter{}
 	mgr := NewManager(st, func(string, ...any) {}, fa)
-	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	actor, err := mgr.Create(context.Background(), "fake", "", t.TempDir(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1032,7 +1032,7 @@ func TestClosedSessionRemainsAttachableWithoutHarness(t *testing.T) {
 	mgr := NewManager(st, func(string, ...any) {}, fa)
 	defer mgr.Shutdown()
 
-	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	actor, err := mgr.Create(context.Background(), "fake", "", t.TempDir(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1067,7 +1067,7 @@ func TestGetCannotResumeWhileCloseIsInProgress(t *testing.T) {
 	fa := &fakeAdapter{}
 	mgr := NewManager(st, func(string, ...any) {}, fa)
 	defer mgr.Shutdown()
-	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	actor, err := mgr.Create(context.Background(), "fake", "", t.TempDir(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
