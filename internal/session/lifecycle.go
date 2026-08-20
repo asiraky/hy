@@ -327,6 +327,15 @@ func (m *Manager) cleanup(meta store.SessionMeta, p project.Project, a *Actor, p
 	_ = a.Emit(ctx, proto.Emit(proto.WorkspaceCleanupStarted, map[string]any{"purge": purge}))
 	_ = m.store.SetPhase(ctx, meta.ID, "cleaning")
 	m.notifyList()
+
+	// The snapshots have to go before the checkout does. They are refs in the
+	// repository this worktree belongs to, so removing the worktree strands
+	// them — along with every blob they hold, including the contents of files
+	// Git was otherwise never tracking. This is not conditional on the
+	// workspace mode: a local session's snapshots are just as much ours to
+	// clean up, and its checkout is the one the user keeps.
+	purgeCheckpoints(ctx, meta.Cwd, meta.ID, m.logf)
+
 	// Only a managed lease is hy's to tear down, and the mode is checked
 	// before the script rather than after it. A session created by an earlier
 	// build can be local and still carry a deprovision script; running that

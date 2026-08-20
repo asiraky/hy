@@ -16,6 +16,10 @@ const (
 
 	TurnStarted  = "turn.started"
 	TurnFinished = "turn.finished"
+	// TurnDiff reports what one turn changed on disk. It arrives after
+	// turn.finished, because it is measured by snapshotting the checkout once
+	// the harness has stopped writing to it.
+	TurnDiff = "turn.diff"
 
 	MessageChunk    = "message.chunk"
 	ToolCallStarted = "tool_call.started"
@@ -176,6 +180,36 @@ type TurnStartedPayload struct {
 type TurnRecovery struct {
 	ResumeOf string `json:"resumeOf"`
 	Attempt  int    `json:"attempt"`
+}
+
+// ChangedFile is one path a change set touched, aggregated over the whole set:
+// a file edited five times appears once.
+type ChangedFile struct {
+	Path string `json:"path"`
+	// OldPath is set for a rename, and is the name the file had before it.
+	OldPath string `json:"oldPath,omitempty"`
+	// Status is one of added, modified, deleted, renamed, copied.
+	Status    string `json:"status"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+	// Binary files have no line counts, so the UI must not print +0 / -0.
+	Binary bool `json:"binary,omitempty"`
+	// Untracked marks a file Git has never seen, which needs --no-index to diff.
+	Untracked bool `json:"untracked,omitempty"`
+}
+
+// TurnDiffPayload is what one turn changed, measured between the snapshots
+// bracketing it rather than read out of the tool calls: a formatter or a codemod
+// changes files without ever going through a tool we parse.
+type TurnDiffPayload struct {
+	TurnID    string        `json:"turnId"`
+	Files     []ChangedFile `json:"files"`
+	Additions int           `json:"additions"`
+	Deletions int           `json:"deletions"`
+	Truncated bool          `json:"truncated,omitempty"`
+	// Error explains a turn whose changes could not be measured. An empty list
+	// and a failed snapshot are otherwise indistinguishable.
+	Error string `json:"error,omitempty"`
 }
 
 type TurnFinishedPayload struct {

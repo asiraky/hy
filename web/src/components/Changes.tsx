@@ -36,6 +36,12 @@ export interface ChangesProps {
   revision: string;
   loadChanges: () => Promise<SessionChanges>;
   loadDiff: (path: string) => Promise<FileDiff>;
+  /**
+   * A file to open and scroll to, set when someone clicks a path in a turn's
+   * card. The nonce changes on every request, so asking for the same file twice
+   * still brings it back into view.
+   */
+  reveal?: { path: string; nonce: number } | null;
 }
 
 function Counts({ additions, deletions, binary }: { additions: number; deletions: number; binary?: boolean }) {
@@ -50,6 +56,7 @@ function Counts({ additions, deletions, binary }: { additions: number; deletions
 
 function FileRow({
   file,
+  rowRef,
   expanded,
   diff,
   loading,
@@ -57,6 +64,7 @@ function FileRow({
   onToggle,
 }: {
   file: ChangedFile;
+  rowRef?: (el: HTMLDivElement | null) => void;
   expanded: boolean;
   diff?: FileDiff;
   loading: boolean;
@@ -68,7 +76,7 @@ function FileRow({
   const name = slash === -1 ? file.path : file.path.slice(slash + 1);
 
   return (
-    <div className="border-b last:border-b-0">
+    <div ref={rowRef} className="border-b last:border-b-0">
       <button
         type="button"
         onClick={onToggle}
@@ -126,7 +134,7 @@ function FileRow({
   );
 }
 
-function ChangesBody({ open, onClose, revision, loadChanges, loadDiff, inSheet }: ChangesProps & { inSheet?: boolean }) {
+function ChangesBody({ open, onClose, revision, loadChanges, loadDiff, reveal, inSheet }: ChangesProps & { inSheet?: boolean }) {
   const [changes, setChanges] = useState<SessionChanges | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -135,6 +143,8 @@ function ChangesBody({ open, onClose, revision, loadChanges, loadDiff, inSheet }
 
   // Paths already asked for, so expanding a row twice does not re-read it.
   const requested = useRef(new Set<string>());
+  // Row elements, so a revealed file can be scrolled to.
+  const rowRefs = useRef(new Map<string, HTMLDivElement>());
   // A refresh that started earlier must not overwrite a later one's answer.
   const generation = useRef(0);
   // The loaders are held by ref: a parent that re-creates them on every render
@@ -169,8 +179,8 @@ function ChangesBody({ open, onClose, revision, loadChanges, loadDiff, inSheet }
     if (open) void refresh();
   }, [open, revision, refresh]);
 
-  const toggle = useCallback((path: string) => {
-    setExpanded((current) => (current === path ? null : path));
+  const toggle = useCallback((path: string, forceOpen = false) => {
+    setExpanded((current) => (current === path && !forceOpen ? null : path));
     if (requested.current.has(path)) return;
     requested.current.add(path);
     // A diff read against the list we were showing describes that list. If a
@@ -192,7 +202,23 @@ function ChangesBody({ open, onClose, revision, loadChanges, loadDiff, inSheet }
       });
   }, []);
 
+  const toggleRef = useRef(toggle);
+  toggleRef.current = toggle;
+
   const files = changes?.files ?? [];
+
+  // Reveal whatever the transcript asked for, once the list it belongs to has
+  // arrived. A path the list does not carry is not an error: the file may have
+  // been changed by an earlier turn and put back since.
+  useEffect(() => {
+    if (!reveal || !open) return;
+    if (!files.some((f) => f.path === reveal.path)) return;
+    setExpanded(reveal.path);
+    if (!requested.current.has(reveal.path)) toggleRef.current(reveal.path, true);
+    const row = rowRefs.current.get(reveal.path);
+    row?.scrollIntoView({ block: "start", behavior: "smooth" });
+    // The nonce is what makes a repeat click count as a new request.
+  }, [reveal?.path, reveal?.nonce, open, files]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -247,6 +273,10 @@ function ChangesBody({ open, onClose, revision, loadChanges, loadDiff, inSheet }
           <FileRow
             key={f.path}
             file={f}
+            rowRef={(el) => {
+              if (el) rowRefs.current.set(f.path, el);
+              else rowRefs.current.delete(f.path);
+            }}
             expanded={expanded === f.path}
             diff={diffs[f.path]?.diff}
             loading={!!diffs[f.path]?.loading}

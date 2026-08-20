@@ -71,6 +71,15 @@ type Actor struct {
 	// the middle of. Recover consumes it; see recovery.go.
 	recovery *proto.TurnRecovery
 
+	// checkpoints snapshots the checkout around each turn, so a finished turn
+	// can say which files it changed. Nil when the session has no Git checkout
+	// to snapshot.
+	checkpoints *checkpointer
+	// measuring is the turn whose baseline was taken before the harness was
+	// told anything. Only that turn can be measured: any other would be
+	// compared against a picture of the checkout from the wrong moment.
+	measuring string
+
 	logf func(string, ...any)
 }
 
@@ -157,6 +166,8 @@ func Start(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store.
 	}
 	a.sess = sess
 
+	a.startCheckpoints()
+
 	a.wg.Add(1)
 	go a.run()
 	a.pump(sess)
@@ -225,6 +236,8 @@ func Resume(ctx context.Context, st *store.Store, ad adapter.Adapter, meta store
 		return nil, err
 	}
 	a.sess = sess
+
+	a.startCheckpoints()
 
 	a.wg.Add(1)
 	go a.run()
@@ -548,6 +561,7 @@ func (a *Actor) handle(c command) (stop bool) {
 		}
 		a.Cwd, a.sess = c.prompt, sess
 		a.pump(sess)
+		a.startCheckpoints()
 		c.reply <- cmdResult{}
 
 	case cmdSetMode:
@@ -593,6 +607,17 @@ func (a *Actor) handle(c command) (stop bool) {
 		}
 		turnID := uuid.NewString()
 		a.turnActive = turnID
+
+		// The baseline this turn is measured against has to be a picture of the
+		// checkout from before the harness could touch it, so it is taken — and
+		// waited for — before the prompt goes out. The wait is bounded: a slow
+		// checkout should cost this turn its card, not the turn itself.
+		baseCtx, cancelBase := context.WithTimeout(ctx, checkpointBaselineWait)
+		if a.checkpoints.baseline(baseCtx, turnID) {
+			a.measuring = turnID
+		}
+		cancelBase()
+
 		a.append(proto.Emit(proto.TurnStarted, proto.TurnStartedPayload{TurnID: turnID, Prompt: c.prompt, Recovery: c.recovery}))
 		_ = a.store.SetPhase(ctx, a.ID, "turn")
 		// A recovery prompt is the server talking to itself; naming a session
@@ -602,7 +627,9 @@ func (a *Actor) handle(c command) (stop bool) {
 		}
 
 		if err := a.sess.Prompt(ctx, adapter.PromptInput{TurnID: turnID, Text: c.prompt}); err != nil {
-			a.turnActive = ""
+			// turnActive is left for append to clear: a prompt that failed on
+			// the way out may still have reached the harness, and the closing
+			// snapshot is the only way to find out what it did.
 			a.append(proto.Emit(proto.TurnFinished, proto.TurnFinishedPayload{
 				TurnID: turnID, StopReason: proto.StopError, Error: err.Error(),
 			}))
@@ -723,6 +750,13 @@ func (a *Actor) shutdown(hard bool) {
 	if a.sess != nil {
 		_ = a.sess.Close()
 	}
+	// A session that is merely disposed will be resumed from the log, and its
+	// snapshots are the baseline the next turn needs. Only a session closed for
+	// good is done with them.
+	a.checkpoints.stop()
+	if phase == "closed" {
+		a.checkpoints.drop()
+	}
 	close(a.quit)
 
 	a.mu.Lock()
@@ -739,6 +773,20 @@ func (a *Actor) shutdown(hard bool) {
 	if onExit != nil {
 		onExit()
 	}
+}
+
+// checkpointBaselineWait bounds how long a prompt waits for the snapshot that
+// its turn will be measured against.
+const checkpointBaselineWait = 15 * time.Second
+
+// startCheckpoints begins snapshotting the checkout, so each turn can say which
+// files it changed. Every turn takes its own baseline when it starts; there is
+// nothing to do here but be ready.
+func (a *Actor) startCheckpoints() {
+	if a.checkpoints != nil || a.Cwd == "" {
+		return
+	}
+	a.checkpoints = newCheckpointer(a.Cwd, a.ID, a.enqueueEmission, a.logf)
 }
 
 // append writes the event, folds it into the projection, and fans it out.
@@ -759,6 +807,13 @@ func (a *Actor) append(em proto.Emission) {
 	a.mu.Unlock()
 
 	if em.Type == proto.TurnFinished {
+		// Only a turn whose baseline was taken can be measured. A turn.finished
+		// closing out a turn a restart interrupted, or one whose baseline never
+		// settled, has nothing honest to be compared against.
+		if a.measuring != "" && a.measuring == a.turnActive {
+			a.checkpoints.turnEnded(a.turnActive)
+		}
+		a.measuring = ""
 		a.turnActive = ""
 		_ = a.store.SetPhase(ctx, a.ID, "idle")
 	}

@@ -13,8 +13,17 @@ import {
   TriangleAlertIcon,
   XIcon,
 } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+} from "react";
 
+import { ChangedFiles } from "~/components/ChangedFiles";
 import { Markdown } from "~/components/Markdown";
 import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
@@ -91,28 +100,85 @@ function ToolCard({ item }: { item: Item }) {
   );
 }
 
-// A tool call is loud but rarely interesting. Consecutive settled calls fold
-// into one summary row so the conversation is what you read; anything that
-// still needs a human — a failure, or a call still running — is left out of the
-// fold and rendered on its own.
+// A tool call is loud but rarely interesting. Runs of settled calls fold into
+// one summary row so the conversation is what you read; anything that still
+// needs a human — a failure, or a call still running — is left out of the fold
+// and rendered on its own.
 function isProminent(item: Item) {
   return item.status === "failed" || item.status === "pending" || item.status === "in_progress";
+}
+
+function isFoldableTool(item: Item) {
+  return item.kind === "tool" && !isProminent(item);
+}
+
+// A harness narrates between its calls, and a run of fifty polls comes back as
+// fifty calls with "Waiting." between each pair. Folding only consecutive tool
+// items means one such word breaks every run, so a poll loop folds into
+// nothing. Brief narration therefore rides along inside the fold — but only
+// brief narration: a real explanation still breaks the run and stays where the
+// reader can see it without opening anything.
+const NARRATION_MAX = 200;
+
+function isNarration(item: Item) {
+  if (item.kind !== "message" || item.role !== "agent") return false;
+  const text = (item.text ?? "").trim();
+  return text.length > 0 && text.length <= NARRATION_MAX && !text.includes("\n");
+}
+
+// A harness can open a message block it never fills — a thought whose text the
+// model kept to itself. There is nothing to render and nothing to hide, so it
+// is dropped rather than left to print a blank line and cut a run in half.
+function isEmptyMessage(item: Item) {
+  return item.kind === "message" && (item.text ?? "").trim() === "";
 }
 
 type Row = { kind: "item"; item: Item } | { kind: "group"; id: string; items: Item[] };
 
 function groupRows(items: Item[]): Row[] {
   const rows: Row[] = [];
+  // The run being built, the narration trailing it that no later call has
+  // claimed yet, and how many of the run's items are actually tool calls.
+  let run: Item[] = [];
+  let trailing: Item[] = [];
+  let calls = 0;
+
+  // A run ends at its last tool call: narration after that is the agent
+  // talking to the reader, not labelling work, so it never gets folded away.
+  // One call is not a run — it reads better as the card itself.
+  const flush = () => {
+    if (calls > 1) rows.push({ kind: "group", id: run[0].id, items: run });
+    else for (const it of run) rows.push({ kind: "item", item: it });
+    for (const it of trailing) rows.push({ kind: "item", item: it });
+    run = [];
+    trailing = [];
+    calls = 0;
+  };
+
   for (const item of items) {
-    if (item.kind !== "tool" || isProminent(item)) {
-      rows.push({ kind: "item", item });
+    if (isEmptyMessage(item)) continue;
+    if (isFoldableTool(item)) {
+      run.push(...trailing, item);
+      trailing = [];
+      calls++;
       continue;
     }
-    const last = rows[rows.length - 1];
-    if (last?.kind === "group") last.items.push(item);
-    else rows.push({ kind: "group", id: item.id, items: [item] });
+    if (calls > 0 && isNarration(item)) {
+      trailing.push(item);
+      continue;
+    }
+    flush();
+    rows.push({ kind: "item", item });
   }
+  flush();
   return rows;
+}
+
+// A row belongs to the turn its last item came from: that is the turn whose
+// card, if it has one, comes next.
+function rowTurnID(row: Row): string | undefined {
+  if (row.kind === "item") return row.item.turnId;
+  return row.items[row.items.length - 1]?.turnId;
 }
 
 // One phrase per tool kind, in the order they read best in a summary. These
@@ -134,6 +200,7 @@ const SUMMARY: { kind: string; one: string; many: (n: number) => string }[] = [
 function summarise(items: Item[]): string {
   const counts = new Map<string, number>();
   for (const it of items) {
+    if (it.kind !== "tool") continue;
     const kind = it.toolKind && SUMMARY.some((s) => s.kind === it.toolKind) ? it.toolKind : "other";
     counts.set(kind, (counts.get(kind) ?? 0) + 1);
   }
@@ -147,9 +214,12 @@ function summarise(items: Item[]): string {
 
 function ToolGroup({ items }: { items: Item[] }) {
   const [open, setOpen] = useState(false);
-  const kinds = Array.from(new Set(items.map((i) => i.toolKind ?? "other")));
+  // A group can carry the narration that ran between its calls; the count and
+  // the icons describe the work, so both only look at the calls.
+  const calls = items.filter((i) => i.kind === "tool");
+  const kinds = Array.from(new Set(calls.map((i) => i.toolKind ?? "other")));
 
-  if (items.length === 1) return <ToolCard item={items[0]} />;
+  if (calls.length === 1) return <ToolCard item={calls[0]} />;
 
   return (
     <div className="fade-in">
@@ -167,16 +237,30 @@ function ToolGroup({ items }: { items: Item[] }) {
         </span>
         <span className="min-w-0 flex-1 truncate text-[12px]">{summarise(items)}</span>
         <span className="flex shrink-0 items-center gap-1 font-mono text-[10px]">
-          {open ? "hide" : `${items.length} calls`}
+          {open ? "hide" : `${calls.length} calls`}
           <ChevronDownIcon className={cn("size-3 transition-transform", open && "rotate-180")} />
         </span>
       </button>
 
       {open && (
         <div className="mt-2 space-y-2 border-l pl-3">
-          {items.map((item) => (
-            <ToolCard key={item.id} item={item} />
-          ))}
+          {items.map((item) =>
+            item.kind === "tool" ? (
+              <ToolCard key={item.id} item={item} />
+            ) : (
+              // Narration reads the same inside the fold as it does outside it:
+              // the same text rendered two different ways in one transcript is
+              // a seam the reader has to notice.
+              <Markdown
+                key={item.id}
+                text={item.text ?? ""}
+                className={cn(
+                  "text-[13px] leading-relaxed break-words",
+                  item.contentKind === "thought" ? "text-thought italic" : "text-muted-foreground",
+                )}
+              />
+            ),
+          )}
         </div>
       )}
     </div>
@@ -398,12 +482,14 @@ export function Transcript({
   onCleanup,
   onForceDelete,
   onContinue,
+  onOpenDiff,
 }: {
   state: SessionState;
   onRetryProvision: () => void;
   onCleanup: () => void;
   onForceDelete: () => void;
   onContinue: () => void;
+  onOpenDiff: (path?: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -440,11 +526,13 @@ export function Transcript({
   }, []);
 
   // Only the final agent block is still growing; everything above it is
-  // settled and renders in full.
+  // settled and renders in full. A block the harness opened but never filled is
+  // not it: nothing of it is on screen, so treating it as the growing one would
+  // leave the turn looking idle while the agent works.
   const lastAgentId = useMemo(() => {
     for (let i = state.items.length - 1; i >= 0; i--) {
       const it = state.items[i];
-      if (it.kind === "message" && it.role === "agent") return it.id;
+      if (it.kind === "message" && it.role === "agent" && (it.text ?? "").trim() !== "") return it.id;
     }
     return undefined;
   }, [state.items]);
@@ -458,6 +546,14 @@ export function Transcript({
     const last = state.turns[state.turns.length - 1];
     return last?.done && last.stopReason === "error" ? last : undefined;
   }, [state.turns, state.phase, state.closed]);
+
+  // What each turn changed, to be shown under the turn that changed it. A turn
+  // that changed nothing has no entry, and gets no card.
+  const turnDiffs = useMemo(
+    () => new Map(state.turns.filter((t) => t.diff).map((t) => [t.id, t.diff!])),
+    [state.turns],
+  );
+  const lastTurnID = state.turns[state.turns.length - 1]?.id;
 
   const recoveredTurns = useMemo(
     () => new Set(state.turns.filter((t) => t.recovery).map((t) => t.id)),
@@ -481,20 +577,33 @@ export function Transcript({
           </div>
         )}
 
-        {rows.map((row) =>
-          row.kind === "group" ? (
-            <ToolGroup key={row.id} items={row.items} />
-          ) : row.item.kind === "tool" ? (
-            <ToolCard key={row.item.id} item={row.item} />
-          ) : (
-            <Message
-              key={row.item.id}
-              item={row.item}
-              streaming={state.phase === "turn" && row.item.id === lastAgentId}
-              recovered={!!row.item.turnId && recoveredTurns.has(row.item.turnId)}
-            />
-          ),
-        )}
+        {rows.map((row, i) => {
+          const key = row.kind === "group" ? row.id : row.item.id;
+          // The card goes after the last row of the turn it describes, which is
+          // the row whose successor belongs to a different turn.
+          const turnID = rowTurnID(row);
+          const nextTurnID = i + 1 < rows.length ? rowTurnID(rows[i + 1]) : undefined;
+          const diff = turnID && turnID !== nextTurnID ? turnDiffs.get(turnID) : undefined;
+
+          return (
+            <Fragment key={key}>
+              {row.kind === "group" ? (
+                <ToolGroup items={row.items} />
+              ) : row.item.kind === "tool" ? (
+                <ToolCard item={row.item} />
+              ) : (
+                <Message
+                  item={row.item}
+                  streaming={state.phase === "turn" && row.item.id === lastAgentId}
+                  recovered={!!row.item.turnId && recoveredTurns.has(row.item.turnId)}
+                />
+              )}
+              {diff && (
+                <ChangedFiles diff={diff} latest={turnID === lastTurnID} onOpenDiff={onOpenDiff} />
+              )}
+            </Fragment>
+          );
+        })}
 
         {state.phase === "turn" && lastAgentId === undefined && (
           <div className="text-muted-foreground flex items-center gap-2 text-sm">

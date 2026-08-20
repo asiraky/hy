@@ -86,6 +86,21 @@ export interface FileDiff {
   truncated?: boolean;
 }
 
+/**
+ * What one turn changed on disk, measured between the snapshots bracketing it.
+ * A turn that changed nothing has none: the server does not report an empty
+ * list, because "0 files changed" is noise on every turn that was a question.
+ */
+export interface TurnDiff {
+  turnId: string;
+  files: ChangedFile[];
+  additions: number;
+  deletions: number;
+  truncated?: boolean;
+  /** Why the turn's changes could not be measured, when they could not be. */
+  error?: string;
+}
+
 export interface TurnRecovery {
   resumeOf: string;
   attempt: number;
@@ -100,6 +115,9 @@ export interface Turn {
   // Present only on a turn the server started itself, to continue work a
   // restart interrupted.
   recovery?: TurnRecovery;
+  // What the turn changed on disk. Absent until the turn has finished and been
+  // measured, and on any turn that changed nothing.
+  diff?: TurnDiff;
 }
 
 export interface PermissionOption {
