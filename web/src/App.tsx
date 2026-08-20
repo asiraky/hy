@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Client, wsURL, type ConnectionStatus } from "./client";
 import { useIsDesktop } from "./useMediaQuery";
-import type { Access, HarnessMeta, Project, ProjectConfig, SessionMeta, SessionState, UserConfig } from "./protocol";
+import type { Access, FileDiff, HarnessMeta, Project, ProjectConfig, SessionChanges, SessionMeta, SessionState, UserConfig } from "./protocol";
 import { AccessPanel } from "./components/Access";
+import { Changes } from "./components/Changes";
 import { Composer } from "./components/Composer";
 import { NewSession } from "./components/NewSession";
 import type { NewSessionInput } from "./components/NewSession";
@@ -24,7 +25,7 @@ import {
 } from "./components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./components/ui/tooltip";
 import { cn } from "./lib/utils";
-import { PanelLeftIcon, PlusIcon, SettingsIcon } from "lucide-react";
+import { FileDiffIcon, PanelLeftIcon, PlusIcon, SettingsIcon } from "lucide-react";
 import { toast } from "sonner";
 
 const LAST_SESSION = "hy.lastSession";
@@ -47,6 +48,7 @@ export function App() {
   const [userConfig, setUserConfig] = useState<UserConfig | null>(null);
   const [access, setAccess] = useState<Access | null>(null);
   const [showAccess, setShowAccess] = useState(false);
+  const [showChanges, setShowChanges] = useState(false);
 
   const clientRef = useRef<Client | null>(null);
   const forcePromptedRef = useRef<string | null>(null);
@@ -101,6 +103,9 @@ export function App() {
     (id: string) => {
       setActiveId(id);
       activeRef.current = id;
+      // The panel belongs to a checkout, so it must not survive a move to a
+      // different one.
+      setShowChanges(false);
       setState(null);
       localStorage.setItem(LAST_SESSION, id);
       clientRef.current?.attach(id);
@@ -131,6 +136,21 @@ export function App() {
 
   const addProject = useCallback(async (root: string) => { const res=await clientRef.current!.command("add_project",{root}); setProjects(p=>[res.project,...p.filter(x=>x.id!==res.project.id)]); },[]);
   const saveProject = useCallback(async (projectId:string,config:ProjectConfig) => { const res=await clientRef.current!.command("save_project",{projectId,config}); setProjects(p=>p.map(x=>x.id===projectId?res.project:x)); },[]);
+
+  // Git is the source of truth for what a session changed: it catches the
+  // formatter and the codemod as well as the edits we parsed out of tool calls.
+  const loadChanges = useCallback(async () => {
+    const res = await clientRef.current!.command("session_changes", { sessionId: activeId });
+    return res.changes as SessionChanges;
+  }, [activeId]);
+
+  const loadFileDiff = useCallback(
+    async (path: string) => {
+      const res = await clientRef.current!.command("session_file_diff", { sessionId: activeId, path });
+      return res.diff as FileDiff;
+    },
+    [activeId],
+  );
 
   const send = useCallback(
     (text: string) => {
@@ -326,6 +346,14 @@ export function App() {
                 </span>
               )}
 
+              <IconButton
+                label={showChanges ? "Hide changed files" : "Show changed files"}
+                onClick={() => setShowChanges((v) => !v)}
+                className={cn(showChanges && "bg-accent")}
+              >
+                <FileDiffIcon />
+              </IconButton>
+
               {activeProject && (
                 <IconButton
                   label={`${activeProject.config.name} settings`}
@@ -400,6 +428,17 @@ export function App() {
           </div>
         )}
       </main>
+
+      {state && activeId && (
+        <Changes
+          open={showChanges}
+          onClose={() => setShowChanges(false)}
+          // The worktree is worth re-reading when the agent stops writing to it.
+          revision={`${activeId}:${state.phase === "turn" ? "turn" : "settled"}`}
+          loadChanges={loadChanges}
+          loadDiff={loadFileDiff}
+        />
+      )}
 
       {showAccess && access && (
         <AccessPanel

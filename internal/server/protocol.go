@@ -100,6 +100,11 @@ type sessionArgs struct {
 	SessionID string `json:"sessionId"`
 }
 
+type fileDiffArgs struct {
+	SessionID string `json:"sessionId"`
+	Path      string `json:"path"`
+}
+
 type setModeArgs struct {
 	SessionID string `json:"sessionId"`
 	Mode      string `json:"mode"`
