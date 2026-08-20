@@ -55,6 +55,14 @@ func (m *Manager) ListWorkspaces(ctx context.Context, projectID string) ([]Works
 	} else {
 		out = parseWorktreeList(string(listed), root)
 	}
+	// The configured project root is always attachable, whatever Git thinks.
+	// A project rooted at a subdirectory of a repository — a package inside a
+	// monorepo — is a checkout Git never names, since `worktree list` reports
+	// the repository root instead. Without this the root is missing from the
+	// picker and a main-checkout session cannot be created there at all.
+	if !hasRoot(out) {
+		out = append([]Workspace{{Path: root, IsRoot: true, Branch: currentBranch(ctx, root)}}, out...)
+	}
 
 	sessions, err := m.store.ListSessions(ctx)
 	if err != nil {
@@ -69,20 +77,23 @@ func (m *Manager) ListWorkspaces(ctx context.Context, projectID string) ([]Works
 		if s.Phase == "closed" || s.Cwd == "" {
 			continue
 		}
-		// A managed session's Cwd is only a placeholder until its worktree
-		// exists, and the placeholder is the project root. Counting it would
-		// report the root busy for the length of every provision, and forever
-		// after one that failed. Local and borrowed sessions hold their
-		// checkout from the moment they are created, because they never
-		// move.
-		if s.WorkspaceMode == "managed" && (s.Phase == "creating" || s.Phase == "provisioning" || s.Phase == "provision_failed") {
-			continue
-		}
 		abs, absErr := filepath.Abs(s.Cwd)
 		if absErr != nil {
 			continue
 		}
 		abs = canonicalPath(abs)
+		// A managed session's Cwd is the project root only as a placeholder,
+		// until provisioning replaces it with the worktree. Counting that
+		// placeholder would report the root busy for the length of every
+		// provision and forever after one that failed. The test is
+		// deliberately narrow: once the row names a worktree of its own, the
+		// session holds it even if it never reached ready, or cleaning up the
+		// failure would delete a checkout somebody else had since attached
+		// to. Local and borrowed sessions hold their checkout from creation,
+		// because they never move.
+		if abs == root && s.WorkspaceMode == "managed" && !provisioned(s.Phase) {
+			continue
+		}
 		if _, taken := holders[abs]; taken {
 			continue
 		}
@@ -98,6 +109,40 @@ func (m *Manager) ListWorkspaces(ctx context.Context, projectID string) ([]Works
 		}
 	}
 	return out, nil
+}
+
+func hasRoot(spaces []Workspace) bool {
+	for _, w := range spaces {
+		if w.IsRoot {
+			return true
+		}
+	}
+	return false
+}
+
+// currentBranch reports the branch a checkout is on, or "" when it is detached
+// or not a repository at all. It is informational only: nothing is created or
+// removed on the strength of it.
+func currentBranch(ctx context.Context, dir string) string {
+	out, err := runGit(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return ""
+	}
+	branch := strings.TrimSpace(string(out))
+	if branch == "HEAD" {
+		return ""
+	}
+	return branch
+}
+
+// provisioned reports whether a session has finished preparing its workspace,
+// and so whether its recorded Cwd is the real one.
+func provisioned(phase string) bool {
+	switch phase {
+	case "creating", "provisioning", "provision_failed":
+		return false
+	}
+	return true
 }
 
 func parseWorktreeList(porcelain, root string) []Workspace {
