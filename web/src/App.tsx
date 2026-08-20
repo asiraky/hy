@@ -12,9 +12,8 @@ import { PermissionPrompt } from "./components/PermissionPrompt";
 import { ElicitationPrompt } from "./components/ElicitationPrompt";
 import { Sidebar } from "./components/Sidebar";
 import { Transcript } from "./components/Transcript";
-import { HarnessBadge } from "./components/HarnessBadge";
 import { IconButton } from "./components/IconButton";
-import { StatusDot } from "./components/StatusDot";
+import { ThemePreview } from "./components/ThemePreview";
 import { Button } from "./components/ui/button";
 import {
   Select,
@@ -23,12 +22,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "./components/ui/select";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./components/ui/tooltip";
 import { cn } from "./lib/utils";
 import { FileDiffIcon, PanelLeftIcon, PlusIcon, SettingsIcon } from "lucide-react";
 import { toast } from "sonner";
 
 const LAST_SESSION = "hy.lastSession";
+
+// The permission-mode switcher is parked, not removed: changing modes mid-chat
+// is not something we want to offer right now, and hiding it is cheaper to
+// reverse than deleting it. Flip this to bring it back.
+const SHOW_MODE_SWITCHER = false;
 
 export function App() {
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
@@ -49,6 +52,17 @@ export function App() {
   const [access, setAccess] = useState<Access | null>(null);
   const [showAccess, setShowAccess] = useState(false);
   const [showChanges, setShowChanges] = useState(false);
+  // One click takes the diff panel to the full content width; another brings
+  // it back. There is no in-between state on purpose.
+  const [changesExpanded, setChangesExpanded] = useState(false);
+  // The theme sample page: a static mock of the dashboard behind a palette
+  // switcher, reachable at #themes so it needs no router.
+  const [themePreview, setThemePreview] = useState(() => window.location.hash === "#themes");
+  useEffect(() => {
+    const onHash = () => setThemePreview(window.location.hash === "#themes");
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   // Which file the changes panel should reveal, and a counter that changes on
   // every request. Without the counter, asking for the same file twice would
   // look identical to the panel and it would not scroll back to it.
@@ -117,6 +131,7 @@ export function App() {
       // The panel belongs to a checkout, so it must not survive a move to a
       // different one.
       setShowChanges(false);
+      setChangesExpanded(false);
       // A file asked for in one session means nothing in the next, and another
       // session holding the same path would otherwise open it unasked.
       setReveal(null);
@@ -268,6 +283,16 @@ export function App() {
     (id: string) => harnesses.find((h) => h.id === id)?.accent,
     [harnesses],
   );
+
+  const switchModel = useCallback(
+    (modelId: string) => {
+      if (!activeId) return;
+      clientRef.current?.command("set_model", { sessionId: activeId, model: modelId }).catch((e) => {
+        toast.error("Could not switch model", { description: e.message });
+      });
+    },
+    [activeId],
+  );
   const pending = state?.pendingPermissions?.[0];
   const elicitation = state?.pendingElicitations?.[0];
   const activeProject = projects.find((p) => p.id === meta?.projectId);
@@ -287,6 +312,8 @@ export function App() {
     setActiveId(null); setState(null); clientRef.current?.detach();
   }, [sessions, activeId, state]);
 
+  if (themePreview) return <ThemePreview />;
+
   return (
     <div className="flex h-full overflow-hidden">
       <Sidebar
@@ -298,43 +325,37 @@ export function App() {
         onSelect={select}
         onNew={startNew}
         onDelete={remove}
+        onShowAccess={() => setShowAccess(true)}
         accentOf={accentOf}
         projectName={(id)=>projects.find(p=>p.id===id)?.config.name}
       />
 
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-2 border-b px-2 pt-[calc(0.5rem+env(safe-area-inset-top))] pb-2 md:px-3">
+      <main
+        className={cn(
+          "flex min-h-0 min-w-0 flex-1 flex-col",
+          // The expanded diff panel takes the whole content area; the main
+          // column stays mounted so the transcript keeps its scroll and state.
+          showChanges && changesExpanded && "hidden",
+        )}
+      >
+        <header className="flex items-center gap-2 px-2 pt-[calc(0.5rem+env(safe-area-inset-top))] pb-2 md:px-3">
+          {/* The open sidebar carries its own collapse button, so this one
+              only appears when there is a closed sidebar to reopen. */}
           <IconButton
-            label={sidebarOpen ? "Hide sessions" : "Show sessions"}
-            onClick={() => setSidebarOpen(!sidebarOpen)}
+            label="Show sessions"
+            onClick={() => setSidebarOpen(true)}
+            className={cn(sidebarOpen && "md:hidden")}
           >
             <PanelLeftIcon />
           </IconButton>
 
           {state ? (
             <>
-              <HarnessBadge harness={state.harness} accent={accentOf(state.harness)} />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-[13px] font-medium">
-                  {state.title || "Untitled session"}
-                </p>
-                <p className="text-muted-foreground flex items-center gap-1.5 truncate font-mono text-[10px]">
-                  {/* An agent loose in the user's own checkout is the one case
-                      worth calling out, because nothing else on screen
-                      distinguishes it from a disposable worktree. */}
-                  {state.workspace.mode === "local" && (
-                    <span className="border-attention text-attention-foreground shrink-0 rounded border px-1 font-sans text-[9px] leading-[1.4]">
-                      main checkout
-                    </span>
-                  )}
-                  <span className="truncate">
-                    {state.cwd}
-                    {state.model && ` · ${state.model}`}
-                  </span>
-                </p>
-              </div>
+              <p className="min-w-0 flex-1 truncate text-[13px] font-medium">
+                {state.title || "Untitled session"}
+              </p>
 
-              {modeOptions.length > 0 && !state.closed && (
+              {SHOW_MODE_SWITCHER && modeOptions.length > 0 && !state.closed && (
                 <Select value={currentModeId} onValueChange={switchMode}>
                   {/* Every mode gets the same chip: one that changed shape or
                       colour by mode would jitter the header and shout at the
@@ -355,13 +376,6 @@ export function App() {
                 </Select>
               )}
 
-              {state.usage.output > 0 && (
-                <span className="text-muted-foreground hidden font-mono text-[10px] sm:block">
-                  {state.usage.input.toLocaleString()} in / {state.usage.output.toLocaleString()} out
-                  {state.usage.cost > 0 && ` · $${state.usage.cost.toFixed(3)}`}
-                </span>
-              )}
-
               <IconButton
                 label={showChanges ? "Hide changed files" : "Show changed files"}
                 onClick={() => setShowChanges((v) => !v)}
@@ -379,20 +393,6 @@ export function App() {
                 </IconButton>
               )}
 
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    onClick={() => setShowAccess(true)}
-                    aria-label="How to reach this server"
-                    className="text-muted-foreground size-11 shrink-0 gap-1.5 font-mono text-[10px] md:size-auto md:px-2"
-                  >
-                    <StatusDot status={status} />
-                    <span className="hidden sm:inline">seq {state.seq}</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>How to reach this server</TooltipContent>
-              </Tooltip>
             </>
           ) : (
             <span className="text-muted-foreground flex-1 text-[13px]">
@@ -402,33 +402,49 @@ export function App() {
         </header>
 
         {state ? (
-          <>
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            {/* Content scrolling up dissolves into the header rather than
+                being cut by a border. */}
+            <div className="from-background pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-gradient-to-b to-transparent" />
+
             <Transcript state={state} onContinue={()=>activeId&&clientRef.current?.command("continue_session",{sessionId:activeId})} onRetryProvision={()=>activeId&&clientRef.current?.command("retry_provision",{sessionId:activeId})} onCleanup={()=>activeId&&clientRef.current?.command("cleanup_session",{sessionId:activeId})} onForceDelete={()=>activeId&&forceDelete(activeId)} onOpenDiff={openDiff} />
 
-            {pending && (
-              <PermissionPrompt
-                request={pending}
-                onResolve={(outcome, optionId) =>
-                  resolvePermission(pending.requestId, outcome, optionId)
-                }
-              />
-            )}
+            {/* The input floats over the transcript's tail instead of sitting
+                in a full-width tray. Anything that blocks the turn — a
+                permission or elicitation — stacks above it. */}
+            <div className="absolute inset-x-0 bottom-0 z-10">
+              {pending && (
+                <PermissionPrompt
+                  request={pending}
+                  onResolve={(outcome, optionId) =>
+                    resolvePermission(pending.requestId, outcome, optionId)
+                  }
+                />
+              )}
 
-            {elicitation && (
-              <ElicitationPrompt
-                request={elicitation}
-                onResolve={(action, value) => resolveElicitation(elicitation.requestId, action, value)}
-              />
-            )}
+              {elicitation && (
+                <ElicitationPrompt
+                  request={elicitation}
+                  onResolve={(action, value) => resolveElicitation(elicitation.requestId, action, value)}
+                />
+              )}
 
-            <Composer
-              disabled={state.closed || workspaceBusy || workspaceFailed}
-              disabledPlaceholder={workspaceBusy ? (state.phase === "cleaning" ? "Cleaning up workspace…" : "Preparing workspace…") : workspaceFailed ? "Workspace needs attention" : undefined}
-              busy={state.phase === "turn"}
-              onSend={send}
-              onCancel={cancel}
-            />
-          </>
+              <Composer
+                disabled={state.closed || workspaceBusy || workspaceFailed}
+                disabledPlaceholder={workspaceBusy ? (state.phase === "cleaning" ? "Cleaning up workspace…" : "Preparing workspace…") : workspaceFailed ? "Workspace needs attention" : undefined}
+                busy={state.phase === "turn"}
+                onSend={send}
+                onCancel={cancel}
+                models={harnesses.find((h) => h.id === state.harness)?.models ?? []}
+                model={state.model}
+                effort={state.effort}
+                onSwitchModel={switchModel}
+                contextPct={state.usage.contextPct}
+                contextUsed={state.usage.contextUsed}
+                contextWindow={state.usage.contextWindow}
+              />
+            </div>
+          </div>
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-5 px-6 text-center">
             <div>
@@ -448,7 +464,9 @@ export function App() {
       {state && activeId && (
         <Changes
           open={showChanges}
-          onClose={() => setShowChanges(false)}
+          onClose={() => { setShowChanges(false); setChangesExpanded(false); }}
+          expanded={changesExpanded}
+          onToggleExpanded={() => setChangesExpanded((v) => !v)}
           // The worktree is worth re-reading when the agent stops writing to it.
           revision={`${activeId}:${state.phase === "turn" ? "turn" : "settled"}`}
           loadChanges={loadChanges}

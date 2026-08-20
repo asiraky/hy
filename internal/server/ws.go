@@ -358,6 +358,20 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 		}
 		return map[string]any{"mode": a.Mode}, nil
 
+	case "set_model":
+		var a setModelArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		actor, err := c.srv.mgr.Get(ctx, a.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		if err := actor.SetModel(ctx, a.Model); err != nil {
+			return nil, err
+		}
+		return map[string]any{"model": a.Model}, nil
+
 	case "resolve_permission":
 		var a resolveArgs
 		if err := json.Unmarshal(f.Args, &a); err != nil {

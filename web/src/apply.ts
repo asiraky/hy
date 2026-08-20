@@ -95,6 +95,7 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
         items: p.prompt
           ? upsert(s, `prompt:${p.turnId}`, (it) => {
               it.kind = "message";
+              it.receivedAt ??= ev.timestamp;
               it.role = "user";
               it.contentKind = "text";
               it.text = p.prompt;
@@ -135,6 +136,7 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
         phase: s.phase === "idle" ? "turn" : s.phase,
         items: upsert(s, p.blockId, (it) => {
           it.kind = "message";
+          it.receivedAt ??= ev.timestamp;
           it.role = p.role;
           it.contentKind = p.kind;
           it.turnId = p.turnId;
@@ -149,6 +151,7 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
         phase: s.phase === "idle" ? "turn" : s.phase,
         items: upsert(s, p.toolCallId, (it) => {
           it.kind = "tool";
+          it.receivedAt ??= ev.timestamp;
           it.turnId = p.turnId;
           it.toolKind = p.kind;
           it.title = p.title;
@@ -162,6 +165,7 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
         ...s,
         items: upsert(s, p.toolCallId, (it) => {
           it.kind = "tool";
+          it.receivedAt ??= ev.timestamp;
           if (p.status) it.status = p.status;
           if (p.title) it.title = p.title;
           if (p.rawInput) it.input = p.rawInput;

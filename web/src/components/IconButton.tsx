@@ -28,9 +28,10 @@ export function IconButton({
           variant={variant}
           size="icon"
           aria-label={label}
-          // 44px is the touch target on a phone; the pointer version can be
-          // the tighter default, which is why the size is not `size-9` alone.
-          className={cn("size-11 shrink-0 md:size-9", className)}
+          // 44px is the touch target on a phone; a pointer needs no such
+          // slack, so on desktop the button hugs its 16px icon — the same
+          // 32px square as the sidebar rows' delete X.
+          className={cn("size-11 shrink-0 md:size-8", className)}
         >
           {children}
         </Button>

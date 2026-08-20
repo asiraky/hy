@@ -271,6 +271,10 @@ type UsageUpdatedPayload struct {
 	CacheWrite int64   `json:"cacheWrite"`
 	Cost       float64 `json:"cost"`
 	ContextPct float64 `json:"contextPct,omitempty"`
+	// Raw context readings behind ContextPct, so the UI can say
+	// "12k / 200k tokens" and scale with the model's window.
+	ContextUsed   int64 `json:"contextUsed,omitempty"`
+	ContextWindow int64 `json:"contextWindow,omitempty"`
 }
 
 type PermissionOption struct {

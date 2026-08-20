@@ -4,6 +4,7 @@ import {
   CheckIcon,
   ChevronDownIcon,
   CircleIcon,
+  CopyIcon,
   DownloadIcon,
   FileTextIcon,
   PencilIcon,
@@ -267,6 +268,44 @@ function ToolGroup({ items }: { items: Item[] }) {
   );
 }
 
+function receivedTime(ms?: number): string {
+  if (!ms) return "";
+  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * The footer under an agent message: when it arrived, and a one-click copy of
+ * the raw text. Quiet by design — metadata should not compete with the prose —
+ * so it fades in on hover on a desktop and stays small everywhere.
+ */
+function MessageMeta({ item }: { item: Item }) {
+  const [copied, setCopied] = useState(false);
+  const time = receivedTime(item.receivedAt);
+  if (!time && !item.text) return null;
+
+  const copy = () => {
+    navigator.clipboard?.writeText(item.text ?? "").then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
+  return (
+    <div className="text-muted-foreground -mt-2 flex items-center gap-1.5 text-[10px] opacity-60 transition-opacity md:opacity-0 md:group-hover:opacity-60 md:group-focus-within:opacity-60">
+      {time && <span className="font-mono">{time}</span>}
+      <button
+        type="button"
+        onClick={copy}
+        aria-label="Copy message"
+        className="hover:text-foreground focus-visible:ring-ring flex cursor-pointer items-center gap-1 rounded-sm outline-none focus-visible:ring-2"
+      >
+        {copied ? <CheckIcon className="text-success size-3" /> : <CopyIcon className="size-3" />}
+        {copied ? "copied" : "copy"}
+      </button>
+    </div>
+  );
+}
+
 function Message({ item, streaming, recovered }: { item: Item; streaming: boolean; recovered: boolean }) {
   // Paced reveal, so a harness that delivers a line at a time still reads as
   // continuous output. Inactive messages render whole.
@@ -306,15 +345,20 @@ function Message({ item, streaming, recovered }: { item: Item; streaming: boolea
   }
 
   return (
-    <Markdown
-      text={text}
-      className={cn(
-        "fade-in text-[14px] leading-relaxed break-words",
-        // The caret belongs at the end of the prose, not below it, so it hangs
-        // off the last block rather than the message container.
-        streaming && "caret-block",
-      )}
-    />
+    <div className="group flex flex-col gap-2">
+      <Markdown
+        text={text}
+        className={cn(
+          "fade-in text-[14px] leading-relaxed break-words",
+          // The caret belongs at the end of the prose, not below it, so it
+          // hangs off the last block rather than the message container.
+          streaming && "caret-block",
+        )}
+      />
+      {/* The footer arrives with the message's end: while streaming, the time
+          would claim an arrival that has not happened yet. */}
+      {!streaming && <MessageMeta item={item} />}
+    </div>
   );
 }
 
@@ -562,7 +606,9 @@ export function Transcript({
 
   return (
     <div ref={ref} className="scroll-thin min-h-0 flex-1 overflow-y-auto overscroll-contain">
-      <div ref={contentRef} className="mx-auto flex max-w-3xl flex-col gap-3.5 px-4 py-6 md:px-5">
+      {/* The floating composer overlays the tail, so the content ends with
+          enough room that the last message can scroll clear of it. */}
+      <div ref={contentRef} className="mx-auto flex max-w-3xl flex-col gap-3.5 px-4 pt-6 pb-36 md:px-5">
         <WorkspaceCard
           state={state}
           onRetry={onRetryProvision}
