@@ -314,6 +314,22 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 		c.srv.mgr.NotifyList()
 		return map[string]any{"turnId": turnID}, nil
 
+	case "continue_session":
+		var a sessionArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		actor, err := c.srv.mgr.Get(ctx, a.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		turnID, err := actor.Continue(ctx)
+		if err != nil {
+			return nil, err
+		}
+		c.srv.mgr.NotifyList()
+		return map[string]any{"turnId": turnID}, nil
+
 	case "cancel":
 		var a sessionArgs
 		if err := json.Unmarshal(f.Args, &a); err != nil {

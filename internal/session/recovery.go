@@ -2,10 +2,15 @@ package session
 
 import (
 	"context"
+	"errors"
 
 	"github.com/asiraky/hy/internal/projection"
 	"github.com/asiraky/hy/internal/proto"
 )
+
+// ErrNothingToContinue is returned when a continue arrives for a session whose
+// last turn ended cleanly — a stale button on a screen someone left open.
+var ErrNothingToContinue = errors.New("the last turn did not end in an error")
 
 // Recovering an interrupted turn.
 //
@@ -58,6 +63,15 @@ func planRecovery(state *projection.State) *proto.TurnRecovery {
 		return &proto.TurnRecovery{ResumeOf: turn.ID, Attempt: attempt}
 	}
 	return nil
+}
+
+// lastTurn is the newest turn, or nil on a session that has never run one.
+// Actor-loop only, like everything else that touches the projection.
+func (a *Actor) lastTurn() *projection.Turn {
+	if len(a.state.Turns) == 0 {
+		return nil
+	}
+	return &a.state.Turns[len(a.state.Turns)-1]
 }
 
 // Recover continues an interrupted turn, if this actor was resumed from one.

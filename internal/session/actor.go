@@ -116,6 +116,7 @@ const (
 	cmdActivate      = "activate"
 	cmdHarnessEvent  = "harness_event"
 	cmdHarnessExit   = "harness_exit"
+	cmdContinue      = "continue"
 )
 
 // ErrBusy is returned when a prompt arrives while a turn is already running.
@@ -391,6 +392,17 @@ func (a *Actor) Prompt(ctx context.Context, text string) (string, error) {
 	return v.(string), nil
 }
 
+// Continue restarts work that ended in an error, on a human's say-so. It is
+// the same continuation the server starts by itself after a restart, minus the
+// attempt cap: someone is watching, and they can stop asking.
+func (a *Actor) Continue(ctx context.Context) (string, error) {
+	v, err := a.call(ctx, command{kind: cmdContinue})
+	if err != nil {
+		return "", err
+	}
+	return v.(string), nil
+}
+
 func (a *Actor) Emit(ctx context.Context, em proto.Emission) error {
 	_, err := a.call(ctx, command{kind: "emit", emission: &em})
 	return err
@@ -480,6 +492,23 @@ func (a *Actor) run() {
 
 func (a *Actor) handle(c command) (stop bool) {
 	ctx := context.Background()
+
+	// Continuing is a prompt the server writes, so it is turned into one here
+	// where the projection can say which turn is being continued.
+	if c.kind == cmdContinue {
+		last := a.lastTurn()
+		if last == nil || !last.Done || last.StopReason != proto.StopError {
+			c.reply <- cmdResult{err: ErrNothingToContinue}
+			return false
+		}
+		attempt := 1
+		if last.Recovery != nil {
+			attempt = last.Recovery.Attempt + 1
+		}
+		c.kind = cmdPrompt
+		c.prompt = recoveryPrompt
+		c.recovery = &proto.TurnRecovery{ResumeOf: last.ID, Attempt: attempt}
+	}
 
 	switch c.kind {
 	case "state":

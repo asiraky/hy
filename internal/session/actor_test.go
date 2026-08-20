@@ -760,6 +760,97 @@ func TestResumeContinuesTheInterruptedWork(t *testing.T) {
 	}
 }
 
+func TestContinueRestartsWorkAfterTheAutomaticTriesRunOut(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "continue.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	fa := &fakeAdapter{}
+	mgr := NewManager(st, func(string, ...any) {}, fa)
+	actor, err := mgr.Create(context.Background(), "fake", t.TempDir(), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return actor.Head() >= 1 })
+
+	// A session whose last turn ended cleanly has nothing to continue, so the
+	// button cannot start a turn out of nowhere.
+	if _, err := actor.Continue(context.Background()); !errors.Is(err, ErrNothingToContinue) {
+		t.Fatalf("continue on a fresh session: %v; want ErrNothingToContinue", err)
+	}
+
+	if _, err := actor.Prompt(context.Background(), "start"); err != nil {
+		t.Fatal(err)
+	}
+	<-fa.session().prompts
+	waitFor(t, func() bool {
+		s, _ := actor.State(context.Background())
+		return s.Phase == "turn"
+	})
+	id := actor.ID
+	mgr.Shutdown()
+
+	// Burn every automatic attempt, so the session is left for a human.
+	for attempt := 1; attempt <= maxRecoveryAttempts; attempt++ {
+		m := NewManager(st, func(string, ...any) {}, fa)
+		a, err := m.Get(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		<-fa.session().prompts
+		waitFor(t, func() bool {
+			s, _ := a.State(context.Background())
+			return s.Phase == "turn"
+		})
+		m.Shutdown()
+	}
+
+	m := NewManager(st, func(string, ...any) {}, fa)
+	defer m.Shutdown()
+	a, err := m.Get(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		s, _ := a.State(context.Background())
+		return s.Phase == "idle"
+	})
+	stalled, _ := a.State(context.Background())
+	last := stalled.Turns[len(stalled.Turns)-1]
+	if !last.Done || last.StopReason != proto.StopError {
+		t.Fatalf("last turn = %+v; want an errored turn for a human to act on", last)
+	}
+
+	// The button the UI shows against that turn.
+	turnID, err := a.Continue(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := <-fa.session().prompts
+	if !strings.Contains(in.Text, "restarted") {
+		t.Fatalf("continue prompt = %q; want the same continuation the server writes", in.Text)
+	}
+	waitFor(t, func() bool {
+		s, _ := a.State(context.Background())
+		return len(s.Turns) == len(stalled.Turns)+1
+	})
+	state, _ := a.State(context.Background())
+	started := state.Turns[len(state.Turns)-1]
+	if started.ID != turnID {
+		t.Fatalf("continue reported turn %q; log has %q", turnID, started.ID)
+	}
+	// A human asking again is not bound by the automatic cap, and the turn
+	// still records what it is continuing.
+	if started.Recovery == nil || started.Recovery.Attempt != maxRecoveryAttempts+1 {
+		t.Fatalf("continued turn = %+v; want recovery attempt %d", started, maxRecoveryAttempts+1)
+	}
+	if started.Recovery.ResumeOf != last.ID {
+		t.Fatalf("continued turn resumes %q; want %q", started.Recovery.ResumeOf, last.ID)
+	}
+}
+
 func TestStartupResumesInterruptedWorkWithoutAnAttach(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "startup.db"))
 	if err != nil {
