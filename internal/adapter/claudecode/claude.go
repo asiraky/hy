@@ -68,6 +68,7 @@ func (a *Adapter) Meta() adapter.HarnessMeta {
 func (a *Adapter) Models() []adapter.ModelMeta {
 	return []adapter.ModelMeta{
 		{ID: "", Label: "Default"},
+		{ID: "fable", Label: "Fable"},
 		{ID: "opus", Label: "Opus"},
 		{ID: "sonnet", Label: "Sonnet"},
 		{ID: "haiku", Label: "Haiku"},

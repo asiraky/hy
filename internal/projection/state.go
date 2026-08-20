@@ -41,6 +41,9 @@ type Turn struct {
 	StopReason string `json:"stopReason,omitempty"`
 	Error      string `json:"error,omitempty"`
 	Done       bool   `json:"done"`
+	// Recovery is set when the server started this turn itself to continue
+	// work a restart interrupted.
+	Recovery *proto.TurnRecovery `json:"recovery,omitempty"`
 }
 
 // PendingPermission is a permission request awaiting a human. It lives in the
@@ -240,7 +243,7 @@ func (s *State) Apply(ev proto.Event) {
 		var p proto.TurnStartedPayload
 		decode(ev.Payload, &p)
 		s.Phase = "turn"
-		s.Turns = append(s.Turns, Turn{ID: p.TurnID, Prompt: p.Prompt})
+		s.Turns = append(s.Turns, Turn{ID: p.TurnID, Prompt: p.Prompt, Recovery: p.Recovery})
 		if s.Title == "" {
 			s.Title = truncate(p.Prompt, 60)
 		}

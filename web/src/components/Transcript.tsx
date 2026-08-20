@@ -1,7 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { Item, SessionState, ToolStatus } from "../protocol";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { Item, SessionState, ToolStatus, Turn } from "../protocol";
 import { useSmoothText } from "../useSmoothText";
-import { Spinner } from "./ui";
+import { Button, Spinner } from "./ui";
 import { cx } from "../cx";
 
 const toolGlyph: Record<string, string> = {
@@ -69,10 +69,24 @@ function ToolCard({ item }: { item: Item }) {
   );
 }
 
-function Message({ item, streaming }: { item: Item; streaming: boolean }) {
+function Message({ item, streaming, recovered }: { item: Item; streaming: boolean; recovered: boolean }) {
   // Paced reveal, so a harness that delivers a line at a time still reads as
   // continuous output. Inactive messages render whole.
   const text = useSmoothText(item.text ?? "", streaming);
+
+  // The prompt that restarts interrupted work was written by the server, not
+  // by the person reading this. Showing it as their own message would be a
+  // lie; what they need to know is that a restart happened and the agent was
+  // put back to work.
+  if (recovered && item.role === "user") {
+    return (
+      <div className="fade-in flex justify-center">
+        <div className="rounded-full border border-ink-800 px-3 py-1 text-[12px] text-ink-500">
+          Server restarted — the agent was asked to pick the work back up
+        </div>
+      </div>
+    );
+  }
 
   if (item.role === "user") {
     return (
@@ -132,7 +146,46 @@ function WorkspaceCard({ state, onRetry, onCleanup, onForceDelete }: { state: Se
   </div>;
 }
 
-export function Transcript({ state, onRetryProvision, onCleanup, onForceDelete }: { state: SessionState; onRetryProvision: () => void; onCleanup: () => void; onForceDelete: () => void }) {
+// InterruptedCard is what a turn that died looks like. A cross on the last
+// tool call is not an explanation: it says something stopped, not that the
+// work is unfinished and nobody is coming back for it. The server retries by
+// itself after a restart, so this appears when that did not happen or did not
+// work — which is precisely when a human has to decide.
+function InterruptedCard({ turn, onContinue }: { turn: Turn; onContinue: () => void }) {
+  const [sending, setSending] = useState(false);
+  const restarted = (turn.error ?? "").includes("restarted");
+
+  return (
+    <div className="fade-in rounded-lg border border-red-500/30 bg-red-500/5 px-3.5 py-3">
+      <p className="text-[13px] text-ink-200">
+        {restarted
+          ? "The server restarted and this turn was interrupted before it finished."
+          : "This turn ended with an error before it finished."}
+      </p>
+      {turn.error && !restarted && (
+        <p className="mt-1.5 font-mono text-[11px] break-words text-red-300">{turn.error}</p>
+      )}
+      <p className="mt-1.5 text-[12px] text-ink-500">
+        {turn.recovery
+          ? "Picking it back up automatically did not work."
+          : "The work was left unfinished."}
+      </p>
+      <Button
+        variant="primary"
+        className="mt-2.5"
+        disabled={sending}
+        onClick={() => {
+          setSending(true);
+          onContinue();
+        }}
+      >
+        {sending ? "Continuing…" : "Continue where it left off"}
+      </Button>
+    </div>
+  );
+}
+
+export function Transcript({ state, onRetryProvision, onCleanup, onForceDelete, onContinue }: { state: SessionState; onRetryProvision: () => void; onCleanup: () => void; onForceDelete: () => void; onContinue: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
@@ -177,6 +230,19 @@ export function Transcript({ state, onRetryProvision, onCleanup, onForceDelete }
     return -1;
   })();
 
+  // Only the newest turn can be continued, and only once nothing is running:
+  // an error further back was already answered by whatever came after it.
+  const interrupted = useMemo(() => {
+    if (state.closed || state.phase === "turn") return undefined;
+    const last = state.turns[state.turns.length - 1];
+    return last?.done && last.stopReason === "error" ? last : undefined;
+  }, [state.turns, state.phase, state.closed]);
+
+  const recoveredTurns = useMemo(
+    () => new Set(state.turns.filter((t) => t.recovery).map((t) => t.id)),
+    [state.turns],
+  );
+
   return (
     <div ref={ref} className="scroll-thin min-h-0 flex-1 overflow-y-auto overscroll-contain">
       <div ref={contentRef} className="mx-auto flex max-w-3xl flex-col gap-3.5 px-4 py-6 md:px-5">
@@ -195,6 +261,7 @@ export function Transcript({ state, onRetryProvision, onCleanup, onForceDelete }
               key={item.id}
               item={item}
               streaming={state.phase === "turn" && i === lastAgentIndex}
+              recovered={!!item.turnId && recoveredTurns.has(item.turnId)}
             />
           ),
         )}
@@ -204,6 +271,8 @@ export function Transcript({ state, onRetryProvision, onCleanup, onForceDelete }
             <Spinner className="text-accent" /> thinking…
           </div>
         )}
+
+        {interrupted && <InterruptedCard turn={interrupted} onContinue={onContinue} />}
       </div>
     </div>
   );

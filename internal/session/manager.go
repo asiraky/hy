@@ -443,6 +443,16 @@ func (m *Manager) Get(ctx context.Context, id string) (*Actor, error) {
 		return nil, err
 	}
 	m.adopt(a)
+
+	// A session resumed from a turn the server died in the middle of carries
+	// on by itself. Off the lifecycle lock and off this goroutine: the prompt
+	// reaches a harness that has just started, and nothing else — including
+	// the attach that triggered this — should wait behind it.
+	go func() {
+		if err := a.Recover(context.Background()); err != nil {
+			m.logf("continue interrupted turn on %s: %v", a.ID, err)
+		}
+	}()
 	return a, nil
 }
 

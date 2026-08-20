@@ -455,7 +455,7 @@ Given that, a UI is a thin renderer over `SessionState` plus whatever is idiomat
 | Prompt sent, connection dies before ack | Retry with same `commandId`; stored result returned. |
 | Harness subprocess crashes | `turn.finished{stopReason:"error"}` appended; session returns to idle; transcript intact. |
 | Harness exits without closing stdout | Read deadline fires; process reaped; session errored, not hung. |
-| Server restarts mid-turn | Turn lost. Log intact to last committed event. Session reopens idle. |
+| Server restarts mid-turn | Interrupted turn closed with `stopReason:"error"`; log intact to last committed event. The session is resumed at startup without waiting for a presenter, and a recovery turn asks the agent to check the real state and continue. Capped at three consecutive recoveries. |
 | Second process opens same session | Lease fencing; loser aborts before appending. |
 | Snapshot table deleted | Attach latency rises. Nothing else changes. |
 
