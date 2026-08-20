@@ -58,6 +58,13 @@ func (s *Server) handleWS(ws *websocket.Conn, ctx context.Context, deviceID stri
 	listID, listCh := s.mgr.SubscribeList()
 	defer s.mgr.UnsubscribeList(listID)
 
+	// Harness changes push the harness list on its own. A model catalogue is
+	// read from the harness in the background, so it can land seconds after
+	// the welcome frame — a client that only ever learned the list at connect
+	// would show the fallback until it reconnected.
+	harnessID, harnessCh := s.mgr.SubscribeHarnesses()
+	defer s.mgr.UnsubscribeHarnesses(harnessID)
+
 	go func() {
 		for {
 			select {
@@ -65,6 +72,8 @@ func (s *Server) handleWS(ws *websocket.Conn, ctx context.Context, deviceID stri
 				return
 			case <-listCh:
 				c.sendSessions()
+			case <-harnessCh:
+				c.send(serverFrame{Type: "harnesses", Harnesses: s.mgr.Harnesses(ctx)})
 			}
 		}
 	}()

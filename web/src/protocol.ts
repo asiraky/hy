@@ -277,10 +277,31 @@ export interface SessionMeta {
   workspaceMode?: string;
 }
 
+/**
+ * One selectable model, exactly as the harness describes itself. Everything
+ * but `group` is the harness's own answer — hy asks it what it offers rather
+ * than shipping a list that goes stale — and `group` is the adapter's single
+ * presentation call, since no harness reports what it considers superseded.
+ */
 export interface ModelMeta {
   id: string;
   label: string;
+  /** The generation behind the label: "Opus 5 with 1M context", "5.6". */
+  version?: string;
+  /** The harness's one-line summary of what the model is for. */
+  description?: string;
+  /** What an alias actually runs, so "Default" can name a real model. */
+  resolves?: string;
+  /** "legacy" for a superseded model a picker should fold away. */
+  group?: string;
+  /** The model the harness itself would pick. A picker preselects it. */
+  default?: boolean;
+  /** The reasoning levels this model accepts, most modest first. */
+  efforts?: string[];
 }
+
+/** The group id for models kept for continuity rather than offered first. */
+export const LEGACY_GROUP = "legacy";
 
 /**
  * One permission preset a harness offers. The id is opaque here: only the
@@ -390,6 +411,7 @@ export interface ServerFrame {
   type:
     | "welcome"
     | "sessions"
+    | "harnesses"
     | "snapshot"
     | "event"
     | "synchronized"

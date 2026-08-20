@@ -77,15 +77,6 @@ func (a *Adapter) Probe(ctx context.Context, env map[string]string) adapter.Avai
 	})
 }
 
-func (a *Adapter) Models() []adapter.ModelMeta {
-	return []adapter.ModelMeta{
-		{ID: "", Label: "Default"},
-		{ID: "gpt-5.1-codex-max", Label: "GPT-5.1 Codex Max"},
-		{ID: "gpt-5.1-codex", Label: "GPT-5.1 Codex"},
-		{ID: "gpt-5.1", Label: "GPT-5.1"},
-	}
-}
-
 // PermissionModes are hy's presets over Codex's two orthogonal axes (approval
 // policy × sandbox) plus its reviewer selector. The ids are adapter-internal;
 // modeSettings maps them onto the app-server protocol. Codex has no single

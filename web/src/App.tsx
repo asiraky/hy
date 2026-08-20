@@ -93,7 +93,9 @@ export function App() {
       onSessions: setSessions,
       onHarnesses: (h, cwd) => {
         setHarnesses(h);
-        setDefaultCwd(cwd);
+        // A harness-only push carries no cwd; keep the one the welcome frame
+        // established rather than blanking it.
+        if (cwd) setDefaultCwd(cwd);
       },
       onProjects: setProjects,
       // State only lands for the session currently attached; the client
@@ -435,7 +437,9 @@ export function App() {
                 busy={state.phase === "turn"}
                 onSend={send}
                 onCancel={cancel}
-                models={harnesses.find((h) => h.id === state.harness)?.models ?? []}
+                harnesses={harnesses}
+                harness={state.harness}
+                instance={meta?.providerInstance ?? ""}
                 model={state.model}
                 effort={state.effort}
                 onSwitchModel={switchModel}

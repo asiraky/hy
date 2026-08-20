@@ -1,16 +1,11 @@
-import { ArrowUpIcon, ChevronDownIcon, SquareIcon } from "lucide-react";
+import { ArrowUpIcon, SquareIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { ModelPicker } from "~/components/ModelPicker";
 import { Button } from "~/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "~/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
-import type { ModelMeta } from "~/protocol";
+import type { HarnessMeta } from "~/protocol";
 import { useIsDesktop } from "~/useMediaQuery";
 
 /**
@@ -72,7 +67,9 @@ export function Composer({
   onSend,
   onCancel,
   disabledPlaceholder,
-  models = [],
+  harnesses = [],
+  harness = "",
+  instance = "",
   model = "",
   effort = "",
   onSwitchModel,
@@ -85,8 +82,11 @@ export function Composer({
   onSend: (text: string) => void;
   onCancel: () => void;
   disabledPlaceholder?: string;
-  /** The attached harness's selectable models; empty hides the picker. */
-  models?: ModelMeta[];
+  /** Every harness the server reports; the picker reads this session's out. */
+  harnesses?: HarnessMeta[];
+  /** The attached session's harness and account, which it cannot change. */
+  harness?: string;
+  instance?: string;
   model?: string;
   effort?: string;
   onSwitchModel?: (id: string) => void;
@@ -115,12 +115,6 @@ export function Composer({
     onSend(t);
     setText("");
   };
-
-  // "Default" is a choice for a session that has not started; mid-session the
-  // harness is already running something concrete, so only concrete models are
-  // offered.
-  const choices = models.filter((m) => m.id !== "");
-  const modelLabel = models.find((m) => m.id === model)?.label ?? model;
 
   return (
     <div className="mx-auto max-w-3xl px-4 pb-[calc(0.875rem+env(safe-area-inset-bottom))] md:px-5">
@@ -160,32 +154,21 @@ export function Composer({
 
           <span className="flex-1" />
 
-          {choices.length > 0 && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  disabled={disabled}
-                  aria-label="Model"
-                  className="text-muted-foreground hover:text-foreground h-8 gap-1 px-2 text-[12px] font-normal"
-                >
-                  <span className="text-foreground/80">{modelLabel || "Default"}</span>
-                  {effort && <span className="capitalize">{effort}</span>}
-                  <ChevronDownIcon className="size-3.5" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {choices.map((m) => (
-                  <DropdownMenuItem
-                    key={m.id}
-                    onSelect={() => onSwitchModel?.(m.id)}
-                    className={cn("text-[13px]", m.id === model && "bg-accent")}
-                  >
-                    {m.label}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
+          {harnesses.length > 0 && (
+            // The same picker the new-session dialog uses, with the account
+            // fixed: the harness is already running under it, so only the
+            // model is still a choice.
+            <ModelPicker
+              harnesses={harnesses}
+              lockInstance
+              disabled={disabled}
+              value={{ harness, instance, model }}
+              onChange={(next) => onSwitchModel?.(next.model)}
+              className="text-muted-foreground hover:text-foreground h-8 w-auto min-w-0 max-w-[45%] border-0 px-2 shadow-none md:min-h-8"
+            />
+          )}
+          {effort && (
+            <span className="text-muted-foreground shrink-0 text-[12px] capitalize">{effort}</span>
           )}
 
           {busy ? (
