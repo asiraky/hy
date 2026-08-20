@@ -12,10 +12,6 @@ import { Button } from "~/components/ui/button";
 import { cn } from "~/lib/utils";
 import type { ChangedFile, TurnDiff } from "~/protocol";
 
-// A file list is only worth opening on sight when it is small enough to read at
-// a glance. Past that it is a header until someone asks for more.
-const AUTO_EXPAND_FILES = 5;
-const AUTO_EXPAND_LINES = 200;
 // A preview stands in for a list too long to show: one file per area of the
 // tree, so the three shown say as much as three can about where the work went.
 const PREVIEW_FILES = 3;
@@ -104,7 +100,7 @@ interface TreeNode {
  * what lets a row stay readable on a phone: the full path is the shape of the
  * tree above it, so no row has to be truncated in the middle to fit.
  */
-export function buildTree(files: ChangedFile[]): TreeNode[] {
+function buildTree(files: ChangedFile[]): TreeNode[] {
   const root: TreeNode = { path: "", name: "", children: [], additions: 0, deletions: 0 };
 
   for (const file of files) {
@@ -168,7 +164,7 @@ interface Scope {
 }
 
 /** Which areas of the tree the work landed in: `web · 4 files · internal · 2 files`. */
-export function summariseScopes(files: ChangedFile[]): Scope[] {
+function summariseScopes(files: ChangedFile[]): Scope[] {
   const counts = new Map<string, number>();
   for (const file of files) {
     const segments = file.path.split("/").filter(Boolean);
@@ -186,7 +182,7 @@ export function summariseScopes(files: ChangedFile[]): Scope[] {
  * preview describes the spread of the work rather than three files that happen
  * to sit in the same folder.
  */
-export function previewFiles(files: ChangedFile[]): ChangedFile[] {
+function previewFiles(files: ChangedFile[]): ChangedFile[] {
   const seen = new Set<string>();
   const picked: ChangedFile[] = [];
 
@@ -340,7 +336,7 @@ export function ChangedFiles({
   onOpenDiff,
 }: {
   diff: TurnDiff;
-  /** The newest turn's card opens itself, if the change is small enough to read. */
+  /** Only the newest turn's collapsed card shows the preview chips. */
   latest: boolean;
   onOpenDiff: (path?: string) => void;
 }) {
@@ -349,8 +345,8 @@ export function ChangedFiles({
   const scopes = useMemo(() => summariseScopes(files), [files]);
   const preview = useMemo(() => previewFiles(files), [files]);
 
-  const small = files.length <= AUTO_EXPAND_FILES && diff.additions + diff.deletions <= AUTO_EXPAND_LINES;
-  const [expanded, setExpanded] = useState(latest && small);
+  // Collapsed until asked: the card is a summary line first, a tree second.
+  const [expanded, setExpanded] = useState(false);
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
 
   const dirPaths = useMemo(() => collectDirs(tree), [tree]);

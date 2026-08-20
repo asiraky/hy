@@ -1,12 +1,14 @@
 import type { CSSProperties } from "react";
 
+import { PROVIDER_LOGOS, ProviderLogo } from "~/components/ProviderLogo";
 import { Badge } from "~/components/ui/badge";
 import { cn } from "~/lib/utils";
 
 /**
- * The accent colour travels with the harness from the server. This component
- * has no per-harness knowledge, so a new adapter styles itself — it only hands
- * the colour to the badge's `accent` variant as a custom property.
+ * A harness the logo map knows renders as its provider's actual mark; anything
+ * else falls back to the accent badge, which is what keeps a brand-new adapter
+ * renderable before anyone has drawn it a logo. The accent colour still
+ * travels with the harness from the server for that fallback.
  */
 export function HarnessBadge({
   harness,
@@ -17,6 +19,9 @@ export function HarnessBadge({
   accent?: string;
   className?: string;
 }) {
+  if (PROVIDER_LOGOS[harness]) {
+    return <ProviderLogo provider={harness} className={className} />;
+  }
   return (
     <Badge
       variant={accent ? "accent" : "secondary"}

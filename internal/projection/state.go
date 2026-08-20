@@ -20,6 +20,9 @@ type Item struct {
 	ID     string `json:"id"`
 	Kind   string `json:"kind"`
 	TurnID string `json:"turnId,omitempty"`
+	// ReceivedAt is when the item's first event landed, in millis. It is
+	// display metadata: the timeline's order is the log's order regardless.
+	ReceivedAt int64 `json:"receivedAt,omitempty"`
 
 	// message
 	Role        string `json:"role,omitempty"`
@@ -256,6 +259,9 @@ func (s *State) Apply(ev proto.Event) {
 		if p.Prompt != "" {
 			s.upsert("prompt:"+p.TurnID, func(it *Item) {
 				it.Kind = ItemMessage
+				if it.ReceivedAt == 0 {
+					it.ReceivedAt = ev.Timestamp
+				}
 				it.Role = "user"
 				it.ContentKind = "text"
 				it.Text = p.Prompt
@@ -305,6 +311,9 @@ func (s *State) Apply(ev proto.Event) {
 		}
 		s.upsert(p.BlockID, func(it *Item) {
 			it.Kind = ItemMessage
+			if it.ReceivedAt == 0 {
+				it.ReceivedAt = ev.Timestamp
+			}
 			it.Role = p.Role
 			it.ContentKind = p.Kind
 			it.TurnID = p.TurnID
@@ -320,6 +329,9 @@ func (s *State) Apply(ev proto.Event) {
 		}
 		s.upsert(p.ToolCallID, func(it *Item) {
 			it.Kind = ItemTool
+			if it.ReceivedAt == 0 {
+				it.ReceivedAt = ev.Timestamp
+			}
 			it.TurnID = p.TurnID
 			it.ToolKind = p.Kind
 			it.Title = p.Title
@@ -332,6 +344,9 @@ func (s *State) Apply(ev proto.Event) {
 		decode(ev.Payload, &p)
 		s.upsert(p.ToolCallID, func(it *Item) {
 			it.Kind = ItemTool
+			if it.ReceivedAt == 0 {
+				it.ReceivedAt = ev.Timestamp
+			}
 			if p.Status != "" {
 				it.Status = p.Status
 			}
