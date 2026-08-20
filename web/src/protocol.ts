@@ -254,6 +254,12 @@ export interface SessionMeta {
   id: string;
   cwd: string;
   harness: string;
+  /**
+   * The provider instance (account) the session was created under. Absent on
+   * sessions from before instances existed; those resolve to the default
+   * instance of their harness.
+   */
+  providerInstance?: string;
   title: string;
   createdAt: number;
   updatedAt: number;
@@ -304,6 +310,22 @@ export interface Availability {
  * from the adapter. Nothing here is hardcoded per harness, so adding one needs
  * no client change.
  */
+/**
+ * One configured account for a harness. The id is the routing key — sessions
+ * and create commands name instances, never drivers — while driver selects the
+ * logo and accent, so two Codex accounts look like the same product under
+ * different names. Availability and models are per instance: one account being
+ * logged out must not mark the other unavailable.
+ */
+export interface ProviderInstanceMeta {
+  id: string;
+  driver: string;
+  displayName: string;
+  enabled: boolean;
+  availability: Availability;
+  models?: ModelMeta[];
+}
+
 export interface HarnessMeta {
   id: string;
   name: string;
@@ -312,6 +334,12 @@ export interface HarnessMeta {
   models: ModelMeta[];
   permissionModes: PermissionModeMeta[];
   availability: Availability;
+  /**
+   * Every account configured for this harness, default first. With a single
+   * instance this is one entry whose id equals the harness id, which is why
+   * the one-account case renders exactly as before.
+   */
+  instances: ProviderInstanceMeta[];
 }
 
 export type Reachability = "loopback" | "lan" | "overlay" | "public";

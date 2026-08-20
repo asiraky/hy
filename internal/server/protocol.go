@@ -63,7 +63,10 @@ type serverFrame struct {
 
 // Command argument shapes.
 type createArgs struct {
-	Harness   string `json:"harness"`
+	Harness string `json:"harness"`
+	// Instance names the provider instance to run under; empty means the
+	// harness's default instance, which is today's behaviour.
+	Instance  string `json:"instance"`
 	Cwd       string `json:"cwd"`
 	ProjectID string `json:"projectId"`
 	Branch    string `json:"branch"`

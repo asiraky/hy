@@ -67,9 +67,14 @@ CREATE TABLE IF NOT EXISTS commands (
 
 // SessionMeta is the row-level view of a session, enough for a session list.
 type SessionMeta struct {
-	ID                string          `json:"id"`
-	Cwd               string          `json:"cwd"`
-	Harness           string          `json:"harness"`
+	ID      string `json:"id"`
+	Cwd     string `json:"cwd"`
+	Harness string `json:"harness"`
+	// ProviderInstance is the provider instance the session was created under.
+	// It sits alongside Harness rather than repurposing it, so existing rows
+	// keep meaning what they say; empty resolves to the default instance for
+	// Harness, which is the migration.
+	ProviderInstance  string          `json:"providerInstance,omitempty"`
 	Title             string          `json:"title"`
 	CreatedAt         int64           `json:"createdAt"`
 	UpdatedAt         int64           `json:"updatedAt"`
@@ -112,6 +117,7 @@ func Open(path string) (*Store, error) {
 		`ALTER TABLE sessions ADD COLUMN provision_script TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE sessions ADD COLUMN deprovision_script TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE sessions ADD COLUMN provision_result BLOB`,
+		`ALTER TABLE sessions ADD COLUMN provider_instance TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.Exec(migration); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return nil, fmt.Errorf("migrate schema: %w", err)
@@ -130,9 +136,9 @@ func (s *Store) CreateSession(ctx context.Context, m SessionMeta) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO sessions (id, cwd, harness, title, created_at, updated_at, head_seq, phase, project_id, branch, model, mode, effort, workspace_mode, provision_script, deprovision_script)
-		 VALUES (?,?,?,?,?,?,0,?,?,?,?,?,?,?,?,?)`,
-		m.ID, m.Cwd, m.Harness, m.Title, m.CreatedAt, m.UpdatedAt, m.Phase, m.ProjectID, m.Branch, m.Model, m.Mode, m.Effort, m.WorkspaceMode, m.ProvisionScript, m.DeprovisionScript)
+		`INSERT INTO sessions (id, cwd, harness, provider_instance, title, created_at, updated_at, head_seq, phase, project_id, branch, model, mode, effort, workspace_mode, provision_script, deprovision_script)
+		 VALUES (?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?,?)`,
+		m.ID, m.Cwd, m.Harness, m.ProviderInstance, m.Title, m.CreatedAt, m.UpdatedAt, m.Phase, m.ProjectID, m.Branch, m.Model, m.Mode, m.Effort, m.WorkspaceMode, m.ProvisionScript, m.DeprovisionScript)
 	return err
 }
 
@@ -219,8 +225,8 @@ func (s *Store) Session(ctx context.Context, id string) (SessionMeta, error) {
 	var m SessionMeta
 	var provisionResult []byte
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, cwd, harness, title, created_at, updated_at, head_seq, phase, project_id, branch, model, mode, effort, workspace_mode, provision_script, deprovision_script, provision_result FROM sessions WHERE id = ?`, id).
-		Scan(&m.ID, &m.Cwd, &m.Harness, &m.Title, &m.CreatedAt, &m.UpdatedAt, &m.HeadSeq, &m.Phase, &m.ProjectID, &m.Branch, &m.Model, &m.Mode, &m.Effort, &m.WorkspaceMode, &m.ProvisionScript, &m.DeprovisionScript, &provisionResult)
+		`SELECT id, cwd, harness, provider_instance, title, created_at, updated_at, head_seq, phase, project_id, branch, model, mode, effort, workspace_mode, provision_script, deprovision_script, provision_result FROM sessions WHERE id = ?`, id).
+		Scan(&m.ID, &m.Cwd, &m.Harness, &m.ProviderInstance, &m.Title, &m.CreatedAt, &m.UpdatedAt, &m.HeadSeq, &m.Phase, &m.ProjectID, &m.Branch, &m.Model, &m.Mode, &m.Effort, &m.WorkspaceMode, &m.ProvisionScript, &m.DeprovisionScript, &provisionResult)
 	m.ProvisionResult = json.RawMessage(provisionResult)
 	if errors.Is(err, sql.ErrNoRows) {
 		return m, ErrNotFound
@@ -230,7 +236,7 @@ func (s *Store) Session(ctx context.Context, id string) (SessionMeta, error) {
 
 func (s *Store) ListSessions(ctx context.Context) ([]SessionMeta, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, cwd, harness, title, created_at, updated_at, head_seq, phase, project_id, branch, model, mode, effort, workspace_mode
+		`SELECT id, cwd, harness, provider_instance, title, created_at, updated_at, head_seq, phase, project_id, branch, model, mode, effort, workspace_mode
 		 FROM sessions ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
@@ -240,7 +246,7 @@ func (s *Store) ListSessions(ctx context.Context) ([]SessionMeta, error) {
 	out := []SessionMeta{}
 	for rows.Next() {
 		var m SessionMeta
-		if err := rows.Scan(&m.ID, &m.Cwd, &m.Harness, &m.Title, &m.CreatedAt, &m.UpdatedAt, &m.HeadSeq, &m.Phase, &m.ProjectID, &m.Branch, &m.Model, &m.Mode, &m.Effort, &m.WorkspaceMode); err != nil {
+		if err := rows.Scan(&m.ID, &m.Cwd, &m.Harness, &m.ProviderInstance, &m.Title, &m.CreatedAt, &m.UpdatedAt, &m.HeadSeq, &m.Phase, &m.ProjectID, &m.Branch, &m.Model, &m.Mode, &m.Effort, &m.WorkspaceMode); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

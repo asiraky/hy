@@ -283,7 +283,7 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 			return nil, err
 		}
 		if a.ProjectID != "" {
-			actor, err := c.srv.mgr.CreateProject(ctx, session.CreateProjectOptions{ProjectID: a.ProjectID, Harness: a.Harness, Model: a.Model, Mode: a.Mode, Branch: a.Branch, Workspace: a.Workspace, WorkspacePath: a.WorkspacePath})
+			actor, err := c.srv.mgr.CreateProject(ctx, session.CreateProjectOptions{ProjectID: a.ProjectID, Harness: a.Harness, Instance: a.Instance, Model: a.Model, Mode: a.Mode, Branch: a.Branch, Workspace: a.Workspace, WorkspacePath: a.WorkspacePath})
 			if err != nil {
 				return nil, err
 			}
@@ -292,7 +292,7 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 		if a.Cwd == "" {
 			a.Cwd = c.srv.defaultCwd
 		}
-		actor, err := c.srv.mgr.Create(ctx, a.Harness, a.Cwd, a.Model, a.Mode)
+		actor, err := c.srv.mgr.Create(ctx, a.Harness, a.Instance, a.Cwd, a.Model, a.Mode)
 		if err != nil {
 			return nil, err
 		}
@@ -465,6 +465,10 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Provider instances are server-side configuration: their entries never
+		// travel to a client, so no env value — secret or not — can leak
+		// through the settings surface.
+		cfg.Providers = nil
 		return map[string]any{"userConfig": cfg}, nil
 
 	case "save_user_config":
@@ -472,10 +476,18 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 		if err := json.Unmarshal(f.Args, &a); err != nil {
 			return nil, err
 		}
+		// Clients never see the providers, so a client echoing config back must
+		// not be able to erase (or author) them; the on-disk entries win.
+		current, err := userconfig.Load()
+		if err != nil {
+			return nil, err
+		}
+		a.Config.Providers = current.Providers
 		cfg, err := userconfig.Save(a.Config)
 		if err != nil {
 			return nil, err
 		}
+		cfg.Providers = nil
 		return map[string]any{"userConfig": cfg}, nil
 
 	case "add_project":
