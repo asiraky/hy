@@ -73,6 +73,22 @@ describe("Sidebar", () => {
     const panel = document.querySelector("[data-slot=sheet-content]");
     expect(panel?.className).toContain("w-screen");
     expect(panel?.className).toContain("max-w-none");
+    // The sheet's own base classes cap it at 24rem from `sm` up, which would
+    // leave a 384px panel on a landscape phone — still below `md`, so still
+    // inside this branch.
+    expect(panel?.className).toContain("sm:max-w-none");
+  });
+
+  it("keeps the delete target thumb-sized without moving the glyph", () => {
+    viewport("phone");
+    renderSidebar({ activeId: "a" });
+
+    const del = screen.getAllByRole("button", { name: /^Delete session/ })[0];
+    // The square stays 32px so it stays aligned with the logo below it; the
+    // hit area is grown around it instead. 32 + 2*6 = 44.
+    expect(del.className).toContain("size-8");
+    expect(del.className).toContain("after:-inset-1.5");
+    expect(del.className).toContain("md:after:hidden");
   });
 
   it("puts the collapse control right after the new-session button, as when docked", () => {

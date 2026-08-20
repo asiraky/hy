@@ -81,8 +81,13 @@ function DialogContent({
         data-slot="dialog-content"
         data-fullscreen-mobile={fullscreenOnMobile ? "" : undefined}
         className={cn(
-          "fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] grid-cols-[minmax(0,1fr)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border bg-background p-6 shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
-          fullscreenOnMobile && fullscreenMobile,
+          "fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] grid-cols-[minmax(0,1fr)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border bg-background p-6 shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+          // The default width cap is dropped rather than overridden when the
+          // dialog goes full-screen: `max-md:max-w-none` and `sm:max-w-lg` are
+          // different variants, so tailwind-merge keeps both and between 640
+          // and 767px the cap would win — a 512px strip pinned to the left
+          // edge by the full-screen inset.
+          fullscreenOnMobile ? fullscreenMobile : "sm:max-w-lg",
           className
         )}
         {...props}

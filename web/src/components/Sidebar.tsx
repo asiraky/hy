@@ -157,7 +157,10 @@ function SessionList({
                   // and the X's lucide glyph carries ~1.5px of optical padding
                   // inside its 16px box — right-px puts the visible strokes on
                   // that same centre line.
-                  className="hover:text-destructive absolute top-0.5 right-px size-8 shrink-0 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
+                  // The visible square stays 32px so it keeps that alignment
+                  // at every size; `after` grows the hit area to 44px without
+                  // moving anything, which a larger button could not do.
+                  className="hover:text-destructive absolute top-0.5 right-px size-8 shrink-0 after:absolute after:-inset-1.5 after:content-[''] md:size-8 md:opacity-0 md:after:hidden md:group-hover:opacity-100 md:focus-visible:opacity-100"
                 >
                   <XIcon />
                 </Button>
@@ -271,18 +274,28 @@ export function Sidebar(props: SidebarProps) {
       <Sheet open={props.open} onOpenChange={props.onOpenChange}>
         <SheetContent
           side="left"
+          tabIndex={-1}
           // Full-bleed on a phone. A 15% sliver of dimmed transcript is not
           // context, it is a target for a mis-tap, and with no session
           // selected there is nothing behind the panel at all.
-          className="w-screen max-w-none gap-0 border-r-0 p-0 pl-[env(safe-area-inset-left)]"
+          // `sm:max-w-none` is not redundant: the sheet's own base classes cap
+          // it at 24rem from `sm` up, which would leave a 384px panel on a
+          // landscape phone — inside this branch, but past that breakpoint.
+          className="w-screen max-w-none gap-0 border-r-0 p-0 pl-[env(safe-area-inset-left)] sm:max-w-none"
           // The sheet's own X would be a second close control in the same
           // corner as the collapse button, misaligned with it and present
           // even when there is nothing to close back to. One control, and it
           // lives in the panel header where the docked sidebar puts it.
           showCloseButton={false}
-          // Radix otherwise focuses the first control inside, which on a
-          // touch screen pops its tooltip open and leaves it there.
-          onOpenAutoFocus={(e) => e.preventDefault()}
+          // Radix otherwise focuses the first control inside, which pops its
+          // tooltip open on a touch screen and leaves it there. Focus still
+          // has to enter the panel — a modal that traps focus outside itself
+          // is unusable with a keyboard or a screen reader — so it lands on
+          // the panel rather than nowhere.
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            (e.currentTarget as HTMLElement | null)?.focus();
+          }}
         >
           <SheetTitle className="sr-only">Sessions</SheetTitle>
           {/* Nothing behind the panel means nothing to collapse to. */}

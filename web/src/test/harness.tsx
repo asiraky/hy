@@ -10,7 +10,21 @@ afterEach(cleanup);
 // jsdom ships no `matchMedia` at all, and several components read one on their
 // first render. Desktop is the default so a test only has to say so when the
 // size is what it is testing.
-beforeEach(() => viewport("desktop"));
+beforeEach(() => {
+  viewport("desktop");
+  // Radix's popper measures its anchor; jsdom has no ResizeObserver to measure
+  // with. A no-op is enough: nothing here asserts on position.
+  if (!("ResizeObserver" in window)) {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+  }
+});
 
 import { ThemeProvider } from "~/components/ThemeProvider";
 import { TooltipProvider } from "~/components/ui/tooltip";

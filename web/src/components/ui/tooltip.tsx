@@ -4,6 +4,7 @@ import * as React from "react"
 import { Tooltip as TooltipPrimitive } from "radix-ui"
 
 import { cn } from "~/lib/utils"
+import { useIsCoarsePointer } from "~/useMediaQuery"
 
 function TooltipProvider({
   delayDuration = 0,
@@ -36,17 +37,19 @@ function TooltipContent({
   children,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
+  // A tooltip is a hover affordance, and a touch screen has no hover — so
+  // Radix opens these on focus instead, which is how a hint ended up stuck on
+  // screen the moment a sheet's focus trap engaged. Hiding it in CSS was not
+  // enough: an invisible tooltip is still a dismissable layer, and it sits
+  // above the sheet, so it swallowed the Escape that should have closed it.
+  // Not rendering it leaves the trigger's aria-label doing the work.
+  if (useIsCoarsePointer()) return null
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
         data-slot="tooltip-content"
         sideOffset={sideOffset}
         className={cn(
-          // A tooltip is a hover affordance. A touch screen has no hover,
-          // so Radix opens these on focus instead — which is why tapping (or
-          // merely focus-trapping into) a control left one stuck on screen.
-          // Coarse pointers get the aria-label and nothing else.
-          "pointer-coarse:hidden",
           "z-50 w-fit origin-(--radix-tooltip-content-transform-origin) animate-in rounded-md bg-foreground px-3 py-1.5 text-xs text-balance text-background fade-in-0 zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
           className
         )}

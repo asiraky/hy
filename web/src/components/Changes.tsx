@@ -361,13 +361,18 @@ export function Changes(props: ChangesProps) {
       <Sheet open onOpenChange={(v) => !v && props.onClose()}>
         <SheetContent
           side="right"
+          tabIndex={-1}
           className="w-full gap-0 p-0 sm:max-w-none"
           // The panel header carries its own close button, aligned with the
           // rest of the row.
           showCloseButton={false}
-          // Radix otherwise focuses the first control inside, which on a
-          // touch screen pops its tooltip open and leaves it there.
-          onOpenAutoFocus={(e) => e.preventDefault()}
+          // Radix otherwise focuses the first control inside, which pops its
+          // tooltip open on a touch screen and leaves it there. Focus still
+          // has to enter the panel, so it lands on the panel itself.
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            (e.currentTarget as HTMLElement | null)?.focus();
+          }}
         >
           <SheetTitle className="sr-only">Changed files</SheetTitle>
           <ChangesBody {...props} inSheet />

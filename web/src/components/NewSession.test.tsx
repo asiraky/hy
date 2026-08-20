@@ -57,6 +57,14 @@ describe("NewSession", () => {
     expect(cls).toContain("max-md:rounded-none");
     // A 85dvh cap would fight the full-height rule it sits beside.
     expect(cls).toContain("max-md:max-h-none");
+    // The card's width cap has to start where the card does. At `sm` it would
+    // still be in force from 640 to 767px, leaving a 448px strip pinned to the
+    // left edge by the full-screen inset.
+    expect(cls).toContain("md:max-w-md");
+    expect(cls).not.toContain("sm:max-w-md");
+    // Including the primitive's own default cap, which is dropped rather than
+    // overridden for exactly the same reason.
+    expect(cls).not.toContain("sm:max-w-lg");
   });
 
   it("keeps a way out in the corner", () => {

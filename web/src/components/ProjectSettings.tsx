@@ -245,7 +245,7 @@ export function ProjectSettings({
       {/* Header and footer stay put; only the form between them scrolls. */}
       <DialogContent
         fullscreenOnMobile
-        className="flex max-h-[min(90dvh,44rem)] flex-col gap-0 p-0 sm:max-w-lg"
+        className="flex max-h-[min(90dvh,44rem)] flex-col gap-0 p-0 md:max-w-lg"
       >
         <DialogHeader className="border-b px-6 py-4 pt-[calc(1rem+env(safe-area-inset-top))] pr-16 text-left md:pt-4 md:pr-6">
           <DialogTitle>{project ? `${cfg.name} settings` : "Add project"}</DialogTitle>

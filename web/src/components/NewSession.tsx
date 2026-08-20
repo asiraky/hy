@@ -191,7 +191,7 @@ export function NewSession({
           "Start" is never scrolled off the bottom. */}
       <DialogContent
         fullscreenOnMobile
-        className="flex max-h-[min(85dvh,44rem)] flex-col gap-0 p-0 sm:max-w-md"
+        className="flex max-h-[min(85dvh,44rem)] flex-col gap-0 p-0 md:max-w-md"
       >
         <DialogHeader className="px-6 py-4 pt-[calc(1rem+env(safe-area-inset-top))] pr-16 text-left md:pt-4 md:pr-6">
           <DialogTitle>New session</DialogTitle>

@@ -49,8 +49,16 @@ export function App() {
   const [state, setState] = useState<SessionState | null>(null);
   const isDesktop = useIsDesktop();
   // Whether the last-session key was set at boot. Read once, before anything
-  // can write it, because it decides what the very first frame shows.
-  const hadLastSession = useRef(localStorage.getItem(LAST_SESSION) !== null);
+  // can write it, because it decides what the very first frame shows. Storage
+  // can be denied outright (Safari with cookies blocked), and a throw here
+  // would take the whole mount with it.
+  const [hadLastSession] = useState(() => {
+    try {
+      return localStorage.getItem(LAST_SESSION) !== null;
+    } catch {
+      return false;
+    }
+  });
   // True until the first session list lands, which is when we know whether
   // the stored session still exists. Until then a phone must not flash the
   // sidebar open and then shut it again a moment later.
@@ -59,7 +67,7 @@ export function App() {
   // Open is the desktop default. On a phone the sidebar *is* the landing
   // screen: with nothing selected there is nothing behind it to look at, so
   // it starts open unless we are about to restore straight into a session.
-  const [sidebarOpen, setSidebarOpen] = useState(() => isDesktop || !hadLastSession.current);
+  const [sidebarOpen, setSidebarOpen] = useState(() => isDesktop || !hadLastSession);
   // Crossing the breakpoint resets it — but only on an actual crossing. On
   // mount this must leave the initial choice above alone.
   const wasDesktop = useRef(isDesktop);
@@ -149,9 +157,10 @@ export function App() {
     else if (!isDesktop) setSidebarOpen(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionsLoaded, sessions]);
-  // Restoring is the only reason the first frame is not already the real one,
-  // so it is the only thing worth putting a placeholder up for.
-  const restoring = !sessionsLoaded && hadLastSession.current;
+  // Until the first list lands we do not know whether there is anything to
+  // show, so the content column holds the space rather than announcing "all
+  // caught up" to someone with six sessions on a slow connection.
+  const restoring = !sessionsLoaded;
 
   const select = useCallback(
     (id: string) => {
@@ -337,12 +346,29 @@ export function App() {
   }, [activeId, state, forceDelete]);
 
   // The attached session went away (deleted elsewhere, or torn down here).
-  // On a phone that leaves nothing behind the sidebar, so it comes back.
+  //
+  // "Absent from the list" only means gone if it was ever in the list: a
+  // session we just created is attached before the broadcast carrying it
+  // arrives, and treating that gap as a disappearance would detach the
+  // session the user is watching being born. So it has to have been seen
+  // first. Waiting for `state` instead would be the wrong test — deleting a
+  // row that is not the open one selects it first, which clears state, so a
+  // delete landing before the first snapshot would leave the app attached to
+  // nothing and stuck on "Attaching…" forever.
+  //
+  // On a phone this also leaves nothing behind the sidebar, so it comes back.
+  const seenActive = useRef<string | null>(null);
   useEffect(() => {
-    if (!activeId || !state || sessions.some((s) => s.id === activeId)) return;
+    if (!activeId) return;
+    if (sessions.some((s) => s.id === activeId)) {
+      seenActive.current = activeId;
+      return;
+    }
+    if (seenActive.current !== activeId) return;
+    seenActive.current = null;
     setActiveId(null); setState(null); clientRef.current?.detach();
     if (!isDesktop) setSidebarOpen(true);
-  }, [sessions, activeId, state, isDesktop]);
+  }, [sessions, activeId, isDesktop]);
 
   if (themePreview) return <ThemePreview />;
 
@@ -428,7 +454,7 @@ export function App() {
             </>
           ) : (
             <span className="text-muted-foreground flex-1 text-[13px]">
-              {meta || restoring ? "Attaching…" : "No session selected"}
+              {meta ? "Attaching…" : restoring ? "" : "No session selected"}
             </span>
           )}
         </header>
