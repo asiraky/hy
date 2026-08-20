@@ -233,6 +233,70 @@ func TestUnknownDriverLoadsAndPresentsUnavailable(t *testing.T) {
 	}
 }
 
+func TestMissingSecretFailsClosed(t *testing.T) {
+	mgr, _, _ := instTestManager(t)
+	secrets, err := provider.OpenSecretStoreAt(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst := workInstance()
+	inst.Env = append(inst.Env, provider.EnvVar{Name: "FAKE_TOKEN", Sensitive: true})
+	// No secret stored: creating must refuse rather than silently run this
+	// instance's session on the ambient account.
+	mgr.ConfigureInstances([]provider.Instance{inst}, secrets)
+
+	if _, err := mgr.Create(context.Background(), "fake", "fake-work", t.TempDir(), "", ""); err == nil {
+		t.Error("a missing secret must refuse creation, not fall back to ambient credentials")
+	}
+	for _, i := range mgr.Harnesses(context.Background())[0].Instances {
+		if i.ID == "fake-work" && i.Availability.OK() {
+			t.Error("an instance with a missing secret must list as unavailable")
+		}
+	}
+}
+
+func TestCrossDriverIDCollisionIsRejected(t *testing.T) {
+	mgr, _, _ := instTestManager(t)
+	// "fake" is the synthesised default for the fake driver; an instance of a
+	// *different* driver must not be allowed to take its id.
+	mgr.ConfigureInstances([]provider.Instance{{ID: "fake", Driver: "ollama", DisplayName: "Impostor", Enabled: true}}, nil)
+
+	reg := mgr.instances["fake"]
+	if reg.inst.Driver != "fake" {
+		t.Fatalf("default instance was replaced by a %q-driver entry", reg.inst.Driver)
+	}
+	if _, err := mgr.Create(context.Background(), "fake", "", t.TempDir(), "", ""); err != nil {
+		t.Errorf("default instance must keep working after a rejected collision: %v", err)
+	}
+}
+
+func TestVanishedInstanceStillRestoresPendingSessions(t *testing.T) {
+	mgr, _, st := instTestManager(t)
+	ctx := context.Background()
+	// A session created under an instance that has since been removed from the
+	// config, caught mid-provisioning. It must stay attachable so cleanup can
+	// run; requiring the instance would strand it forever.
+	meta := store.SessionMeta{ID: "orphan-1", Cwd: t.TempDir(), Harness: "fake", ProviderInstance: "gone-instance", Phase: "provision_failed"}
+	if err := st.CreateSession(ctx, meta); err != nil {
+		t.Fatal(err)
+	}
+	a, err := mgr.Get(ctx, "orphan-1")
+	if err != nil {
+		t.Fatalf("pending session with a vanished instance must restore: %v", err)
+	}
+	a.Dispose("test done")
+
+	// An idle session, by contrast, would spawn a harness on resume, and must
+	// be refused legibly rather than run under the wrong account.
+	meta2 := store.SessionMeta{ID: "orphan-2", Cwd: t.TempDir(), Harness: "fake", ProviderInstance: "gone-instance", Phase: "idle"}
+	if err := st.CreateSession(ctx, meta2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Get(ctx, "orphan-2"); err == nil {
+		t.Error("resuming a live session on a vanished instance must fail legibly")
+	}
+}
+
 func TestDisabledInstanceRefusesCreate(t *testing.T) {
 	mgr, _, _ := instTestManager(t)
 	inst := workInstance()

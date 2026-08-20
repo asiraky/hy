@@ -562,6 +562,13 @@ func (a *Actor) handle(c command) (stop bool) {
 			c.reply <- cmdResult{}
 			return false
 		}
+		// A pending actor can be restored leniently — for cleanup — with no
+		// adapter behind it. Cleanup never activates; anything that does gets
+		// a legible refusal instead of a nil dereference.
+		if a.adapter == nil {
+			c.reply <- cmdResult{err: errors.New("this session's provider instance is no longer configured")}
+			return false
+		}
 		sess, err := a.adapter.CreateSession(ctx, hostServices{a}, adapter.CreateOptions{SessionID: a.ID, Cwd: c.prompt, Model: c.model, Mode: c.mode, Effort: c.effort, Env: a.env})
 		if err != nil {
 			c.reply <- cmdResult{err: err}

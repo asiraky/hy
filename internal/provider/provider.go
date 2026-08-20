@@ -172,12 +172,13 @@ func sweepSecrets(inst *Instance, secrets *SecretStore) (json.RawMessage, bool, 
 }
 
 // EnvOverlay materialises the instance's environment: plain values from the
-// config, sensitive values from the secret store. A sensitive variable with no
-// stored secret is omitted rather than exported empty — an empty credential
-// variable can shadow a working ambient one.
-func (i Instance) EnvOverlay(secrets *SecretStore) map[string]string {
+// config, sensitive values from the secret store. A sensitive variable whose
+// secret is missing is an error, and the caller must fail closed: omitting it
+// would let the spawn fall through to the ambient credential, silently running
+// this instance's session under a different account.
+func (i Instance) EnvOverlay(secrets *SecretStore) (map[string]string, error) {
 	if len(i.Env) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make(map[string]string, len(i.Env))
 	for _, v := range i.Env {
@@ -186,14 +187,16 @@ func (i Instance) EnvOverlay(secrets *SecretStore) map[string]string {
 		}
 		if v.Sensitive {
 			if secrets == nil {
-				continue
+				return nil, fmt.Errorf("instance %q: %s is sensitive but no secret store is available", i.ID, v.Name)
 			}
-			if value, ok := secrets.Get(i.ID, v.Name); ok {
-				out[v.Name] = value
+			value, ok := secrets.Get(i.ID, v.Name)
+			if !ok {
+				return nil, fmt.Errorf("instance %q: no stored secret for %s", i.ID, v.Name)
 			}
+			out[v.Name] = value
 			continue
 		}
 		out[v.Name] = v.Value
 	}
-	return out
+	return out, nil
 }

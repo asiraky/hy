@@ -60,7 +60,10 @@ func TestLoadInstancesSweepsSensitiveValuesIntoSecretStore(t *testing.T) {
 
 	// Materialisation puts the secret back at spawn time, and keeps the
 	// non-secret pointer as an ordinary value.
-	overlay := instances[0].EnvOverlay(secrets)
+	overlay, err := instances[0].EnvOverlay(secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if overlay["CLAUDE_CODE_OAUTH_TOKEN"] != "sk-secret" {
 		t.Errorf("overlay should materialise the secret, got %q", overlay["CLAUDE_CODE_OAUTH_TOKEN"])
 	}
@@ -129,13 +132,13 @@ func TestSecretStoreSyncDeletesClearedSecrets(t *testing.T) {
 	}
 }
 
-func TestEnvOverlayOmitsMissingSecrets(t *testing.T) {
+func TestEnvOverlayFailsClosedOnMissingSecret(t *testing.T) {
 	secrets, err := OpenSecretStoreAt(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	inst := Instance{ID: "x", Driver: "codex", Env: []EnvVar{{Name: "KEY", Sensitive: true}}}
-	if overlay := inst.EnvOverlay(secrets); len(overlay) != 0 {
-		t.Errorf("a sensitive var with no stored secret must be omitted, got %v", overlay)
+	if _, err := inst.EnvOverlay(secrets); err == nil {
+		t.Error("a sensitive var with no stored secret must be an error: omitting it would fall through to the ambient account")
 	}
 }

@@ -107,7 +107,18 @@ func (m *Manager) register(reg registered) {
 // before serving; it is not synchronised against concurrent reads.
 func (m *Manager) ConfigureInstances(instances []provider.Instance, secrets *provider.SecretStore) {
 	m.secrets = secrets
+	seen := map[string]bool{}
 	for _, inst := range instances {
+		// A configured entry may override the same driver's default instance,
+		// but never an instance of a *different* driver: {"id":"codex",
+		// "driver":"claude"} would silently delete the Codex default and break
+		// every session on it. Duplicate ids within the config are a mistake
+		// too; the first entry wins.
+		if existing, ok := m.instances[inst.ID]; ok && (existing.inst.Driver != inst.Driver || seen[inst.ID]) {
+			m.logf("provider instance %q collides with an existing %q instance; entry skipped", inst.ID, existing.inst.Driver)
+			continue
+		}
+		seen[inst.ID] = true
 		ad, known := m.drivers[inst.Driver]
 		if !known {
 			m.logf("provider instance %q names driver %q, which this build does not have; listing it as unavailable", inst.ID, inst.Driver)
@@ -118,7 +129,9 @@ func (m *Manager) ConfigureInstances(instances []provider.Instance, secrets *pro
 
 // envFor materialises an instance's credential overlay: plain values from the
 // config, sensitive values from the secret store, at spawn (or probe) time.
-func (m *Manager) envFor(inst provider.Instance) map[string]string {
+// A missing secret is an error, never a silent fall-through to the ambient
+// account.
+func (m *Manager) envFor(inst provider.Instance) (map[string]string, error) {
 	return inst.EnvOverlay(m.secrets)
 }
 
@@ -144,6 +157,20 @@ func (m *Manager) instanceFor(meta store.SessionMeta) (registered, error) {
 		return registered{}, fmt.Errorf("no %q driver in this build", reg.inst.Driver)
 	}
 	return reg, nil
+}
+
+// cleanupAdapter is the lenient sibling of instanceFor, for workspace cleanup
+// and pending restores: those paths never spawn a harness, so a session whose
+// instance has been removed from the config must still be cleanable — anything
+// stricter strands it in "cleaning" forever. The adapter may be nil.
+func (m *Manager) cleanupAdapter(meta store.SessionMeta) (adapter.Adapter, map[string]string) {
+	if reg, err := m.instanceFor(meta); err == nil {
+		if env, envErr := m.envFor(reg.inst); envErr == nil {
+			return reg.ad, env
+		}
+		return reg.ad, nil
+	}
+	return m.drivers[meta.Harness], nil
 }
 
 // resolveInstance turns a create request into an instance. The instance id
@@ -281,7 +308,13 @@ func (m *Manager) availability(ctx context.Context, reg registered) adapter.Avai
 		return cached.result
 	}
 
-	result := reg.ad.Probe(ctx, m.envFor(reg.inst))
+	env, err := m.envFor(reg.inst)
+	if err != nil {
+		// Refusing to guess: probing (or spawning) with the ambient credential
+		// in place of a missing secret would report the wrong account's health.
+		return adapter.Unavailable(err.Error())
+	}
+	result := reg.ad.Probe(ctx, env)
 
 	m.probeMu.Lock()
 	m.probes[reg.inst.ID] = probeResult{result: result, at: time.Now()}
@@ -305,7 +338,10 @@ func (m *Manager) Create(ctx context.Context, harness, instance, cwd, model, mod
 	if err != nil {
 		return nil, err
 	}
-	env := m.envFor(reg.inst)
+	env, err := m.envFor(reg.inst)
+	if err != nil {
+		return nil, err
+	}
 
 	// Probe fresh here rather than trusting the cache: the answer decides
 	// whether we are about to spawn a process, and it may have changed.
@@ -393,7 +429,10 @@ func (m *Manager) CreateProject(ctx context.Context, o CreateProjectOptions) (*A
 	if err != nil {
 		return nil, err
 	}
-	env := m.envFor(reg.inst)
+	env, err := m.envFor(reg.inst)
+	if err != nil {
+		return nil, err
+	}
 	if avail := reg.ad.Probe(ctx, env); !avail.OK() {
 		return nil, fmt.Errorf("%s is not available: %s", reg.inst.DisplayName, avail.Reason)
 	}
@@ -597,11 +636,8 @@ func (m *Manager) Cleanup(ctx context.Context, id string) error {
 		live.Dispose("cleaning workspace")
 	}
 	_ = m.store.SetPhase(ctx, id, "cleaning")
-	reg, err := m.instanceFor(meta)
-	if err != nil {
-		return err
-	}
-	a, err := RestorePending(ctx, m.store, reg.ad, meta, m.envFor(reg.inst), m.logf)
+	ad, env := m.cleanupAdapter(meta)
+	a, err := RestorePending(ctx, m.store, ad, meta, env, m.logf)
 	if err != nil {
 		return err
 	}
@@ -637,11 +673,11 @@ func (m *Manager) Get(ctx context.Context, id string) (*Actor, error) {
 	if meta.Phase == "closed" {
 		a, err = RestoreClosed(ctx, m.store, meta, m.logf)
 	} else if meta.Phase == "creating" || meta.Phase == "provisioning" || meta.Phase == "provision_failed" || meta.Phase == "cleaning" || meta.Phase == "cleanup_failed" {
-		reg, regErr := m.instanceFor(meta)
-		if regErr != nil {
-			return nil, regErr
-		}
-		a, err = RestorePending(ctx, m.store, reg.ad, meta, m.envFor(reg.inst), m.logf)
+		// Lenient on purpose: a pending session must stay attachable (and
+		// cleanable) even if its instance has gone from the config. Activation
+		// is where a missing adapter is refused.
+		ad, env := m.cleanupAdapter(meta)
+		a, err = RestorePending(ctx, m.store, ad, meta, env, m.logf)
 		if err == nil && (meta.Phase == "creating" || meta.Phase == "provisioning") {
 			_ = m.store.SetPhase(ctx, meta.ID, "provision_failed")
 			_ = a.Emit(ctx, proto.Emit(proto.WorkspaceFailed, proto.WorkspaceFailedPayload{Hook: "provision", Error: "server restarted while provisioning; retry is safe"}))
@@ -659,8 +695,14 @@ func (m *Manager) Get(ctx context.Context, id string) (*Actor, error) {
 			return nil, regErr
 		}
 		// Resume reuses the instance the session was created under: its env is
-		// re-materialised, so the same account backs the same conversation.
-		a, err = Resume(ctx, m.store, reg.ad, meta, m.envFor(reg.inst), m.logf)
+		// re-materialised, so the same account backs the same conversation. A
+		// missing secret refuses the resume rather than falling through to the
+		// ambient account.
+		env, envErr := m.envFor(reg.inst)
+		if envErr != nil {
+			return nil, envErr
+		}
+		a, err = Resume(ctx, m.store, reg.ad, meta, env, m.logf)
 	}
 	if err != nil {
 		return nil, err
@@ -802,11 +844,8 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	if err := m.store.SetPhase(ctx, id, "cleaning"); err != nil {
 		return err
 	}
-	reg, err := m.instanceFor(meta)
-	if err != nil {
-		return err
-	}
-	a, err := RestorePending(ctx, m.store, reg.ad, meta, m.envFor(reg.inst), m.logf)
+	ad, env := m.cleanupAdapter(meta)
+	a, err := RestorePending(ctx, m.store, ad, meta, env, m.logf)
 	if err != nil {
 		return err
 	}
