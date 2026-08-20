@@ -327,11 +327,18 @@ func (m *Manager) cleanup(meta store.SessionMeta, p project.Project, a *Actor, p
 	_ = a.Emit(ctx, proto.Emit(proto.WorkspaceCleanupStarted, map[string]any{"purge": purge}))
 	_ = m.store.SetPhase(ctx, meta.ID, "cleaning")
 	m.notifyList()
+	// Only a managed lease is hy's to tear down, and the mode is checked
+	// before the script rather than after it. A session created by an earlier
+	// build can be local and still carry a deprovision script; running that
+	// script would be running a worktree-teardown hook over the directory the
+	// user works in.
 	var err error
-	if meta.DeprovisionScript != "" {
-		err = m.runDeprovisionHook(ctx, meta, p, a)
-	} else if meta.WorkspaceMode == "managed" {
-		err = m.removeWorktree(ctx, meta, p, a)
+	if meta.WorkspaceMode == "managed" {
+		if meta.DeprovisionScript != "" {
+			err = m.runDeprovisionHook(ctx, meta, p, a)
+		} else {
+			err = m.removeWorktree(ctx, meta, p, a)
+		}
 	}
 	if err != nil {
 		_ = m.store.SetPhase(ctx, meta.ID, "cleanup_failed")

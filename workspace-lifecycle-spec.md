@@ -201,13 +201,29 @@ A session can use one of three workspace modes:
 
 | Mode | Created by hy | Setup hook | Teardown hook | Git removal |
 |---|---:|---:|---:|---:|
-| `local` | no | no by default | no | no |
-| `borrowed` | no | optional | no by default | never |
+| `local` | no | never | never | never |
+| `borrowed` | no | never | never | never |
 | `managed` | provision hook | yes | yes | deprovision hook |
 
 Ownership is recorded when the lease is created and never inferred later from
 the path. This is the guard that prevents hy from deleting a checkout it did
-not create.
+not create: only `managed` reaches teardown, and both other modes have their
+hook paths cleared at creation rather than being skipped at teardown, so a
+later change to the teardown branch cannot resurrect them.
+
+Hooks are a property of provisioning, not of running. A `local` session is the
+project's own working directory and a `borrowed` one is a checkout somebody
+else made; in both cases there is nothing to prepare, and a provision hook
+written to populate a fresh worktree — installing dependencies, seeding
+configuration, copying secrets — would be at best redundant and at worst
+destructive when run against a checkout that is already in use. Neither mode
+runs them.
+
+Because a `local` session holds the project directory itself, only one may be
+active per project at a time. The lease is acquired through the same busy check
+that governs attaching to an existing worktree: a checkout a live session
+already holds is refused, since two harnesses editing one directory corrupt
+each other's work.
 
 The branch is preserved when a managed worktree is released. Discarding a
 branch is a separate, explicit Git action.

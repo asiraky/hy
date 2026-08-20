@@ -391,11 +391,15 @@ export function ProjectSettings({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="local">Use project directory</SelectItem>
-                      <SelectItem value="managed">Managed worktree</SelectItem>
+                      <SelectItem value="local">Main checkout</SelectItem>
+                      <SelectItem value="managed">Worktree</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
+                <p className="text-muted-foreground text-[11px]">
+                  Defaults only preselect the new-session dialog. Every session can still be
+                  started any other way.
+                </p>
               </div>
 
               <Separator />

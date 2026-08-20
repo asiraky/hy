@@ -32,6 +32,11 @@ type Manager struct {
 	// Close could remove an actor before it had marked the row closed and a
 	// concurrent Get could spawn a second writer in that window.
 	lifecycle sync.Mutex
+	// leases serialises the check-then-claim of a checkout when a session is
+	// created. Whether a directory is free is read from the session table, so
+	// two concurrent creates would otherwise both see it free and both take
+	// it.
+	leases sync.Mutex
 
 	probeMu sync.Mutex
 	probes  map[string]probeResult
@@ -199,6 +204,13 @@ func (m *Manager) CreateProject(ctx context.Context, o CreateProjectOptions) (*A
 	if o.Workspace == "" {
 		o.Workspace = "local"
 	}
+	// Attaching is what produces a borrowed lease; it is not something a
+	// client may ask for by name. Anything else unrecognised would fall
+	// through every guard below and land a harness in the project root with
+	// the hooks still attached, so it is refused rather than interpreted.
+	if o.Workspace != "local" && o.Workspace != "managed" {
+		return nil, fmt.Errorf("unknown workspace mode %q", o.Workspace)
+	}
 	ad, ok := m.adapters[o.Harness]
 	if !ok {
 		return nil, fmt.Errorf("unknown harness %q", o.Harness)
@@ -206,25 +218,53 @@ func (m *Manager) CreateProject(ctx context.Context, o CreateProjectOptions) (*A
 	if avail := ad.Probe(ctx); !avail.OK() {
 		return nil, fmt.Errorf("%s is not available: %s", ad.Meta().Name, avail.Reason)
 	}
-	provision, err := project.ResolveHook(p.Root, p.Config.Workspace.Provision)
-	if err != nil && p.Config.Workspace.Provision != "" {
-		return nil, fmt.Errorf("provision hook: %w", err)
-	}
-	deprovision, err := project.ResolveHook(p.Root, p.Config.Workspace.Deprovision)
-	if err != nil && p.Config.Workspace.Deprovision != "" {
-		return nil, fmt.Errorf("deprovision hook: %w", err)
-	}
+
+	// Acquiring a checkout is a check followed by a write, and two websocket
+	// commands are two goroutines. Without this, both could find the project
+	// root free and both start a harness in it.
+	m.leases.Lock()
+	defer m.leases.Unlock()
+
 	cwd := p.Root
-	if strings.TrimSpace(o.WorkspacePath) != "" {
+	switch {
+	case strings.TrimSpace(o.WorkspacePath) != "":
 		w, resolveErr := m.ResolveWorkspace(ctx, p.ID, o.WorkspacePath)
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
 		// hy did not create this checkout, so it must never destroy it: the
 		// borrowed mode skips both hooks and the managed worktree teardown.
-		cwd, o.Workspace, provision, deprovision = w.Path, "borrowed", "", ""
+		cwd, o.Workspace = w.Path, "borrowed"
 		if o.Branch == "" {
 			o.Branch = w.Branch
+		}
+	case o.Workspace == "local":
+		// The main checkout, which hy did not create and must not clean up.
+		// Resolving it as a workspace reuses the attach guard: a checkout a
+		// live session already holds comes back busy, because two harnesses
+		// editing one directory corrupt each other's work.
+		w, resolveErr := m.ResolveWorkspace(ctx, p.ID, p.Root)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		// No branch is created: the session is on whatever the checkout is
+		// already on, and reporting that is more honest than reporting a name
+		// nothing acted upon.
+		cwd, o.Branch = w.Path, w.Branch
+	}
+
+	// Hooks belong to provisioning. A local session runs in the directory the
+	// user already works in and a borrowed one in a checkout somebody else
+	// made; neither has anything to prepare, so neither resolves a hook —
+	// which also means a hook that has since been deleted cannot block the
+	// one mode that would never have run it.
+	var provision, deprovision string
+	if o.Workspace == "managed" {
+		if provision, err = project.ResolveHook(p.Root, p.Config.Workspace.Provision); err != nil && p.Config.Workspace.Provision != "" {
+			return nil, fmt.Errorf("provision hook: %w", err)
+		}
+		if deprovision, err = project.ResolveHook(p.Root, p.Config.Workspace.Deprovision); err != nil && p.Config.Workspace.Deprovision != "" {
+			return nil, fmt.Errorf("deprovision hook: %w", err)
 		}
 	}
 
@@ -606,9 +646,10 @@ func (m *Manager) ForceDelete(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	// A borrowed checkout belongs to whoever made it; forcing the session away
-	// must not take their worktree with it.
-	if meta.WorkspaceMode != "borrowed" {
+	// Only a managed worktree is hy's to destroy. A borrowed checkout belongs
+	// to whoever made it and a local session is the user's own working
+	// directory; forcing either session away must not touch their files.
+	if meta.WorkspaceMode == "managed" {
 		if err := m.removeGitWorktree(ctx, meta, p, nil, true); err != nil {
 			return err
 		}
