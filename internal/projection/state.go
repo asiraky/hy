@@ -50,6 +50,11 @@ type Turn struct {
 	// Diff is what the turn changed on disk, and arrives after the turn is
 	// done. A turn that changed nothing never gets one.
 	Diff *proto.TurnDiffPayload `json:"diff,omitempty"`
+	// When the turn started and finished, from the event log's own clock.
+	// The UI folds a finished turn behind "Worked for 34s", and that label
+	// is measured here rather than in any presenter.
+	StartedAt  int64 `json:"startedAt,omitempty"`
+	FinishedAt int64 `json:"finishedAt,omitempty"`
 }
 
 // PendingPermission is a permission request awaiting a human. It lives in the
@@ -249,7 +254,7 @@ func (s *State) Apply(ev proto.Event) {
 		var p proto.TurnStartedPayload
 		decode(ev.Payload, &p)
 		s.Phase = "turn"
-		s.Turns = append(s.Turns, Turn{ID: p.TurnID, Prompt: p.Prompt, Recovery: p.Recovery})
+		s.Turns = append(s.Turns, Turn{ID: p.TurnID, Prompt: p.Prompt, Recovery: p.Recovery, StartedAt: ev.Timestamp})
 		if s.Title == "" {
 			s.Title = truncate(p.Prompt, 60)
 		}
@@ -291,6 +296,7 @@ func (s *State) Apply(ev proto.Event) {
 				s.Turns[i].StopReason = p.StopReason
 				s.Turns[i].Error = p.Error
 				s.Turns[i].Done = true
+				s.Turns[i].FinishedAt = ev.Timestamp
 			}
 		}
 		// Any tool left mid-flight when the turn ended is no longer running.
