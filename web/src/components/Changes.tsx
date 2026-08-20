@@ -173,10 +173,17 @@ function ChangesBody({ open, onClose, revision, loadChanges, loadDiff, inSheet }
     setExpanded((current) => (current === path ? null : path));
     if (requested.current.has(path)) return;
     requested.current.add(path);
+    // A diff read against the list we were showing describes that list. If a
+    // refresh lands first, this answer is about a worktree that has moved on.
+    const mine = generation.current;
     setDiffs((d) => ({ ...d, [path]: { loading: true } }));
     void diffRef.current(path)
-      .then((diff) => setDiffs((d) => ({ ...d, [path]: { diff, loading: false } })))
+      .then((diff) => {
+        if (mine !== generation.current) return;
+        setDiffs((d) => ({ ...d, [path]: { diff, loading: false } }));
+      })
       .catch((e) => {
+        if (mine !== generation.current) return;
         requested.current.delete(path);
         setDiffs((d) => ({
           ...d,
@@ -274,7 +281,10 @@ export function Changes(props: ChangesProps) {
   useEffect(() => {
     if (!props.open || !isDesktop) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") props.onClose();
+      // A dialog or sheet over the panel owns Escape first; closing both at
+      // once would dismiss something the user was not looking at.
+      if (e.key !== "Escape" || document.querySelector("[role=dialog]")) return;
+      props.onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

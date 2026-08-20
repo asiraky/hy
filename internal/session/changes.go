@@ -5,7 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -90,13 +93,15 @@ func (m *Manager) SessionChanges(ctx context.Context, sessionID string) (Session
 	}
 	files = append(files, untracked...)
 
-	if len(files) > maxChangedFiles {
-		files = files[:maxChangedFiles]
-		out.Truncated = true
-	}
+	// Totals are counted over everything that changed, then the list is cut:
+	// a truncated list still has to report honest sums.
 	for _, f := range files {
 		out.Additions += f.Additions
 		out.Deletions += f.Deletions
+	}
+	if len(files) > maxChangedFiles {
+		files = files[:maxChangedFiles]
+		out.Truncated = true
 	}
 	out.Files = files
 	return out, nil
@@ -125,24 +130,20 @@ func (m *Manager) SessionFileDiff(ctx context.Context, sessionID, path string) (
 		return out, nil
 	}
 
-	var raw []byte
+	var args []string
 	if target.Untracked {
-		raw, err = gitAllowingDiff(ctx, changes.Root, "diff", "--no-index", "--no-color", "--", devNull, "./"+target.Path)
+		args = []string{"diff", "--no-index", "--no-color", "--", devNull, "./" + target.Path}
 	} else {
-		args := []string{"diff", "-M", "--no-color", changes.Base, "--", target.Path}
+		args = []string{"diff", "-M", "--no-color", changes.Base, "--", target.Path}
 		if target.OldPath != "" {
 			args = append(args, target.OldPath)
 		}
-		raw, err = gitAllowingDiff(ctx, changes.Root, args...)
 	}
+	raw, truncated, err := gitBounded(ctx, changes.Root, maxPatchBytes, args...)
 	if err != nil {
 		return FileDiff{}, err
 	}
-	if len(raw) > maxPatchBytes {
-		raw = raw[:maxPatchBytes]
-		out.Truncated = true
-	}
-	out.Patch = string(raw)
+	out.Patch, out.Truncated = string(raw), truncated
 	return out, nil
 }
 
@@ -260,18 +261,47 @@ func untrackedChanges(ctx context.Context, root string) ([]ChangedFile, error) {
 	var out []ChangedFile
 	for _, path := range splitNUL(string(listed)) {
 		f := ChangedFile{Path: path, Status: "added", Untracked: true}
-		// --no-index reports a difference by exiting 1; that is the normal case
-		// here, since the file exists and its counterpart does not.
-		raw, err := gitAllowingDiff(ctx, root, "diff", "--no-index", "--numstat", "-z", "--", devNull, "./"+path)
-		if err == nil {
-			for _, c := range parseNumstat(string(raw)) {
-				f.Additions, f.Deletions, f.Binary = c.additions, c.deletions, c.binary
-				break
-			}
-		}
+		// A whole new file is every line added, which is cheaper to count here
+		// than to ask a git process per file — and a checkout can hold tens of
+		// thousands of untracked files.
+		f.Additions, f.Binary = newFileLines(filepath.Join(root, path))
 		out = append(out, f)
 	}
 	return out, nil
+}
+
+// newFileLines counts the lines of a file git has never seen, and reports it
+// binary on the same evidence git uses: a NUL byte near the start.
+func newFileLines(path string) (lines int, binary bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, false
+	}
+	defer f.Close()
+
+	buf := make([]byte, 32*1024)
+	first := true
+	trailing := byte('\n')
+	for {
+		n, err := f.Read(buf)
+		chunk := buf[:n]
+		if first && bytes.IndexByte(chunk, 0) >= 0 {
+			return 0, true
+		}
+		first = false
+		lines += bytes.Count(chunk, []byte{'\n'})
+		if n > 0 {
+			trailing = chunk[n-1]
+		}
+		if err != nil {
+			break
+		}
+	}
+	// A file whose last line has no newline is still a line.
+	if trailing != '\n' {
+		lines++
+	}
+	return lines, false
 }
 
 type lineCount struct {
@@ -358,20 +388,51 @@ func splitNUL(raw string) []string {
 	return out
 }
 
-// gitAllowingDiff runs git where exit status 1 means "they differ" rather than
-// failure — which is how `git diff --no-index` and `--exit-code` report.
-func gitAllowingDiff(ctx context.Context, dir string, args ...string) ([]byte, error) {
+// gitBounded runs git and stops reading at limit bytes, killing the command
+// rather than buffering a diff nobody could read anyway. A minified bundle or a
+// vendored tree can produce hundreds of megabytes on one path.
+func gitBounded(ctx context.Context, dir string, limit int, args ...string) ([]byte, bool, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err := cmd.Run()
-	var ee *exec.ExitError
-	if errors.As(err, &ee) && ee.ExitCode() == 1 {
-		return stdout.Bytes(), nil
-	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+		return nil, false, err
 	}
-	return stdout.Bytes(), nil
+	if err := cmd.Start(); err != nil {
+		return nil, false, err
+	}
+
+	raw, readErr := io.ReadAll(io.LimitReader(stdout, int64(limit)+1))
+	truncated := len(raw) > limit
+	if truncated {
+		raw = raw[:limit]
+		// Stop git rather than drain it: nothing further will be shown.
+		cancel()
+	}
+	// Draining what is left keeps git from blocking on a full pipe while it
+	// waits to be reaped.
+	_, _ = io.Copy(io.Discard, stdout)
+	waitErr := cmd.Wait()
+
+	if truncated {
+		return raw, true, nil
+	}
+	if readErr != nil {
+		return nil, false, readErr
+	}
+	var ee *exec.ExitError
+	if errors.As(waitErr, &ee) && ee.ExitCode() == 1 {
+		// --no-index reports "they differ" as exit 1, which is the normal case
+		// for a file that exists on only one side.
+		return raw, false, nil
+	}
+	if waitErr != nil {
+		return nil, false, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), waitErr, strings.TrimSpace(stderr.String()))
+	}
+	return raw, false, nil
 }

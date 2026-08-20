@@ -143,6 +143,32 @@ func TestSessionFileDiffRefusesPathsThatDidNotChange(t *testing.T) {
 	}
 }
 
+// A file git has never seen is counted here rather than by a git process per
+// file, so the counting has to be right about the awkward cases itself.
+func TestNewFileLineCounting(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name, body string
+		lines      int
+		binary     bool
+	}{
+		{"empty.txt", "", 0, false},
+		{"trailing.txt", "a\nb\n", 2, false},
+		{"no-trailing-newline.txt", "a\nb", 2, false},
+		{"binary.bin", "MZ\x00\x01rest", 0, true},
+	}
+	for _, c := range cases {
+		write(t, dir, c.name, c.body)
+		lines, binary := newFileLines(filepath.Join(dir, c.name))
+		if lines != c.lines || binary != c.binary {
+			t.Fatalf("%s: got %d lines binary=%v, want %d/%v", c.name, lines, binary, c.lines, c.binary)
+		}
+	}
+	if lines, _ := newFileLines(filepath.Join(dir, "does-not-exist")); lines != 0 {
+		t.Fatal("a file that vanished mid-read must not be an error")
+	}
+}
+
 func TestSessionChangesExplainsACheckoutThatIsNotARepository(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "s.db"))
 	if err != nil {

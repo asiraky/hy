@@ -114,15 +114,18 @@ function groupRows(items: Item[]): Row[] {
   return rows;
 }
 
-// One phrase per tool kind, in the order they read best in a summary.
+// One phrase per tool kind, in the order they read best in a summary. These
+// count calls, not files: one call can touch several paths and five calls can
+// touch one, so "Edited 3 files" would be a claim this cannot make. The Changes
+// panel is where the honest per-file count lives.
 const SUMMARY: { kind: string; one: string; many: (n: number) => string }[] = [
-  { kind: "read", one: "Read 1 file", many: (n) => `Read ${n} files` },
-  { kind: "edit", one: "Edited 1 file", many: (n) => `Edited ${n} files` },
-  { kind: "delete", one: "Deleted 1 file", many: (n) => `Deleted ${n} files` },
-  { kind: "move", one: "Moved 1 file", many: (n) => `Moved ${n} files` },
+  { kind: "read", one: "1 read", many: (n) => `${n} reads` },
+  { kind: "edit", one: "1 edit", many: (n) => `${n} edits` },
+  { kind: "delete", one: "1 delete", many: (n) => `${n} deletes` },
+  { kind: "move", one: "1 move", many: (n) => `${n} moves` },
   { kind: "search", one: "1 search", many: (n) => `${n} searches` },
-  { kind: "execute", one: "Ran 1 command", many: (n) => `Ran ${n} commands` },
-  { kind: "fetch", one: "Fetched 1 URL", many: (n) => `Fetched ${n} URLs` },
+  { kind: "execute", one: "1 command", many: (n) => `${n} commands` },
+  { kind: "fetch", one: "1 fetch", many: (n) => `${n} fetches` },
   { kind: "think", one: "1 thought", many: (n) => `${n} thoughts` },
   { kind: "other", one: "1 other call", many: (n) => `${n} other calls` },
 ];
