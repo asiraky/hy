@@ -78,7 +78,7 @@ function BranchFormatField({ value, onChange }: { value: string; onChange: (v: s
       />
       <p
         className={cn(
-          "font-mono text-[11px]",
+          "font-mono text-[11px] break-all",
           preview.bad ? "text-attention-foreground" : "text-muted-foreground",
         )}
       >
@@ -242,8 +242,9 @@ export function ProjectSettings({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="scroll-thin max-h-[90dvh] overflow-y-auto sm:max-w-lg">
-        <DialogHeader>
+      {/* Header and footer stay put; only the form between them scrolls. */}
+      <DialogContent className="flex max-h-[min(90dvh,44rem)] flex-col gap-0 p-0 sm:max-w-lg">
+        <DialogHeader className="border-b px-6 py-4">
           <DialogTitle>{project ? `${cfg.name} settings` : "Add project"}</DialogTitle>
           <DialogDescription>
             {project
@@ -252,143 +253,147 @@ export function ProjectSettings({
           </DialogDescription>
         </DialogHeader>
 
-        {!project ? (
-          <div className="space-y-1.5">
-            <Label htmlFor="project-root">Project directory</Label>
-            <Input
-              id="project-root"
-              value={root}
-              onChange={(e) => setRoot(e.target.value)}
-              className="font-mono text-[12px]"
-            />
-          </div>
-        ) : (
-          <div className="space-y-5">
+        <div className="scroll-thin min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
+          {!project ? (
             <div className="space-y-1.5">
-              <Label htmlFor="project-name">Project name</Label>
+              <Label htmlFor="project-root">Project directory</Label>
               <Input
-                id="project-name"
-                value={cfg.name}
-                onChange={(e) => setCfg({ ...cfg, name: e.target.value })}
+                id="project-root"
+                value={root}
+                onChange={(e) => setRoot(e.target.value)}
+                className="font-mono text-[12px]"
               />
-              <p className="text-muted-foreground font-mono text-[10px]">
-                {project.root}/.hy/project.json
-              </p>
             </div>
-
-            <Separator />
-
-            <div className="space-y-2">
-              <SectionHeading>Agent defaults</SectionHeading>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                <Select
-                  value={cfg.defaults.harness ?? ""}
-                  onValueChange={(v) => defaults({ harness: v })}
-                >
-                  <SelectTrigger aria-label="Default harness" className="w-full">
-                    <SelectValue placeholder="Harness" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {harnesses.map((h) => (
-                      <SelectItem key={h.id} value={h.id}>
-                        {h.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-
-                <Input
-                  value={cfg.defaults.model ?? ""}
-                  onChange={(e) => defaults({ model: e.target.value })}
-                  placeholder="Default model"
-                  aria-label="Default model"
-                />
-
-                {/* Radix rejects "" as a value, so the unset case is a named
-                    sentinel that maps back to "" on the way out. */}
-                <Select
-                  value={cfg.defaults.effort || "default"}
-                  onValueChange={(v) => defaults({ effort: v === "default" ? "" : v })}
-                >
-                  <SelectTrigger aria-label="Default effort" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="default">Default effort</SelectItem>
-                    {EFFORTS.map((e) => (
-                      <SelectItem key={e} value={e}>
-                        {e}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-
-                <Input
-                  value={cfg.defaults.mode ?? ""}
-                  onChange={(e) => defaults({ mode: e.target.value })}
-                  placeholder="Permission/runtime mode"
-                  aria-label="Permission or runtime mode"
-                />
-
-                <Select
-                  value={cfg.defaults.workspace ?? "local"}
-                  onValueChange={(v) => defaults({ workspace: v })}
-                >
-                  <SelectTrigger aria-label="Default workspace" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="local">Use project directory</SelectItem>
-                    <SelectItem value="managed">Managed worktree</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <Separator />
-
-            <div className="space-y-3">
-              <SectionHeading>Workspace</SectionHeading>
+          ) : (
+            <div className="space-y-5">
               <div className="space-y-1.5">
-                <Label htmlFor="base-branch">Base branch</Label>
+                <Label htmlFor="project-name">Project name</Label>
                 <Input
-                  id="base-branch"
-                  value={cfg.defaults.baseBranch ?? ""}
-                  onChange={(e) => defaults({ baseBranch: e.target.value })}
-                  placeholder="main"
-                  className="font-mono text-[12px]"
+                  id="project-name"
+                  value={cfg.name}
+                  onChange={(e) => setCfg({ ...cfg, name: e.target.value })}
+                />
+                <p className="text-muted-foreground font-mono text-[10px] break-all">
+                  {project.root}/.hy/project.json
+                </p>
+              </div>
+
+              <Separator />
+
+              <div className="space-y-2">
+                <SectionHeading>Agent defaults</SectionHeading>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <Select
+                    value={cfg.defaults.harness ?? ""}
+                    onValueChange={(v) => defaults({ harness: v })}
+                  >
+                    <SelectTrigger aria-label="Default harness" className="w-full">
+                      <SelectValue placeholder="Harness" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {harnesses.map((h) => (
+                        <SelectItem key={h.id} value={h.id}>
+                          {h.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+
+                  <Input
+                    value={cfg.defaults.model ?? ""}
+                    onChange={(e) => defaults({ model: e.target.value })}
+                    placeholder="Default model"
+                    aria-label="Default model"
+                  />
+
+                  {/* Radix rejects "" as a value, so the unset case is a named
+                    sentinel that maps back to "" on the way out. */}
+                  <Select
+                    value={cfg.defaults.effort || "default"}
+                    onValueChange={(v) => defaults({ effort: v === "default" ? "" : v })}
+                  >
+                    <SelectTrigger aria-label="Default effort" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default">Default effort</SelectItem>
+                      {EFFORTS.map((e) => (
+                        <SelectItem key={e} value={e}>
+                          {e}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+
+                  <Input
+                    value={cfg.defaults.mode ?? ""}
+                    onChange={(e) => defaults({ mode: e.target.value })}
+                    placeholder="Permission/runtime mode"
+                    aria-label="Permission or runtime mode"
+                  />
+
+                  <Select
+                    value={cfg.defaults.workspace ?? "local"}
+                    onValueChange={(v) => defaults({ workspace: v })}
+                  >
+                    <SelectTrigger aria-label="Default workspace" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="local">Use project directory</SelectItem>
+                      <SelectItem value="managed">Managed worktree</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <Separator />
+
+              <div className="space-y-3">
+                <SectionHeading>Workspace</SectionHeading>
+                <div className="space-y-1.5">
+                  <Label htmlFor="base-branch">Base branch</Label>
+                  <Input
+                    id="base-branch"
+                    value={cfg.defaults.baseBranch ?? ""}
+                    onChange={(e) => defaults({ baseBranch: e.target.value })}
+                    placeholder="main"
+                    className="font-mono text-[12px]"
+                  />
+                </div>
+                <HookField
+                  label="Provision"
+                  root={project.root}
+                  value={cfg.workspace.provision ?? ""}
+                  onChange={(v) => workspace({ provision: v })}
+                />
+                <HookField
+                  label="Deprovision"
+                  root={project.root}
+                  value={cfg.workspace.deprovision ?? ""}
+                  onChange={(v) => workspace({ deprovision: v })}
                 />
               </div>
-              <HookField
-                label="Provision"
-                root={project.root}
-                value={cfg.workspace.provision ?? ""}
-                onChange={(v) => workspace({ provision: v })}
-              />
-              <HookField
-                label="Deprovision"
-                root={project.root}
-                value={cfg.workspace.deprovision ?? ""}
-                onChange={(v) => workspace({ deprovision: v })}
+
+              <Separator />
+
+              <BranchFormatField
+                value={user.branchFormat ?? ""}
+                onChange={(v) => setUser({ ...user, branchFormat: v })}
               />
             </div>
+          )}
 
-            <Separator />
+          {error && (
+            <Alert variant="destructive">
+              <AlertDescription className="font-mono text-[11px] break-words">
+                {error}
+              </AlertDescription>
+            </Alert>
+          )}
+        </div>
 
-            <BranchFormatField
-              value={user.branchFormat ?? ""}
-              onChange={(v) => setUser({ ...user, branchFormat: v })}
-            />
-          </div>
-        )}
-
-        {error && (
-          <Alert variant="destructive">
-            <AlertDescription className="font-mono text-[11px]">{error}</AlertDescription>
-          </Alert>
-        )}
-
-        <DialogFooter>
+        <DialogFooter className="border-t px-6 py-4">
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>

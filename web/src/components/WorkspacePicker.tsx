@@ -1,8 +1,9 @@
-import { ChevronsUpDownIcon } from "lucide-react";
+import { ChevronDownIcon } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
-import { Button } from "~/components/ui/button";
+import { Badge } from "~/components/ui/badge";
 import { Input } from "~/components/ui/input";
+import { Popover, PopoverAnchor, PopoverContent } from "~/components/ui/popover";
 import { cn } from "~/lib/utils";
 import type { Issue, UserConfig, Workspace } from "~/protocol";
 
@@ -52,7 +53,11 @@ type Row =
   | { kind: "existing"; workspace: Workspace };
 
 const rowKey = (r: Row) =>
-  r.kind === "existing" ? `w:${r.workspace.path}` : r.kind === "issue" ? `i:${r.issue.number}` : "create";
+  r.kind === "existing"
+    ? `w:${r.workspace.path}`
+    : r.kind === "issue"
+      ? `i:${r.issue.number}`
+      : "create";
 const label = (w: Workspace) =>
   w.branch || (w.head ? `detached @ ${w.head}` : w.path.split("/").pop() || w.path);
 
@@ -116,7 +121,11 @@ export function WorkspacePicker({
       }
     }
     for (const w of workspaces) {
-      if (needle && !label(w).toLowerCase().includes(needle) && !w.path.toLowerCase().includes(needle))
+      if (
+        needle &&
+        !label(w).toLowerCase().includes(needle) &&
+        !w.path.toLowerCase().includes(needle)
+      )
         continue;
       out.push({ kind: "existing", workspace: w });
     }
@@ -127,14 +136,10 @@ export function WorkspacePicker({
   useEffect(() => {
     setActive(0);
   }, [rows.length]);
+  // The list lives in a portal, so keyboard moves scroll it by element id.
   useEffect(() => {
-    if (!open) return;
-    const away = (e: MouseEvent) => {
-      if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", away);
-    return () => document.removeEventListener("mousedown", away);
-  }, [open]);
+    if (open) document.getElementById(`${listId}-${active}`)?.scrollIntoView({ block: "nearest" });
+  }, [open, active, listId]);
 
   const choose = (r: Row) => {
     if (!selectable(r)) return;
@@ -145,6 +150,9 @@ export function WorkspacePicker({
 
   const key = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") {
+      // Consume it while the list is open, so it closes the list and not the
+      // whole dialog around it.
+      if (open) e.stopPropagation();
       setOpen(false);
       return;
     }
@@ -206,70 +214,90 @@ export function WorkspacePicker({
         onMouseEnter={() => setActive(i)}
         onClick={() => choose(r)}
         className={cn(
-          "flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-[12px]",
+          "flex w-full flex-col gap-0.5 px-3 py-1.5 text-left text-[12px]",
           i === active && !busy && "bg-accent text-accent-foreground",
           busy && "opacity-40",
         )}
       >
-        <span className="font-mono">{r.kind === "existing" ? label(r.workspace) : r.branch}</span>
-        {r.kind === "issue" && (
-          <span className="text-muted-foreground min-w-0 flex-1 truncate">
-            #{r.issue.number} {r.issue.title}
+        <span className="flex w-full items-baseline gap-2">
+          <span className="min-w-0 truncate font-mono">
+            {r.kind === "existing" ? label(r.workspace) : r.branch}
           </span>
-        )}
-        {r.kind === "existing" && r.workspace.isRoot && (
-          <span className="text-muted-foreground">project root</span>
-        )}
-        {busy && <span className="text-attention-foreground ml-auto shrink-0">in use</span>}
-        {r.kind === "existing" && r.workspace.locked && !busy && (
-          <span className="text-muted-foreground ml-auto shrink-0">locked</span>
+          {r.kind === "existing" && r.workspace.isRoot && (
+            <span className="text-muted-foreground shrink-0">project root</span>
+          )}
+          {busy && <span className="text-attention-foreground ml-auto shrink-0">in use</span>}
+          {r.kind === "existing" && r.workspace.locked && !busy && (
+            <span className="text-muted-foreground ml-auto shrink-0">locked</span>
+          )}
+        </span>
+        {r.kind === "issue" && (
+          <span className="flex w-full min-w-0 items-center gap-1.5">
+            <span className="text-muted-foreground min-w-0 truncate text-[11px]">
+              #{r.issue.number} {r.issue.title}
+            </span>
+            {r.issue.labels?.slice(0, 3).map((l) => (
+              <Badge
+                key={l.name}
+                variant="outline"
+                className="shrink-0 px-1.5 py-0 text-[10px] font-normal"
+              >
+                {l.name}
+              </Badge>
+            ))}
+          </span>
         )}
       </button>,
     );
   });
 
   return (
-    <div ref={box} className="relative">
-      <div className="flex gap-2">
-        <Input
-          id={id}
-          value={text}
-          onKeyDown={key}
-          onFocus={() => setOpen(true)}
-          onChange={(e) => onChange({ branch: e.target.value, attachPath: "" })}
-          placeholder={placeholder}
-          role="combobox"
-          aria-expanded={open}
-          aria-controls={listId}
-          aria-autocomplete="list"
-          aria-activedescendant={open && rows[active] ? `${listId}-${active}` : undefined}
-          className="min-w-0 flex-1 font-mono text-[12px]"
-        />
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          aria-label={open ? "Hide worktrees" : "Show worktrees"}
-          className="size-11 md:size-9"
-          onClick={() => setOpen(!open)}
-        >
-          <ChevronsUpDownIcon />
-        </Button>
-      </div>
+    <div ref={box}>
+      {/* The list is portaled out of the dialog, which clips and scrolls its
+          own children — a dropdown has to float over it, not fight it. */}
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverAnchor asChild>
+          {/* Styled like a SelectTrigger: the chevron lives inside the field,
+              and clicking anywhere in it opens the list. */}
+          <div className="relative">
+            <Input
+              id={id}
+              value={text}
+              onKeyDown={key}
+              onFocus={() => setOpen(true)}
+              onClick={() => setOpen(true)}
+              onChange={(e) => onChange({ branch: e.target.value, attachPath: "" })}
+              placeholder={placeholder}
+              role="combobox"
+              aria-expanded={open}
+              aria-controls={listId}
+              aria-autocomplete="list"
+              aria-activedescendant={open && rows[active] ? `${listId}-${active}` : undefined}
+              className="w-full pr-8 font-mono text-[12px]"
+            />
+            <ChevronDownIcon
+              aria-hidden
+              className={cn(
+                "pointer-events-none absolute top-1/2 right-2.5 size-4 -translate-y-1/2 opacity-50 transition-transform",
+                open && "rotate-180",
+              )}
+            />
+          </div>
+        </PopoverAnchor>
 
-      <p className="text-muted-foreground mt-1.5 text-[11px]">
-        {attached
-          ? `Attaching to ${attached.path}`
-          : value.branch.trim()
-            ? "Creates a new worktree on this branch."
-            : "Leave empty to use the project default."}
-      </p>
-
-      {open && (
-        <div
+        <PopoverContent
           id={listId}
           role="listbox"
-          className="scroll-thin bg-popover text-popover-foreground absolute z-50 mt-1 max-h-64 w-full overflow-y-auto rounded-lg border py-1 shadow-md"
+          align="start"
+          collisionPadding={8}
+          // Typing is the search box, so focus must stay in the input; the
+          // anchor is likewise exempt from outside-interaction dismissal or
+          // clicking the input would close the list it just opened.
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          onInteractOutside={(e) => {
+            if (box.current?.contains(e.target as Node)) e.preventDefault();
+          }}
+          className="scroll-thin max-h-[min(16rem,var(--radix-popover-content-available-height))] w-[var(--radix-popover-trigger-width)] overflow-y-auto p-0 py-1"
         >
           {loading && (
             <p className="text-muted-foreground px-3 py-2 text-[12px]">Loading worktrees…</p>
@@ -290,8 +318,16 @@ export function WorkspacePicker({
               No issue suggestions: {issuesError}
             </p>
           )}
-        </div>
-      )}
+        </PopoverContent>
+      </Popover>
+
+      <p className="text-muted-foreground mt-1.5 text-[11px]">
+        {attached
+          ? `Attaching to ${attached.path}`
+          : value.branch.trim()
+            ? "Creates a new worktree on this branch."
+            : "Leave empty to use the project default."}
+      </p>
     </div>
   );
 }
