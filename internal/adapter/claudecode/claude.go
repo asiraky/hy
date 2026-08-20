@@ -85,7 +85,7 @@ func (a *Adapter) PermissionModes() []adapter.PermissionModeMeta {
 		{ID: "acceptEdits", Label: "Accept edits", Description: "Auto-accept file edits; still ask for commands"},
 		{ID: "auto", Label: "Auto", Description: "A classifier approves routine actions; ask on risk"},
 		{ID: "dontAsk", Label: "Pre-approved only", Description: "Never prompt; deny anything not already allowed"},
-		{ID: "bypassPermissions", Label: "Bypass (yolo)", Description: "Skip all permission checks", Danger: true},
+		{ID: "bypassPermissions", Label: "Bypass", Description: "Skip all permission checks", Danger: true},
 	}
 }
 

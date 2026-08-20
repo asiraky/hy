@@ -94,7 +94,7 @@ func (a *Adapter) PermissionModes() []adapter.PermissionModeMeta {
 		{ID: "on-request", Label: "Ask when needed", Description: "Write in the workspace; the model asks when it needs more", Default: true},
 		{ID: "auto-review", Label: "Auto", Description: "A reviewer subagent approves or denies escalations"},
 		{ID: "sandboxed-auto", Label: "No prompts (sandboxed)", Description: "Never ask; the sandbox contains the damage"},
-		{ID: "full-access", Label: "Bypass (yolo)", Description: "Never ask and no sandbox", Danger: true},
+		{ID: "full-access", Label: "Bypass", Description: "Never ask and no sandbox", Danger: true},
 	}
 }
 
