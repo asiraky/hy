@@ -1,26 +1,46 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Item, SessionState, ToolStatus, Turn } from "../protocol";
-import { useSmoothText } from "../useSmoothText";
-import { Button, Spinner } from "./ui";
-import { cx } from "../cx";
+import {
+  ArrowRightIcon,
+  BrainIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  CircleIcon,
+  DownloadIcon,
+  FileTextIcon,
+  PencilIcon,
+  SearchIcon,
+  TerminalIcon,
+  Trash2Icon,
+  TriangleAlertIcon,
+  XIcon,
+} from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
 
-const toolGlyph: Record<string, string> = {
-  read: "◇",
-  edit: "✎",
-  delete: "✕",
-  move: "→",
-  search: "⌕",
-  execute: "❯",
-  think: "◈",
-  fetch: "⇣",
-  other: "•",
+import { Button } from "~/components/ui/button";
+import { Spinner } from "~/components/ui/spinner";
+import { cn } from "~/lib/utils";
+import type { Item, SessionState, ToolStatus, Turn } from "~/protocol";
+import { useSmoothText } from "~/useSmoothText";
+
+// One icon per tool kind the protocol defines. Anything new falls through to
+// the neutral dot rather than rendering nothing.
+const TOOL_ICON: Record<string, ComponentType<{ className?: string }>> = {
+  read: FileTextIcon,
+  edit: PencilIcon,
+  delete: Trash2Icon,
+  move: ArrowRightIcon,
+  search: SearchIcon,
+  execute: TerminalIcon,
+  think: BrainIcon,
+  fetch: DownloadIcon,
+  other: CircleIcon,
 };
 
 function StatusMark({ status }: { status?: ToolStatus }) {
   if (status === "in_progress" || status === "pending")
-    return <Spinner className="text-accent" />;
-  if (status === "failed") return <span className="text-red-400">✕</span>;
-  return <span className="text-emerald-400/80">✓</span>;
+    return <Spinner className="text-primary size-3.5" />;
+  if (status === "failed")
+    return <XIcon aria-label="Failed" className="text-destructive size-3.5" />;
+  return <CheckIcon aria-label="Done" className="text-success size-3.5" />;
 }
 
 function ToolCard({ item }: { item: Item }) {
@@ -29,37 +49,38 @@ function ToolCard({ item }: { item: Item }) {
     .map((c) => (c.type === "diff" ? `--- ${c.path}\n${c.text ?? ""}` : (c.text ?? "")))
     .join("\n")
     .trim();
+  const Icon = TOOL_ICON[item.toolKind ?? "other"] ?? CircleIcon;
 
   return (
-    <div className="fade-in rounded-lg border border-ink-800 bg-ink-900/60">
+    <div className="fade-in bg-card/60 rounded-lg border">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex min-h-11 w-full items-center gap-2.5 px-3 py-2 text-left md:min-h-0"
+        aria-expanded={open}
+        className="hover:bg-accent/40 focus-visible:ring-ring flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-colors outline-none focus-visible:ring-2 md:min-h-0"
       >
-        <span className="w-4 shrink-0 text-center font-mono text-xs text-ink-500">
-          {toolGlyph[item.toolKind ?? "other"] ?? "•"}
-        </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-ink-300">
+        <Icon className="text-muted-foreground size-3.5 shrink-0" />
+        <span className="text-muted-foreground min-w-0 flex-1 truncate font-mono text-[13px]">
           {item.title || "tool"}
         </span>
         <StatusMark status={item.status} />
         {output && (
-          <span className="shrink-0 font-mono text-[10px] text-ink-500">
+          <span className="text-muted-foreground flex shrink-0 items-center gap-1 font-mono text-[10px]">
             {open ? "hide" : `${output.split("\n").length} lines`}
+            <ChevronDownIcon className={cn("size-3 transition-transform", open && "rotate-180")} />
           </span>
         )}
       </button>
 
       {open && (
-        <div className="border-t border-ink-800 px-3 py-2">
+        <div className="space-y-2 border-t px-3 py-2">
           {item.input != null && (
-            <pre className="scroll-thin mb-2 max-h-40 overflow-auto overscroll-contain rounded bg-ink-950/70 p-2 font-mono text-[11px] leading-relaxed text-ink-500">
+            <pre className="scroll-thin bg-muted/60 text-muted-foreground max-h-40 overflow-auto overscroll-contain rounded-md p-2 font-mono text-[11px] leading-relaxed">
               {JSON.stringify(item.input, null, 2)}
             </pre>
           )}
           {output && (
-            <pre className="scroll-thin max-h-80 overflow-auto overscroll-contain rounded bg-ink-950/70 p-2 font-mono text-[11px] leading-relaxed break-words whitespace-pre-wrap text-ink-300">
+            <pre className="scroll-thin bg-muted/60 max-h-80 overflow-auto overscroll-contain rounded-md p-2 font-mono text-[11px] leading-relaxed break-words whitespace-pre-wrap">
               {output}
             </pre>
           )}
@@ -81,7 +102,7 @@ function Message({ item, streaming, recovered }: { item: Item; streaming: boolea
   if (recovered && item.role === "user") {
     return (
       <div className="fade-in flex justify-center">
-        <div className="rounded-full border border-ink-800 px-3 py-1 text-[12px] text-ink-500">
+        <div className="text-muted-foreground rounded-full border px-3 py-1 text-[12px]">
           Server restarted — the agent was asked to pick the work back up
         </div>
       </div>
@@ -91,7 +112,7 @@ function Message({ item, streaming, recovered }: { item: Item; streaming: boolea
   if (item.role === "user") {
     return (
       <div className="fade-in flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-accent-dim/25 px-3.5 py-2 text-[14px] leading-relaxed break-words whitespace-pre-wrap ring-1 ring-inset ring-accent/20">
+        <div className="bg-user-bubble text-user-bubble-foreground max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2 text-[14px] leading-relaxed break-words whitespace-pre-wrap">
           {item.text}
         </div>
       </div>
@@ -100,7 +121,7 @@ function Message({ item, streaming, recovered }: { item: Item; streaming: boolea
 
   if (item.contentKind === "thought") {
     return (
-      <div className="fade-in border-l-2 border-ink-800 pl-3 text-[13px] leading-relaxed break-words whitespace-pre-wrap text-ink-500 italic">
+      <div className="fade-in text-thought border-l-2 pl-3 text-[13px] leading-relaxed break-words whitespace-pre-wrap italic">
         {text}
       </div>
     );
@@ -108,8 +129,8 @@ function Message({ item, streaming, recovered }: { item: Item; streaming: boolea
 
   return (
     <div
-      className={cx(
-        "fade-in text-[14px] leading-relaxed break-words whitespace-pre-wrap text-ink-100",
+      className={cn(
+        "fade-in text-[14px] leading-relaxed break-words whitespace-pre-wrap",
         streaming && "caret",
       )}
     >
@@ -118,32 +139,123 @@ function Message({ item, streaming, recovered }: { item: Item; streaming: boolea
   );
 }
 
-function WorkspaceCard({ state, onRetry, onCleanup, onForceDelete }: { state: SessionState; onRetry: () => void; onCleanup: () => void; onForceDelete: () => void }) {
+function WorkspaceCard({
+  state,
+  onRetry,
+  onCleanup,
+  onForceDelete,
+}: {
+  state: SessionState;
+  onRetry: () => void;
+  onCleanup: () => void;
+  onForceDelete: () => void;
+}) {
   const ws = state.workspace;
-  const active = state.phase === "provisioning" || state.phase === "creating" || state.phase === "cleaning";
+  const active =
+    state.phase === "provisioning" || state.phase === "creating" || state.phase === "cleaning";
   const failed = state.phase === "provision_failed" || state.phase === "cleanup_failed";
   const [open, setOpen] = useState(active || failed);
   const [dismissed, setDismissed] = useState(false);
-  useEffect(() => { if (active || failed) { setOpen(true); setDismissed(false); } else if (ws.phase === "ready") setOpen(false); }, [active, failed, ws.phase]);
+
+  useEffect(() => {
+    if (active || failed) {
+      setOpen(true);
+      setDismissed(false);
+    } else if (ws.phase === "ready") setOpen(false);
+  }, [active, failed, ws.phase]);
+
   if (!ws.phase || dismissed) return null;
-  const title = state.phase === "cleaning" ? "Cleaning up workspace" : failed ? "Workspace needs attention" : ws.phase === "ready" ? "Workspace ready" : ws.phase === "released" ? "Workspace released" : "Preparing workspace";
+
+  const title =
+    state.phase === "cleaning"
+      ? "Cleaning up workspace"
+      : failed
+        ? "Workspace needs attention"
+        : ws.phase === "ready"
+          ? "Workspace ready"
+          : ws.phase === "released"
+            ? "Workspace released"
+            : "Preparing workspace";
   const elapsed = ws.durationMs ? `${Math.max(1, Math.round(ws.durationMs / 1000))}s` : "";
-  return <div className={cx("fade-in rounded-xl border bg-ink-900/70", failed ? "border-red-500/30" : "border-ink-800")}>
-    <div className="flex items-center gap-2 px-3 py-2.5">
-      {active ? <Spinner className="text-accent" /> : <span className={failed ? "text-red-400" : "text-emerald-400"}>{failed ? "✕" : "✓"}</span>}
-      <button type="button" onClick={() => setOpen(v => !v)} className="min-w-0 flex-1 text-left">
-        <span className="block text-[11px] text-ink-500">Workspace provisioner</span>
-        <span className="block text-[13px] text-ink-100">{title}{elapsed && ` · ${elapsed}`}</span>
-      </button>
-      {ws.phase === "ready" && <button type="button" aria-label="Dismiss workspace activity" onClick={() => setDismissed(true)} className="px-2 text-ink-500 hover:text-ink-100">×</button>}
+
+  return (
+    <div
+      className={cn(
+        "fade-in bg-card/70 rounded-xl border",
+        failed && "border-destructive/40 bg-destructive/5",
+      )}
+    >
+      <div className="flex items-center gap-2.5 px-3 py-2.5">
+        {active ? (
+          <Spinner className="text-primary size-4" />
+        ) : failed ? (
+          <TriangleAlertIcon aria-hidden className="text-destructive size-4 shrink-0" />
+        ) : (
+          <CheckIcon aria-hidden className="text-success size-4 shrink-0" />
+        )}
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="focus-visible:ring-ring min-w-0 flex-1 rounded-sm text-left outline-none focus-visible:ring-2"
+        >
+          <span className="text-muted-foreground block text-[11px]">Workspace provisioner</span>
+          <span className="block text-[13px]">
+            {title}
+            {elapsed && ` · ${elapsed}`}
+          </span>
+        </button>
+        {ws.phase === "ready" && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Dismiss workspace activity"
+            className="size-11 md:size-8"
+            onClick={() => setDismissed(true)}
+          >
+            <XIcon />
+          </Button>
+        )}
+      </div>
+
+      {open && (
+        <div className="border-t p-3">
+          {ws.command && (
+            <p className="text-muted-foreground mb-2 truncate font-mono text-[11px]">{ws.command}</p>
+          )}
+          <pre className="scroll-thin bg-muted/60 max-h-80 min-h-20 overflow-auto rounded-md p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+            {ws.output || (active ? "Starting…" : "No output")}
+          </pre>
+          {ws.error && (
+            <p className="bg-destructive/10 text-destructive mt-2 rounded-md px-2 py-1.5 font-mono text-[11px]">
+              {ws.error}
+              {ws.exitCode ? ` (exit ${ws.exitCode})` : ""}
+            </p>
+          )}
+          {failed && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                onClick={state.phase === "cleanup_failed" ? onCleanup : onRetry}
+              >
+                Retry
+              </Button>
+              {state.phase === "provision_failed" && (
+                <Button size="sm" variant="outline" onClick={onCleanup}>
+                  Clean up
+                </Button>
+              )}
+              {state.phase === "cleanup_failed" && (
+                <Button size="sm" variant="destructive" onClick={onForceDelete}>
+                  Force delete…
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
-    {open && <div className="border-t border-ink-800 p-3">
-      {ws.command && <p className="mb-2 truncate font-mono text-[11px] text-ink-500">{ws.command}</p>}
-      <pre className="scroll-thin max-h-80 min-h-20 overflow-auto rounded bg-ink-950/80 p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-ink-300">{ws.output || (active ? "Starting…" : "No output")}</pre>
-      {ws.error && <p className="mt-2 rounded bg-red-500/10 px-2 py-1.5 font-mono text-[11px] text-red-300">{ws.error}{ws.exitCode ? ` (exit ${ws.exitCode})` : ""}</p>}
-      {failed && <div className="mt-3 flex gap-2"><button type="button" onClick={state.phase === "cleanup_failed" ? onCleanup : onRetry} className="rounded bg-accent px-3 py-1.5 text-[12px] text-white">Retry</button>{state.phase === "provision_failed" && <button type="button" onClick={onCleanup} className="rounded border border-ink-700 px-3 py-1.5 text-[12px]">Clean up</button>}{state.phase === "cleanup_failed" && <button type="button" onClick={onForceDelete} className="rounded border border-red-500/40 px-3 py-1.5 text-[12px] text-red-300">Force delete…</button>}</div>}
-    </div>}
-  </div>;
+  );
 }
 
 // InterruptedCard is what a turn that died looks like. A cross on the last
@@ -156,22 +268,22 @@ function InterruptedCard({ turn, onContinue }: { turn: Turn; onContinue: () => v
   const restarted = (turn.error ?? "").includes("restarted");
 
   return (
-    <div className="fade-in rounded-lg border border-red-500/30 bg-red-500/5 px-3.5 py-3">
-      <p className="text-[13px] text-ink-200">
+    <div className="fade-in border-destructive/30 bg-destructive/5 rounded-lg border px-3.5 py-3">
+      <p className="text-[13px]">
         {restarted
           ? "The server restarted and this turn was interrupted before it finished."
           : "This turn ended with an error before it finished."}
       </p>
       {turn.error && !restarted && (
-        <p className="mt-1.5 font-mono text-[11px] break-words text-red-300">{turn.error}</p>
+        <p className="text-destructive mt-1.5 font-mono text-[11px] break-words">{turn.error}</p>
       )}
-      <p className="mt-1.5 text-[12px] text-ink-500">
+      <p className="text-muted-foreground mt-1.5 text-[12px]">
         {turn.recovery
           ? "Picking it back up automatically did not work."
           : "The work was left unfinished."}
       </p>
       <Button
-        variant="primary"
+        size="sm"
         className="mt-2.5"
         disabled={sending}
         onClick={() => {
@@ -185,7 +297,19 @@ function InterruptedCard({ turn, onContinue }: { turn: Turn; onContinue: () => v
   );
 }
 
-export function Transcript({ state, onRetryProvision, onCleanup, onForceDelete, onContinue }: { state: SessionState; onRetryProvision: () => void; onCleanup: () => void; onForceDelete: () => void; onContinue: () => void }) {
+export function Transcript({
+  state,
+  onRetryProvision,
+  onCleanup,
+  onForceDelete,
+  onContinue,
+}: {
+  state: SessionState;
+  onRetryProvision: () => void;
+  onCleanup: () => void;
+  onForceDelete: () => void;
+  onContinue: () => void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
@@ -246,10 +370,17 @@ export function Transcript({ state, onRetryProvision, onCleanup, onForceDelete, 
   return (
     <div ref={ref} className="scroll-thin min-h-0 flex-1 overflow-y-auto overscroll-contain">
       <div ref={contentRef} className="mx-auto flex max-w-3xl flex-col gap-3.5 px-4 py-6 md:px-5">
-        <WorkspaceCard state={state} onRetry={onRetryProvision} onCleanup={onCleanup} onForceDelete={onForceDelete} />
+        <WorkspaceCard
+          state={state}
+          onRetry={onRetryProvision}
+          onCleanup={onCleanup}
+          onForceDelete={onForceDelete}
+        />
         {state.items.length === 0 && !state.workspace.phase && (
-          <div className="py-20 text-center text-sm text-ink-500">
-            Nothing yet. Send a prompt to start the turn.
+          <div className="text-muted-foreground flex flex-col items-center gap-2 py-20 text-center">
+            <TerminalIcon className="size-5 opacity-60" />
+            <p className="text-sm">Nothing yet.</p>
+            <p className="text-[13px]">Send a prompt to start the turn.</p>
           </div>
         )}
 
@@ -267,8 +398,8 @@ export function Transcript({ state, onRetryProvision, onCleanup, onForceDelete, 
         )}
 
         {state.phase === "turn" && lastAgentIndex === -1 && (
-          <div className="flex items-center gap-2 text-sm text-ink-500">
-            <Spinner className="text-accent" /> thinking…
+          <div className="text-muted-foreground flex items-center gap-2 text-sm">
+            <Spinner className="text-primary size-3.5" /> thinking…
           </div>
         )}
 

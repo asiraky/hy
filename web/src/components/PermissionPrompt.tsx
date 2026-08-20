@@ -1,5 +1,7 @@
-import type { PendingPermission } from "../protocol";
-import { Button } from "./ui";
+import { ShieldQuestionMarkIcon } from "lucide-react";
+
+import { Button } from "~/components/ui/button";
+import type { PendingPermission } from "~/protocol";
 
 // A permission request is durable session state, not a modal owned by this
 // connection: it is rendered from the log, and any attached device can answer.
@@ -17,19 +19,26 @@ export function PermissionPrompt({
 
   return (
     // Sits directly above the composer, so it is already where a thumb rests.
-    <div className="attention-in shrink-0 border-t-2 border-amber-500/40 bg-amber-500/[0.08]">
+    // The attention band is a theme role, not a hardcoded amber, so it reads
+    // as deliberate in both themes rather than glowing in one of them.
+    <div
+      role="group"
+      aria-label="Permission request"
+      className="attention-in border-attention/50 bg-attention-surface/60 shrink-0 border-t-2"
+    >
       <div className="mx-auto max-w-3xl px-4 py-3.5 md:px-5">
-        <div className="flex items-baseline gap-2">
-          <span className="font-mono text-[10px] tracking-wide text-amber-400 uppercase">
+        <div className="flex items-center gap-2">
+          <ShieldQuestionMarkIcon className="text-attention-foreground size-3.5 shrink-0" />
+          <span className="text-attention-foreground font-mono text-[10px] tracking-wide uppercase">
             permission
           </span>
-          <span className="font-mono text-[11px] text-ink-500">{request.toolName}</span>
+          <span className="text-muted-foreground font-mono text-[11px]">{request.toolName}</span>
         </div>
 
-        <p className="mt-1.5 font-mono text-[13px] break-words text-ink-100">{request.title}</p>
+        <p className="mt-1.5 font-mono text-[13px] break-words">{request.title}</p>
 
         {detail && (
-          <pre className="scroll-thin mt-2 max-h-20 overflow-auto overscroll-contain rounded bg-ink-950/60 p-2 font-mono text-[11px] leading-relaxed text-ink-500 md:max-h-32">
+          <pre className="scroll-thin bg-muted/70 text-muted-foreground mt-2 max-h-20 overflow-auto overscroll-contain rounded-md p-2 font-mono text-[11px] leading-relaxed md:max-h-32">
             {detail}
           </pre>
         )}
@@ -38,8 +47,10 @@ export function PermissionPrompt({
           {request.options.map((o) => (
             <Button
               key={o.optionId}
-              variant={o.kind.startsWith("allow") ? "primary" : "danger"}
-              className="flex-1 whitespace-nowrap md:flex-none"
+              // Allowing is the affirmative act and reads as the primary
+              // button; anything else is a refusal and says so in red.
+              variant={o.kind.startsWith("allow") ? "default" : "destructive"}
+              className="min-h-11 flex-1 whitespace-nowrap md:min-h-9 md:flex-none"
               onClick={() => onResolve(o.kind, o.optionId)}
             >
               {o.name}

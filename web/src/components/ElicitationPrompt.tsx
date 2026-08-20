@@ -1,6 +1,18 @@
-import { useMemo, useState, type FormEvent } from "react";
-import type { PendingElicitation } from "../protocol";
-import { Button } from "./ui";
+import { ExternalLinkIcon } from "lucide-react";
+import { useId, useMemo, useState, type FormEvent } from "react";
+
+import { Button } from "~/components/ui/button";
+import { Input } from "~/components/ui/input";
+import { Label } from "~/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/ui/select";
+import { Switch } from "~/components/ui/switch";
+import type { PendingElicitation } from "~/protocol";
 
 interface Props {
   request: PendingElicitation;
@@ -9,6 +21,7 @@ interface Props {
 
 export function ElicitationPrompt({ request, onResolve }: Props) {
   const properties = request.schema?.properties ?? {};
+  const fieldId = useId();
   const initial = useMemo(
     () => Object.fromEntries(Object.entries(properties).map(([key, field]) => [key, field.default ?? ""])),
     [properties],
@@ -21,62 +34,90 @@ export function ElicitationPrompt({ request, onResolve }: Props) {
   };
 
   return (
-    <form onSubmit={submit} className="border-t border-ink-800 bg-ink-900 px-4 py-3">
-      <p className="mb-3 text-[13px] text-ink-100">{request.prompt || "Input requested"}</p>
+    // Like the permission card, this blocks the turn — same band, same arrival.
+    <form
+      onSubmit={submit}
+      aria-label="Input requested"
+      className="attention-in border-attention/50 bg-attention-surface/60 shrink-0 border-t-2 px-4 py-3.5 md:px-5"
+    >
+      <div className="mx-auto max-w-3xl">
+        <p className="mb-3 text-[13px]">{request.prompt || "Input requested"}</p>
 
-      {request.schema?.["x-url"] && (
-        <a
-          href={request.schema["x-url"]}
-          target="_blank"
-          rel="noreferrer"
-          className="mb-3 block break-all text-[12px] text-blue-400 underline"
-        >
-          {request.schema["x-url"]}
-        </a>
-      )}
+        {request.schema?.["x-url"] && (
+          <a
+            href={request.schema["x-url"]}
+            target="_blank"
+            rel="noreferrer"
+            className="text-primary mb-3 inline-flex items-center gap-1.5 break-all underline underline-offset-4 text-[12px]"
+          >
+            {request.schema["x-url"]}
+            <ExternalLinkIcon className="size-3 shrink-0" />
+          </a>
+        )}
 
-      <div className="space-y-3">
-        {Object.entries(properties).map(([key, field]) => (
-          <label key={key} className="block text-[11px] text-ink-400">
-            <span className="mb-1 block text-[12px] text-ink-200">{field.title || key}</span>
-            {field.enum ? (
-              <select
-                required={request.schema.required?.includes(key)}
-                value={String(values[key] ?? "")}
-                onChange={(event) => setValues((old) => ({ ...old, [key]: event.target.value }))}
-                className="w-full rounded border border-ink-700 bg-ink-850 px-3 py-2 text-ink-100"
-              >
-                <option value="" disabled>Select an option</option>
-                {field.enum.map((option: string) => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
-              </select>
-            ) : field.type === "boolean" ? (
-              <input
-                type="checkbox"
-                checked={Boolean(values[key])}
-                onChange={(event) => setValues((old) => ({ ...old, [key]: event.target.checked }))}
-              />
-            ) : (
-              <input
-                type={field.format === "password" ? "password" : field.type === "number" || field.type === "integer" ? "number" : "text"}
-                required={request.schema.required?.includes(key)}
-                value={String(values[key] ?? "")}
-                onChange={(event) => {
-                  const value = field.type === "number" || field.type === "integer" ? Number(event.target.value) : event.target.value;
-                  setValues((old) => ({ ...old, [key]: value }));
-                }}
-                className="w-full rounded border border-ink-700 bg-ink-850 px-3 py-2 text-ink-100"
-              />
-            )}
-            {field.description && <span className="mt-1 block">{field.description}</span>}
-          </label>
-        ))}
-      </div>
+        <div className="space-y-3">
+          {Object.entries(properties).map(([key, field]) => {
+            const id = `${fieldId}-${key}`;
+            const required = request.schema.required?.includes(key);
+            const set = (value: unknown) => setValues((old) => ({ ...old, [key]: value }));
 
-      <div className="mt-3 flex justify-end gap-2">
-        <Button type="button" onClick={() => onResolve("decline")}>Decline</Button>
-        <Button type="submit" variant="primary">Continue</Button>
+            return (
+              <div key={key} className="space-y-1.5">
+                <Label htmlFor={id}>{field.title || key}</Label>
+
+                {field.enum ? (
+                  <Select value={String(values[key] ?? "")} onValueChange={set} required={required}>
+                    <SelectTrigger id={id} className="w-full">
+                      <SelectValue placeholder="Select an option" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {field.enum.map((option: string) => (
+                        <SelectItem key={option} value={option}>
+                          {option}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : field.type === "boolean" ? (
+                  <div className="flex h-9 items-center">
+                    <Switch id={id} checked={Boolean(values[key])} onCheckedChange={set} />
+                  </div>
+                ) : (
+                  <Input
+                    id={id}
+                    type={
+                      field.format === "password"
+                        ? "password"
+                        : field.type === "number" || field.type === "integer"
+                          ? "number"
+                          : "text"
+                    }
+                    required={required}
+                    value={String(values[key] ?? "")}
+                    onChange={(event) =>
+                      set(
+                        field.type === "number" || field.type === "integer"
+                          ? Number(event.target.value)
+                          : event.target.value,
+                      )
+                    }
+                  />
+                )}
+
+                {field.description && (
+                  <p className="text-muted-foreground text-[11px]">{field.description}</p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="mt-4 flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={() => onResolve("decline")}>
+            Decline
+          </Button>
+          <Button type="submit">Continue</Button>
+        </div>
       </div>
     </form>
   );

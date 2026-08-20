@@ -15,6 +15,24 @@
          client knows to skip build-mismatch checks during development. -->
     <meta name="hy-build" content="dev" />
     <title>hy</title>
+    <!-- Runs before the first paint, so the page is never briefly the wrong
+         colour while the bundle loads. The key and the three values are the
+         ones in src/lib/theme.ts; the two have to agree. -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("hy.theme");
+          var theme = stored === "light" || stored === "dark" ? stored : null;
+          var dark = theme
+            ? theme === "dark"
+            : window.matchMedia("(prefers-color-scheme: dark)").matches;
+          document.documentElement.classList.toggle("dark", dark);
+          document.documentElement.style.colorScheme = dark ? "dark" : "light";
+        } catch (e) {
+          /* Private-mode storage can throw. The default class stands. */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

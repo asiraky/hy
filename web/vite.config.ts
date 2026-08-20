@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 // Ports are shared with the Go server through the environment so the two
 // cannot disagree; the root development script sets them.
@@ -21,6 +22,13 @@ export default defineConfig({
       closeBundle: () => writeFile(new URL("../cmd/hy/webdist/.gitkeep", import.meta.url), ""),
     },
   ],
+  resolve: {
+    // Mirrors the `~/*` path mapping in tsconfig.app.json; shadcn components
+    // are generated with this alias, so the two must agree.
+    alias: {
+      "~": fileURLToPath(new URL("./src", import.meta.url)),
+    },
+  },
   server: {
     port: vitePort,
 
