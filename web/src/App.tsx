@@ -11,7 +11,13 @@ import { PermissionPrompt } from "./components/PermissionPrompt";
 import { ElicitationPrompt } from "./components/ElicitationPrompt";
 import { Sidebar } from "./components/Sidebar";
 import { Transcript } from "./components/Transcript";
-import { Button, HarnessBadge, StatusDot } from "./components/ui";
+import { HarnessBadge } from "./components/HarnessBadge";
+import { IconButton } from "./components/IconButton";
+import { StatusDot } from "./components/StatusDot";
+import { Button } from "./components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./components/ui/tooltip";
+import { PanelLeftIcon, PlusIcon, SettingsIcon } from "lucide-react";
+import { toast } from "sonner";
 
 const LAST_SESSION = "hy.lastSession";
 
@@ -122,7 +128,7 @@ export function App() {
     (text: string) => {
       if (!activeId) return;
       clientRef.current?.command("prompt", { sessionId: activeId, text }).catch((e) => {
-        console.warn("prompt failed:", e.message);
+        toast.error("Could not send that prompt", { description: e.message });
       });
     },
     [activeId],
@@ -164,7 +170,7 @@ export function App() {
     (id: string) => {
       if (id !== activeRef.current) select(id);
       clientRef.current?.command("delete_session", { sessionId: id }).catch((e) => {
-        console.warn("delete failed:", e.message);
+        toast.error("Could not delete that session", { description: e.message });
       });
     },
     [select],
@@ -173,7 +179,7 @@ export function App() {
   const forceDelete = useCallback((id: string) => {
     const accepted = window.confirm("Tear down failed. Would you like to force delete?\n\nThis skips the teardown script, removes the recorded Git worktree, and permanently deletes the session.");
     if (!accepted) return;
-    clientRef.current?.command("force_delete_session", { sessionId: id }).catch((e) => window.alert(`Force delete failed: ${e.message}`));
+    clientRef.current?.command("force_delete_session", { sessionId: id }).catch((e) => toast.error("Force delete failed", { description: e.message }));
   }, []);
 
   // Ask the server to re-probe, for when the user has just installed something.
@@ -214,6 +220,7 @@ export function App() {
         activeId={activeId}
         status={status}
         open={sidebarOpen}
+        onOpenChange={setSidebarOpen}
         onSelect={select}
         onNew={startNew}
         onDelete={remove}
@@ -221,68 +228,61 @@ export function App() {
         projectName={(id)=>projects.find(p=>p.id===id)?.config.name}
       />
 
-      {/* The drawer overlays content on small screens, so it needs a way out
-          that does not require finding the toggle again. */}
-      {sidebarOpen && (
-        <div
-          aria-hidden
-          onClick={() => setSidebarOpen(false)}
-          className="fixed inset-0 z-30 bg-black/50 md:hidden"
-        />
-      )}
-
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-3 border-b border-ink-800 px-4 pt-[calc(0.625rem+env(safe-area-inset-top))] pb-2.5">
-          <button
-            type="button"
-            onClick={() => setSidebarOpen((v) => !v)}
-            className="-ml-2 flex size-11 shrink-0 items-center justify-center rounded text-ink-500 hover:bg-ink-850 hover:text-ink-100 md:-ml-1 md:size-8"
-            title="Toggle sidebar"
+        <header className="flex items-center gap-2 border-b px-2 pt-[calc(0.5rem+env(safe-area-inset-top))] pb-2 md:px-3">
+          <IconButton
+            label={sidebarOpen ? "Hide sessions" : "Show sessions"}
+            onClick={() => setSidebarOpen(!sidebarOpen)}
           >
-            ☰
-          </button>
+            <PanelLeftIcon />
+          </IconButton>
 
           {state ? (
             <>
               <HarnessBadge harness={state.harness} accent={accentOf(state.harness)} />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[13px]">{state.title || "Untitled session"}</p>
-                <p className="truncate font-mono text-[10px] text-ink-500">
+                <p className="truncate text-[13px] font-medium">
+                  {state.title || "Untitled session"}
+                </p>
+                <p className="text-muted-foreground truncate font-mono text-[10px]">
                   {state.cwd}
                   {state.model && ` · ${state.model}`}
                 </p>
               </div>
 
               {state.usage.output > 0 && (
-                <span className="hidden font-mono text-[10px] text-ink-500 sm:block">
+                <span className="text-muted-foreground hidden font-mono text-[10px] sm:block">
                   {state.usage.input.toLocaleString()} in / {state.usage.output.toLocaleString()} out
                   {state.usage.cost > 0 && ` · $${state.usage.cost.toFixed(3)}`}
                 </span>
               )}
 
               {activeProject && (
-                <button
-                  type="button"
+                <IconButton
+                  label={`${activeProject.config.name} settings`}
                   onClick={() => setProjectSettings(activeProject)}
-                  title={`${activeProject.config.name} settings`}
-                  className="flex size-9 items-center justify-center rounded text-ink-500 hover:bg-ink-850 hover:text-ink-100"
                 >
-                  ⚙
-                </button>
+                  <SettingsIcon />
+                </IconButton>
               )}
 
-              <button
-                type="button"
-                onClick={() => setShowAccess(true)}
-                title="How to reach this server"
-                className="flex size-11 shrink-0 items-center justify-center gap-1.5 rounded font-mono text-[10px] text-ink-500 hover:bg-ink-850 hover:text-ink-100 md:size-auto md:px-1.5 md:py-1"
-              >
-                <StatusDot status={status} />
-                <span className="hidden sm:inline">seq {state.seq}</span>
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    onClick={() => setShowAccess(true)}
+                    aria-label="How to reach this server"
+                    className="text-muted-foreground size-11 shrink-0 gap-1.5 font-mono text-[10px] md:size-auto md:px-2"
+                  >
+                    <StatusDot status={status} />
+                    <span className="hidden sm:inline">seq {state.seq}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>How to reach this server</TooltipContent>
+              </Tooltip>
             </>
           ) : (
-            <span className="flex-1 text-[13px] text-ink-500">
+            <span className="text-muted-foreground flex-1 text-[13px]">
               {meta ? "Attaching…" : "No session selected"}
             </span>
           )}
@@ -317,14 +317,15 @@ export function App() {
             />
           </>
         ) : (
-          <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
+          <div className="flex flex-1 flex-col items-center justify-center gap-5 px-6 text-center">
             <div>
-              <p className="font-mono text-2xl tracking-tight">hy</p>
-              <p className="mt-1 text-[13px] text-ink-500">
+              <p className="font-mono text-3xl font-semibold tracking-tight">hy</p>
+              <p className="text-muted-foreground mt-2 text-[13px]">
                 One server, several harnesses, any number of screens.
               </p>
             </div>
-            <Button variant="primary" onClick={startNew}>
+            <Button size="lg" onClick={startNew}>
+              <PlusIcon />
               New session
             </Button>
           </div>

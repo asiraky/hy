@@ -1,6 +1,9 @@
+import { ArrowUpIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useIsDesktop } from "../useMediaQuery";
-import { Button, Spinner } from "./ui";
+
+import { Button } from "~/components/ui/button";
+import { Spinner } from "~/components/ui/spinner";
+import { useIsDesktop } from "~/useMediaQuery";
 
 export function Composer({
   disabled,
@@ -36,16 +39,21 @@ export function Composer({
   };
 
   return (
-    <div className="border-t border-ink-800 bg-ink-900/40 px-4 pt-3.5 pb-[calc(0.875rem+env(safe-area-inset-bottom))] md:px-5">
+    <div className="bg-background/80 border-t px-4 pt-3.5 pb-[calc(0.875rem+env(safe-area-inset-bottom))] backdrop-blur md:px-5">
       <div className="mx-auto max-w-3xl">
-        <div className="flex items-end gap-2 rounded-xl border border-ink-800 bg-ink-900 p-2 focus-within:border-accent/40">
+        <div className="bg-card focus-within:border-ring focus-within:ring-ring/50 flex items-end gap-2 rounded-xl border p-2 transition-[color,box-shadow] focus-within:ring-[3px]">
           <textarea
             ref={ref}
             rows={1}
             value={text}
             disabled={disabled}
+            aria-label="Message"
             placeholder={
-              disabled ? (disabledPlaceholder ?? "Session closed") : isDesktop ? "Ask anything…  (⌘↵ to send)" : "Ask anything…"
+              disabled
+                ? (disabledPlaceholder ?? "Session closed")
+                : isDesktop
+                  ? "Ask anything…  (⌘↵ to send)"
+                  : "Ask anything…"
             }
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
@@ -54,15 +62,28 @@ export function Composer({
                 send();
               }
             }}
-            className="scroll-thin max-h-[200px] min-w-0 flex-1 resize-none bg-transparent px-2 py-1.5 text-[16px] leading-relaxed text-ink-100 placeholder:text-ink-500 focus:outline-none md:text-[14px]"
+            // 16px on a phone: anything smaller makes iOS zoom the viewport on
+            // focus, which breaks the layout the dvh handling just fixed.
+            className="scroll-thin placeholder:text-muted-foreground max-h-[200px] min-w-0 flex-1 resize-none bg-transparent px-2 py-1.5 text-[16px] leading-relaxed focus:outline-none disabled:opacity-60 md:text-[14px]"
           />
 
           {busy ? (
-            <Button variant="danger" onClick={onCancel} title="Interrupt the running turn">
-              <Spinner /> Stop
+            <Button
+              variant="destructive"
+              onClick={onCancel}
+              title="Interrupt the running turn"
+              className="min-h-11 md:min-h-9"
+            >
+              <Spinner className="size-3.5" />
+              Stop
             </Button>
           ) : (
-            <Button variant="primary" disabled={disabled || !text.trim()} onClick={send}>
+            <Button
+              disabled={disabled || !text.trim()}
+              onClick={send}
+              className="min-h-11 md:min-h-9"
+            >
+              <ArrowUpIcon />
               Send
             </Button>
           )}
