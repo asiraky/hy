@@ -44,6 +44,9 @@ type Turn struct {
 	// Recovery is set when the server started this turn itself to continue
 	// work a restart interrupted.
 	Recovery *proto.TurnRecovery `json:"recovery,omitempty"`
+	// Diff is what the turn changed on disk, and arrives after the turn is
+	// done. A turn that changed nothing never gets one.
+	Diff *proto.TurnDiffPayload `json:"diff,omitempty"`
 }
 
 // PendingPermission is a permission request awaiting a human. It lives in the
@@ -255,6 +258,19 @@ func (s *State) Apply(ev proto.Event) {
 			it.Text = p.Prompt
 			it.TurnID = p.TurnID
 		})
+
+	case proto.TurnDiff:
+		var p proto.TurnDiffPayload
+		decode(ev.Payload, &p)
+		// The diff is hung off the turn it measured. A turn id that is not in
+		// the log is nothing to fold: the event describes a turn this
+		// projection has never seen.
+		for i := range s.Turns {
+			if s.Turns[i].ID == p.TurnID {
+				diff := p
+				s.Turns[i].Diff = &diff
+			}
+		}
 
 	case proto.TurnFinished:
 		var p proto.TurnFinishedPayload

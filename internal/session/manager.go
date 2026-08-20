@@ -573,6 +573,8 @@ func (m *Manager) closeLocked(ctx context.Context, id, reason string) error {
 				return err
 			}
 		}
+		// No actor means no checkpointer to drop this session's snapshots.
+		purgeCheckpoints(ctx, meta.Cwd, id, m.logf)
 	}
 	m.notifyList()
 	return nil
@@ -613,6 +615,9 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	if live, ok := m.Peek(id); ok {
 		live.Dispose("deleting session")
 	}
+	// Disposing keeps the snapshots, because a disposed session is normally
+	// resumed. This one is not coming back.
+	purgeCheckpoints(ctx, meta.Cwd, id, m.logf)
 	if err := m.store.SetPhase(ctx, id, "cleaning"); err != nil {
 		return err
 	}

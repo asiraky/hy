@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/asiraky/hy/internal/proto"
 	"github.com/asiraky/hy/internal/store"
 )
 
@@ -27,21 +28,11 @@ const (
 	maxChangedFiles = 2000
 )
 
-// ChangedFile is one path the session touched, aggregated over the whole
-// session rather than per tool call: a file edited five times appears once.
-type ChangedFile struct {
-	Path string `json:"path"`
-	// OldPath is set for a rename, and is the name the file had at the base.
-	OldPath string `json:"oldPath,omitempty"`
-	// Status is one of added, modified, deleted, renamed.
-	Status    string `json:"status"`
-	Additions int    `json:"additions"`
-	Deletions int    `json:"deletions"`
-	// Binary files have no line counts, so the UI must not print +0 / -0.
-	Binary bool `json:"binary,omitempty"`
-	// Untracked marks a file Git has never seen, which needs --no-index to diff.
-	Untracked bool `json:"untracked,omitempty"`
-}
+// ChangedFile is one path a change set touched, aggregated over the whole set
+// rather than per tool call: a file edited five times appears once. It is the
+// event schema's type, so a turn's file list and a session's are the same shape
+// on the wire.
+type ChangedFile = proto.ChangedFile
 
 // SessionChanges is the PR-style file list for one session's checkout.
 type SessionChanges struct {

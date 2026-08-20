@@ -2,7 +2,7 @@
 // the server sends a snapshot or a replay, then live events, and applying them
 // here must reach the same state the server holds.
 
-import type { Event, Item, SessionState } from "./protocol";
+import type { Event, Item, SessionState, TurnDiff } from "./protocol";
 
 export function emptyState(sessionId: string): SessionState {
   return {
@@ -111,6 +111,15 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
             ? { ...it, status: "failed" as const }
             : it,
         ),
+      };
+
+    case "turn.diff":
+      // What the turn changed, measured by the server once the harness had
+      // stopped writing. A turn id this client has never seen is nothing to
+      // fold: the event describes a turn that is not in this projection.
+      return {
+        ...s,
+        turns: s.turns.map((t) => (t.id === p.turnId ? { ...t, diff: p as TurnDiff } : t)),
       };
 
     case "message.chunk":

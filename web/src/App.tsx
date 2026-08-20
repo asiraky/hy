@@ -49,6 +49,17 @@ export function App() {
   const [access, setAccess] = useState<Access | null>(null);
   const [showAccess, setShowAccess] = useState(false);
   const [showChanges, setShowChanges] = useState(false);
+  // Which file the changes panel should reveal, and a counter that changes on
+  // every request. Without the counter, asking for the same file twice would
+  // look identical to the panel and it would not scroll back to it.
+  const [reveal, setReveal] = useState<{ path: string; nonce: number } | null>(null);
+
+  // Opening the diff from a turn's card: show the panel, and put it on the file
+  // that was clicked.
+  const openDiff = useCallback((path?: string) => {
+    setShowChanges(true);
+    if (path) setReveal((current) => ({ path, nonce: (current?.nonce ?? 0) + 1 }));
+  }, []);
 
   const clientRef = useRef<Client | null>(null);
   const forcePromptedRef = useRef<string | null>(null);
@@ -106,6 +117,9 @@ export function App() {
       // The panel belongs to a checkout, so it must not survive a move to a
       // different one.
       setShowChanges(false);
+      // A file asked for in one session means nothing in the next, and another
+      // session holding the same path would otherwise open it unasked.
+      setReveal(null);
       setState(null);
       localStorage.setItem(LAST_SESSION, id);
       clientRef.current?.attach(id);
@@ -389,7 +403,7 @@ export function App() {
 
         {state ? (
           <>
-            <Transcript state={state} onContinue={()=>activeId&&clientRef.current?.command("continue_session",{sessionId:activeId})} onRetryProvision={()=>activeId&&clientRef.current?.command("retry_provision",{sessionId:activeId})} onCleanup={()=>activeId&&clientRef.current?.command("cleanup_session",{sessionId:activeId})} onForceDelete={()=>activeId&&forceDelete(activeId)} />
+            <Transcript state={state} onContinue={()=>activeId&&clientRef.current?.command("continue_session",{sessionId:activeId})} onRetryProvision={()=>activeId&&clientRef.current?.command("retry_provision",{sessionId:activeId})} onCleanup={()=>activeId&&clientRef.current?.command("cleanup_session",{sessionId:activeId})} onForceDelete={()=>activeId&&forceDelete(activeId)} onOpenDiff={openDiff} />
 
             {pending && (
               <PermissionPrompt
@@ -439,6 +453,7 @@ export function App() {
           revision={`${activeId}:${state.phase === "turn" ? "turn" : "settled"}`}
           loadChanges={loadChanges}
           loadDiff={loadFileDiff}
+          reveal={reveal}
         />
       )}
 
