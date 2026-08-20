@@ -180,6 +180,14 @@ type ModeSwitcher interface {
 	SetMode(ctx context.Context, mode string) error
 }
 
+// ModelSwitcher is implemented by sessions whose harness can change model
+// mid-conversation. The model is one of the adapter's own Models ids. A
+// harness that cannot switch simply does not implement this, and the host
+// reports that legibly instead of silently ignoring it.
+type ModelSwitcher interface {
+	SetModel(ctx context.Context, model string) error
+}
+
 // PermissionRequest is what an adapter asks a human, via the host.
 type PermissionRequest struct {
 	TurnID     string

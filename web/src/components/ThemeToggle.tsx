@@ -26,7 +26,7 @@ export function ThemeToggle({ className }: { className?: string }) {
         <Button
           variant="ghost"
           size="icon"
-          className={cn("size-11 md:size-9", className)}
+          className={cn("size-11 md:size-8", className)}
           // Icon-only, so the control has to say what it is out loud.
           aria-label={`Theme: ${current.label}`}
           title={`Theme: ${current.label}`}

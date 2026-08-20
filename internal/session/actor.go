@@ -129,6 +129,7 @@ const (
 	cmdClose         = "close"
 	cmdActivate      = "activate"
 	cmdSetMode       = "set_mode"
+	cmdSetModel      = "set_model"
 	cmdHarnessEvent  = "harness_event"
 	cmdHarnessExit   = "harness_exit"
 	cmdContinue      = "continue"
@@ -443,6 +444,13 @@ func (a *Actor) SetMode(ctx context.Context, mode string) error {
 	return err
 }
 
+// SetModel switches the harness's model mid-session and records the change as
+// a session.config_changed event, so every presenter sees it.
+func (a *Actor) SetModel(ctx context.Context, model string) error {
+	_, err := a.call(ctx, command{kind: cmdSetModel, model: model})
+	return err
+}
+
 // Cancel interrupts the running turn. It is a command on the inbox, never a
 // context cancellation: losing every client must not interrupt a turn.
 func (a *Actor) Cancel(ctx context.Context) error {
@@ -605,6 +613,32 @@ func (a *Actor) handle(c command) (stop bool) {
 		// Durable and fanned out, so the change lands in the log and every
 		// connected presenter follows — same requirement as permission.resolved.
 		a.append(proto.Emit(proto.SessionConfigChanged, proto.SessionConfigChangedPayload{Mode: c.mode}))
+		c.reply <- cmdResult{}
+
+	case cmdSetModel:
+		if a.state.Closed {
+			c.reply <- cmdResult{err: ErrClosed}
+			return false
+		}
+		if a.sess == nil {
+			c.reply <- cmdResult{err: ErrNotReady}
+			return false
+		}
+		switcher, ok := a.sess.(adapter.ModelSwitcher)
+		if !ok {
+			c.reply <- cmdResult{err: errors.New("this harness cannot change model mid-session")}
+			return false
+		}
+		// Bounded for the same reason as cmdSetMode: a wedged harness must
+		// not stall the actor loop forever.
+		modelCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		err := switcher.SetModel(modelCtx, c.model)
+		cancel()
+		if err != nil {
+			c.reply <- cmdResult{err: err}
+			return false
+		}
+		a.append(proto.Emit(proto.SessionConfigChanged, proto.SessionConfigChangedPayload{Model: c.model}))
 		c.reply <- cmdResult{}
 
 	case cmdPrompt:

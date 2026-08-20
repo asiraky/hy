@@ -1,4 +1,4 @@
-import { ChevronRightIcon, FileDiffIcon, RefreshCwIcon, TriangleAlertIcon, XIcon } from "lucide-react";
+import { ChevronRightIcon, FileDiffIcon, Maximize2Icon, Minimize2Icon, RefreshCwIcon, TriangleAlertIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import { Diff } from "~/components/Diff";
@@ -32,6 +32,9 @@ const STATUS_TONE: Record<string, string> = {
 export interface ChangesProps {
   open: boolean;
   onClose: () => void;
+  /** One click to the full content width, one click back. No in-between. */
+  expanded?: boolean;
+  onToggleExpanded?: () => void;
   /** Changes are re-read when this changes — when a turn ends, in practice. */
   revision: string;
   loadChanges: () => Promise<SessionChanges>;
@@ -134,7 +137,7 @@ function FileRow({
   );
 }
 
-function ChangesBody({ open, onClose, revision, loadChanges, loadDiff, reveal, inSheet }: ChangesProps & { inSheet?: boolean }) {
+function ChangesBody({ open, onClose, expanded: panelExpanded, onToggleExpanded, revision, loadChanges, loadDiff, reveal, inSheet }: ChangesProps & { inSheet?: boolean }) {
   const [changes, setChanges] = useState<SessionChanges | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -239,6 +242,14 @@ function ChangesBody({ open, onClose, revision, loadChanges, loadDiff, reveal, i
         <IconButton label="Re-read the worktree" onClick={() => void refresh()}>
           <RefreshCwIcon className={cn(loading && "animate-spin")} />
         </IconButton>
+        {!inSheet && onToggleExpanded && (
+          <IconButton
+            label={panelExpanded ? "Restore the panel" : "Expand to full width"}
+            onClick={onToggleExpanded}
+          >
+            {panelExpanded ? <Minimize2Icon /> : <Maximize2Icon />}
+          </IconButton>
+        )}
         {!inSheet && (
           <IconButton label="Close changes" onClick={onClose}>
             <XIcon />
@@ -358,17 +369,21 @@ export function Changes(props: ChangesProps) {
 
   return (
     <aside
-      style={{ width }}
-      className="relative flex shrink-0 flex-col border-l"
+      // Expanded, the panel is the content area: the main column hides and
+      // this fills what is left beside the sidebar.
+      style={props.expanded ? undefined : { width }}
+      className={cn("relative flex flex-col border-l", props.expanded ? "min-w-0 flex-1" : "shrink-0")}
       aria-label="Changed files"
     >
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize the changes panel"
-        onPointerDown={startDrag}
-        className="hover:bg-primary/40 absolute inset-y-0 -left-1 w-2 cursor-col-resize"
-      />
+      {!props.expanded && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize the changes panel"
+          onPointerDown={startDrag}
+          className="hover:bg-primary/40 absolute inset-y-0 -left-1 w-2 cursor-col-resize"
+        />
+      )}
       <ChangesBody {...props} />
     </aside>
   );

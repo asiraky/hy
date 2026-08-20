@@ -252,6 +252,7 @@ type session struct {
 
 	threadID string
 	effort   string
+	model    string
 
 	events chan proto.Emission
 	done   chan struct{}
@@ -276,6 +277,11 @@ func (s *session) Prompt(ctx context.Context, in adapter.PromptInput) error {
 	if s.effort != "" {
 		params["effort"] = s.effort
 	}
+	s.mu.Lock()
+	if s.model != "" {
+		params["model"] = s.model
+	}
+	s.mu.Unlock()
 	return s.conn.Call(ctx, "turn/start", params, nil)
 }
 
@@ -298,6 +304,16 @@ func (s *session) SetMode(ctx context.Context, mode string) error {
 		"sandboxPolicy":     m.sandboxPolicy,
 		"approvalsReviewer": m.reviewer,
 	}, nil)
+}
+
+// SetModel records the model for subsequent turns. turn/start accepts a
+// per-turn model override, which is how the change takes effect without
+// restarting the thread.
+func (s *session) SetModel(ctx context.Context, model string) error {
+	s.mu.Lock()
+	s.model = model
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *session) Close() error {
@@ -585,13 +601,32 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 					CachedInputTokens     int64 `json:"cachedInputTokens"`
 					CacheWriteInputTokens int64 `json:"cacheWriteInputTokens"`
 				} `json:"total"`
+				// Last is the most recent request, whose prompt is the
+				// conversation so far — which is what "context used" means.
+				Last struct {
+					InputTokens       int64 `json:"inputTokens"`
+					OutputTokens      int64 `json:"outputTokens"`
+					CachedInputTokens int64 `json:"cachedInputTokens"`
+				} `json:"last"`
+				ContextWindow int64 `json:"contextWindow"`
 			} `json:"tokenUsage"`
+			ContextWindow int64 `json:"contextWindow"`
 		}
 		_ = json.Unmarshal(params, &p)
 		t := p.TokenUsage.Total
+		var pct float64
+		window := p.TokenUsage.ContextWindow
+		if window == 0 {
+			window = p.ContextWindow
+		}
+		used := p.TokenUsage.Last.InputTokens + p.TokenUsage.Last.CachedInputTokens + p.TokenUsage.Last.OutputTokens
+		if used > 0 && window > 0 {
+			pct = min(100, float64(used)/float64(window)*100)
+		}
 		s.emit(proto.Emit(proto.UsageUpdated, proto.UsageUpdatedPayload{
 			Input: t.InputTokens, Output: t.OutputTokens,
 			CacheRead: t.CachedInputTokens, CacheWrite: t.CacheWriteInputTokens,
+			ContextPct: pct, ContextUsed: used, ContextWindow: window,
 		}))
 
 	case "turn/completed", "turn/failed":

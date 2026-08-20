@@ -41,6 +41,8 @@ export interface Item {
   id: string;
   kind: "message" | "tool";
   turnId?: string;
+  /** When the item's first event landed, in millis. Display metadata only. */
+  receivedAt?: number;
   role?: "user" | "agent";
   contentKind?: "text" | "thought";
   text?: string;
@@ -152,6 +154,12 @@ export interface Usage {
   cacheRead: number;
   cacheWrite: number;
   cost: number;
+  /** How full the context window is, 0–100. Absent when the harness cannot say. */
+  contextPct?: number;
+  /** Tokens currently in the context window. */
+  contextUsed?: number;
+  /** The model's context window size in tokens. */
+  contextWindow?: number;
 }
 
 export interface PlanEntry {

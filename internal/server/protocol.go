@@ -113,6 +113,11 @@ type setModeArgs struct {
 	Mode      string `json:"mode"`
 }
 
+type setModelArgs struct {
+	SessionID string `json:"sessionId"`
+	Model     string `json:"model"`
+}
+
 type resolveArgs struct {
 	SessionID string `json:"sessionId"`
 	RequestID string `json:"requestId"`

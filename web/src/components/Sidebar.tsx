@@ -1,10 +1,20 @@
-import { CircleAlertIcon, PlusIcon, XIcon } from "lucide-react";
+import { CircleAlertIcon, FolderIcon, GitBranchIcon, PanelLeftIcon, PlusIcon, XIcon } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import type { ConnectionStatus } from "~/client";
 import { HarnessBadge } from "~/components/HarnessBadge";
+import { IconButton } from "~/components/IconButton";
 import { StatusDot } from "~/components/StatusDot";
 import { ThemeToggle } from "~/components/ThemeToggle";
 import { Button } from "~/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "~/components/ui/dialog";
 import { Separator } from "~/components/ui/separator";
 import { Sheet, SheetContent, SheetTitle } from "~/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
@@ -23,6 +33,11 @@ function ago(ms: number) {
   return `${Math.floor(s / 86400)}d`;
 }
 
+const WIDTH_KEY = "hy.sidebarWidth";
+const MIN_WIDTH = 208;
+const MAX_WIDTH = 480;
+const DEFAULT_WIDTH = 288;
+
 interface SidebarProps {
   sessions: SessionMeta[];
   activeId: string | null;
@@ -32,6 +47,8 @@ interface SidebarProps {
   onSelect: (id: string) => void;
   onNew: () => void;
   onDelete: (id: string) => void;
+  /** Opens the "how to reach this server" panel. */
+  onShowAccess: () => void;
   // Supplied by the server via the adapter; the sidebar knows no harness names.
   accentOf: (harness: string) => string | undefined;
   projectName: (id?: string) => string | undefined;
@@ -45,6 +62,10 @@ function SessionList({
   accentOf,
   projectName,
 }: Pick<SidebarProps, "sessions" | "activeId" | "onSelect" | "onDelete" | "accentOf" | "projectName">) {
+  // Deleting tears down a worktree, so a stray click on the X must not be
+  // enough on its own — the row's X only opens this confirmation.
+  const [confirming, setConfirming] = useState<SessionMeta | null>(null);
+
   if (sessions.length === 0) {
     return (
       <p className="text-muted-foreground px-3 py-10 text-center text-[13px]">
@@ -57,95 +78,157 @@ function SessionList({
 
   // The row carries two actions, so the selectable area is its own button
   // rather than a click handler on the container — a button cannot legally
-  // nest inside another button.
-  return sessions.map((s) => {
-    const active = s.id === activeId;
-    return (
-      <div
-        key={s.id}
-        className={cn(
-          "group mb-0.5 flex items-start gap-1 rounded-lg px-2.5 py-2 transition-colors",
-          active
-            ? "bg-sidebar-accent text-sidebar-accent-foreground"
-            : "hover:bg-sidebar-accent/60",
-        )}
-      >
-        <button
-          type="button"
-          onClick={() => onSelect(s.id)}
-          aria-current={active ? "true" : undefined}
-          className="focus-visible:ring-ring min-w-0 flex-1 cursor-pointer rounded-sm text-left outline-none focus-visible:ring-2"
-        >
-          <span className="flex items-center gap-1.5">
-            <HarnessBadge harness={s.harness} accent={accentOf(s.harness)} />
-            {BUSY_PHASES.includes(s.phase) && (
-              <span
-                role="status"
-                aria-label="Working"
-                className="bg-primary size-1.5 shrink-0 animate-pulse rounded-full motion-reduce:animate-none"
-              />
+  // nest inside another button. The delete X overlays the timestamp's corner
+  // instead of owning a column of its own, so an un-hovered row has no
+  // phantom right margin; on hover (desktop) the timestamp yields to the X.
+  return (
+    <>
+      {sessions.map((s) => {
+        const active = s.id === activeId;
+        return (
+          <div
+            key={s.id}
+            className={cn(
+              "group relative mb-0.5 rounded-lg transition-colors",
+              active
+                ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                : "hover:bg-sidebar-accent/60",
             )}
-            {FAILED_PHASES.includes(s.phase) && (
-              <CircleAlertIcon
-                aria-label="Needs attention"
-                className="text-destructive size-3 shrink-0"
-              />
-            )}
-            <span className="text-muted-foreground ml-auto shrink-0 font-mono text-[10px]">
-              {ago(s.updatedAt)}
-            </span>
-          </span>
-          <span className="mt-1 block truncate text-[13px]">{s.title || "Untitled"}</span>
-          <span className="text-muted-foreground block truncate font-mono text-[10px]">
-            {projectName(s.projectId) ?? s.cwd.split("/").slice(-2).join("/")}
-            {s.branch ? ` · ${s.branch}` : ""}
-          </span>
-        </button>
-
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={`Delete session ${s.title || "Untitled"}`}
-              onClick={() => onDelete(s.id)}
-              className="hover:text-destructive -mr-1 size-11 shrink-0 md:size-8 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
+          >
+            <button
+              type="button"
+              onClick={() => onSelect(s.id)}
+              aria-current={active ? "true" : undefined}
+              className="focus-visible:ring-ring block w-full min-w-0 cursor-pointer rounded-lg px-2.5 py-2 text-left outline-none focus-visible:ring-2"
             >
-              <XIcon />
+              {/* Two matched lines: text on the left, a small mark on the
+                  right — timestamp above, provider logo below. */}
+              <span className="flex items-center gap-1.5 pr-8 md:pr-0">
+                <span className="min-w-0 flex-1 truncate text-[13px]">
+                  {s.title || "Untitled"}
+                </span>
+                {BUSY_PHASES.includes(s.phase) && (
+                  <span
+                    role="status"
+                    aria-label="Working"
+                    className="bg-primary size-1.5 shrink-0 animate-pulse rounded-full motion-reduce:animate-none"
+                  />
+                )}
+                {FAILED_PHASES.includes(s.phase) && (
+                  <CircleAlertIcon
+                    aria-label="Needs attention"
+                    className="text-destructive size-3 shrink-0"
+                  />
+                )}
+                <span className="text-muted-foreground shrink-0 font-mono text-[10px] transition-opacity md:group-hover:opacity-0 md:group-focus-within:opacity-0">
+                  {ago(s.updatedAt)}
+                </span>
+              </span>
+              <span className="text-muted-foreground mt-1 flex min-w-0 items-center gap-1 font-mono text-[10px]">
+                <FolderIcon aria-hidden className="size-3 shrink-0" />
+                <span className="truncate">
+                  {projectName(s.projectId) ?? s.cwd.split("/").slice(-2).join("/")}
+                </span>
+                {s.branch && (
+                  <>
+                    <GitBranchIcon aria-hidden className="ml-1 size-3 shrink-0" />
+                    <span className="truncate">{s.branch}</span>
+                  </>
+                )}
+                <span className="ml-auto flex shrink-0 items-center pl-1.5">
+                  <HarnessBadge
+                    harness={s.harness}
+                    accent={accentOf(s.harness)}
+                    className="size-3.5"
+                  />
+                </span>
+              </span>
+            </button>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Delete session ${s.title || "Untitled"}`}
+                  onClick={() => setConfirming(s)}
+                  // Aligned to the provider logo's column below it: the logo
+                  // (14px, full-bleed) is centred 17px from the row's edge,
+                  // and the X's lucide glyph carries ~1.5px of optical padding
+                  // inside its 16px box — right-px puts the visible strokes on
+                  // that same centre line.
+                  className="hover:text-destructive absolute top-0.5 right-px size-8 shrink-0 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
+                >
+                  <XIcon />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Delete session</TooltipContent>
+            </Tooltip>
+          </div>
+        );
+      })}
+
+      <Dialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete “{confirming?.title || "Untitled"}”?</DialogTitle>
+            <DialogDescription>
+              {confirming?.workspaceMode === "local"
+                ? "This permanently deletes the session. Your checkout is left untouched."
+                : "This removes the session's Git worktree and permanently deletes the session. This cannot be undone."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirming(null)}>
+              Cancel
             </Button>
-          </TooltipTrigger>
-          <TooltipContent>Delete session</TooltipContent>
-        </Tooltip>
-      </div>
-    );
-  });
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (confirming) onDelete(confirming.id);
+                setConfirming(null);
+              }}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
 }
 
 /** The panel itself, identical whether it is docked or in the mobile sheet. */
 function SidebarPanel({ inSheet, ...props }: SidebarProps & { inSheet?: boolean }) {
   return (
     <div className="bg-sidebar text-sidebar-foreground flex h-full min-h-0 flex-col">
+      {/* One quiet header row: what the panel is, and the one action it
+          offers. Branding and the status dot earn no space up here — the dot
+          lives in the footer, still one click from the access panel. */}
       <div
         className={cn(
-          "flex items-center gap-2 px-4 pt-[calc(0.875rem+env(safe-area-inset-top))] pb-3",
-          // The sheet puts its own close button in this corner, so the status
-          // dot moves out from under it rather than sitting behind it.
+          "flex items-center gap-2 px-3 pt-[calc(0.5rem+env(safe-area-inset-top))] pb-1.5",
+          // The sheet puts its own close button in this corner, so the new-
+          // session button moves out from under it rather than behind it.
           inSheet && "pr-12",
         )}
       >
-        <span className="font-mono text-sm font-semibold tracking-tight">hy</span>
-        <span className="text-muted-foreground flex-1 text-[11px]">harness multiplexer</span>
-        <StatusDot status={props.status} />
-      </div>
-
-      <div className="px-3 pb-3">
-        <Button className="min-h-11 w-full md:min-h-9" onClick={props.onNew}>
+        <span className="flex-1 px-1.5 font-mono text-sm font-semibold tracking-tight">hy</span>
+        <IconButton label="New session" onClick={props.onNew} className="text-muted-foreground hover:text-foreground">
           <PlusIcon />
-          New session
-        </Button>
+        </IconButton>
+        {/* The sheet already has a close X in this corner; only the docked
+            panel needs its own collapse control. */}
+        {!inSheet && (
+          <IconButton
+            label="Hide sessions"
+            onClick={() => props.onOpenChange(false)}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <PanelLeftIcon />
+          </IconButton>
+        )}
       </div>
-
-      <Separator />
 
       <nav aria-label="Sessions" className="scroll-thin min-h-0 flex-1 overflow-y-auto px-2 py-2">
         <SessionList {...props} />
@@ -157,6 +240,19 @@ function SidebarPanel({ inSheet, ...props }: SidebarProps & { inSheet?: boolean 
         <span className="text-muted-foreground flex-1 text-[11px]">
           {props.sessions.length} session{props.sessions.length === 1 ? "" : "s"}
         </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={props.onShowAccess}
+              aria-label="How to reach this server"
+              className="focus-visible:ring-ring flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full outline-none focus-visible:ring-2"
+            >
+              <StatusDot status={props.status} />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>How to reach this server</TooltipContent>
+        </Tooltip>
         <ThemeToggle />
       </div>
     </div>
@@ -184,18 +280,69 @@ export function Sidebar(props: SidebarProps) {
     );
   }
 
+  return <DockedSidebar {...props} />;
+}
+
+function DockedSidebar(props: SidebarProps) {
+  const [width, setWidth] = useState(() => {
+    const stored = Number(localStorage.getItem(WIDTH_KEY));
+    return Number.isFinite(stored) && stored >= MIN_WIDTH && stored <= MAX_WIDTH
+      ? stored
+      : DEFAULT_WIDTH;
+  });
+  const dragging = useRef(false);
+  // The drag handlers close over nothing but this ref, so the release handler
+  // can persist the final width without reaching into React state.
+  const widthRef = useRef(width);
+  // Resizing must not animate: the margin transition exists for open/close,
+  // and fighting the pointer with a 200ms lag makes the drag feel broken.
+  const [resizing, setResizing] = useState(false);
+
+  useEffect(() => {
+    widthRef.current = width;
+    if (!dragging.current) localStorage.setItem(WIDTH_KEY, String(width));
+  }, [width]);
+
+  const startDrag = useCallback((e: ReactPointerEvent) => {
+    e.preventDefault();
+    dragging.current = true;
+    setResizing(true);
+    const onMove = (m: PointerEvent) => {
+      const w = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, m.clientX));
+      widthRef.current = w;
+      setWidth(w);
+    };
+    const onUp = () => {
+      dragging.current = false;
+      setResizing(false);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      localStorage.setItem(WIDTH_KEY, String(widthRef.current));
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }, []);
+
   return (
     <aside
       // Collapsed it is off-screen but still in the document, so it is taken
       // out of the tab order rather than being a set of controls you can focus
       // but not see.
       inert={!props.open}
+      style={{ width, marginLeft: props.open ? 0 : -width }}
       className={cn(
-        "w-72 shrink-0 border-r transition-[margin] duration-200 motion-reduce:transition-none",
-        !props.open && "-ml-72",
+        "relative shrink-0 border-r",
+        !resizing && "transition-[margin] duration-200 motion-reduce:transition-none",
       )}
     >
       <SidebarPanel {...props} />
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize the sidebar"
+        onPointerDown={startDrag}
+        className="hover:bg-primary/40 absolute inset-y-0 -right-1 z-10 w-2 cursor-col-resize"
+      />
     </aside>
   );
 }

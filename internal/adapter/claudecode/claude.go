@@ -291,6 +291,7 @@ type session struct {
 	messageID string
 	blocks    map[int]*block
 	sawResult bool
+	model     string
 }
 
 func (s *session) Events() <-chan proto.Emission { return s.events }
@@ -324,6 +325,16 @@ func (s *session) Cancel(ctx context.Context) error {
 // can disable bypass and auto) comes back as a legible error.
 func (s *session) SetMode(ctx context.Context, mode string) error {
 	return s.conn.Call(ctx, "setPermissionMode", map[string]any{"mode": mode}, nil)
+}
+
+// SetModel switches the model mid-session via the SDK's setModel. The sidecar
+// treats it as a notification; the change is confirmed by the next system/init
+// or simply applies to the next request.
+func (s *session) SetModel(ctx context.Context, model string) error {
+	s.mu.Lock()
+	s.model = model
+	s.mu.Unlock()
+	return s.conn.Notify("setModel", map[string]any{"model": model})
 }
 
 // Close tears down the bridge. Closing stdin is the primary signal: the
@@ -472,6 +483,16 @@ func (s *session) handleSDKMessage(msg map[string]json.RawMessage) {
 	}
 }
 
+// contextWindowFor is a heuristic: the SDK does not report the window, so the
+// indicator assumes the standard 200k unless the model id opts into the 1M
+// beta. Close enough for a gauge that only has three colours.
+func contextWindowFor(model string) int64 {
+	if strings.Contains(model, "[1m]") {
+		return 1_000_000
+	}
+	return 200_000
+}
+
 func (s *session) handleSystem(msg map[string]json.RawMessage) {
 	if str(msg["subtype"]) != "init" {
 		return
@@ -481,6 +502,9 @@ func (s *session) handleSystem(msg map[string]json.RawMessage) {
 		PermissionMode string `json:"permissionMode"`
 	}
 	remarshal(msg, &init)
+	s.mu.Lock()
+	s.model = init.Model
+	s.mu.Unlock()
 	s.emit(proto.Emit(proto.SessionConfigChanged, proto.SessionConfigChangedPayload{
 		Model: init.Model, Mode: init.PermissionMode, HarnessSessionID: s.harnessSessionID,
 	}))
@@ -636,12 +660,26 @@ func (s *session) handleResult(msg map[string]json.RawMessage) {
 	}
 	remarshal(msg, &r)
 
+	// The final request's prompt is the conversation so far, so its input
+	// (fresh + cached) plus what came back approximates the context in use.
+	s.mu.Lock()
+	window := contextWindowFor(s.model)
+	s.mu.Unlock()
+	used := r.Usage.InputTokens + r.Usage.CacheReadInputTokens + r.Usage.CacheCreationInputTokens + r.Usage.OutputTokens
+	var pct float64
+	if used > 0 && window > 0 {
+		pct = min(100, float64(used)/float64(window)*100)
+	}
+
 	s.emit(proto.Emit(proto.UsageUpdated, proto.UsageUpdatedPayload{
 		Input:      r.Usage.InputTokens,
 		Output:     r.Usage.OutputTokens,
 		CacheRead:  r.Usage.CacheReadInputTokens,
 		CacheWrite: r.Usage.CacheCreationInputTokens,
-		Cost:       r.TotalCostUSD,
+		Cost:          r.TotalCostUSD,
+		ContextPct:    pct,
+		ContextUsed:   used,
+		ContextWindow: window,
 	}))
 
 	stop := r.StopReason
