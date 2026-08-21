@@ -221,6 +221,94 @@ describe("the empty content column", () => {
   });
 });
 
+describe("composer drafts", () => {
+  const boot = async () => {
+    viewport("desktop");
+    render(<App />);
+    await act(async () => {
+      events.onProjects([project]);
+      events.onHarnesses([harness], "/tmp/repo");
+      events.onSessions([session("a"), session("b")]);
+    });
+  };
+
+  const composer = () => screen.getByLabelText("Message") as HTMLTextAreaElement;
+
+  const open = async (id: string) => {
+    await act(async () => {
+      fireEvent.click(screen.getByText(`Session ${id}`));
+      events.onState(id, state(id, "default"));
+    });
+  };
+
+  it("keeps a half-typed message when you switch away and come back", async () => {
+    await boot();
+    await open("a");
+
+    await act(async () => {
+      fireEvent.change(composer(), { target: { value: "draft for a" } });
+    });
+    expect(composer().value).toBe("draft for a");
+
+    // Switching sessions unmounts the whole content subtree, Composer included.
+    await open("b");
+    expect(composer().value).toBe("");
+
+    await open("a");
+    expect(composer().value).toBe("draft for a");
+  });
+
+  it("clears the draft once the message is sent", async () => {
+    await boot();
+    await open("a");
+
+    await act(async () => {
+      fireEvent.change(composer(), { target: { value: "hello" } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(composer(), { key: "Enter" });
+    });
+
+    expect(command).toHaveBeenCalledWith("prompt", { sessionId: "a", text: "hello" });
+    expect(composer().value).toBe("");
+
+    // Coming back to the session shows the cleared field, not the sent text.
+    await open("b");
+    await open("a");
+    expect(composer().value).toBe("");
+  });
+
+  it("keeps a new session's draft while the list has not caught up with it", async () => {
+    await boot();
+
+    // Create a session: it is attached, and can be typed into, before the
+    // broadcast listing it arrives.
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: /New session/ })[0]);
+    });
+    command.mockImplementation(async (name: string) =>
+      name === "create_session" ? { sessionId: "fresh" } : ({} as any),
+    );
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "Start" }));
+    });
+    await act(async () => events.onState("fresh", state("fresh", "default")));
+    await act(async () => {
+      fireEvent.change(composer(), { target: { value: "draft for fresh" } });
+    });
+
+    // Switch away, then a list lands that still predates the new session. The
+    // draft must not be pruned as if the session were gone.
+    await open("a");
+    await act(async () => events.onSessions([session("a"), session("b")]));
+
+    // The broadcast finally carries it; returning shows the draft intact.
+    await act(async () => events.onSessions([session("a"), session("b"), session("fresh")]));
+    await open("fresh");
+    expect(composer().value).toBe("draft for fresh");
+  });
+});
+
 describe("losing the attached session", () => {
   it("lets go even if the session never sent a first snapshot", async () => {
     viewport("phone");
