@@ -232,13 +232,13 @@
     animation: attentionIn 0.32s cubic-bezier(0.2, 0.9, 0.3, 1);
   }
 
+  /* Slide up into place without fading: the card's surface has to stay opaque
+     the whole way in, or the transcript bleeds through it mid-animation. */
   @keyframes attentionIn {
     from {
-      opacity: 0;
       transform: translateY(12px);
     }
     to {
-      opacity: 1;
       transform: none;
     }
   }
