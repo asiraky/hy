@@ -14,23 +14,17 @@ import {
   TriangleAlertIcon,
   XIcon,
 } from "lucide-react";
-import {
-  Fragment,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ComponentType,
-} from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useState, type ComponentType } from "react";
 
 import { ChangedFiles } from "~/components/ChangedFiles";
+import { IconButton } from "~/components/IconButton";
 import { Markdown } from "~/components/Markdown";
 import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
 import { cn } from "~/lib/utils";
 import type { Item, SessionState, ToolStatus, Turn } from "~/protocol";
 import { buildRows, foldLabel, rowTurnID, summarise } from "~/rows";
+import { useAutoScroll } from "~/useAutoScroll";
 import { useSmoothText } from "~/useSmoothText";
 
 // One icon per tool kind the protocol defines. Anything new falls through to
@@ -473,39 +467,14 @@ export function Transcript({
   onContinue: () => void;
   onOpenDiff: (path?: string) => void;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
-  const pinned = useRef(true);
+  // Follow the tail unless the reader has scrolled up; the button below is
+  // how they get back.
+  const { scrollerRef, contentRef, pinned, stick, scrollToBottom } = useAutoScroll<
+    HTMLDivElement,
+    HTMLDivElement
+  >();
 
-  // Follow the tail unless the reader has scrolled up.
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const onScroll = () => {
-      pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, []);
-
-  useLayoutEffect(() => {
-    if (pinned.current && ref.current) {
-      ref.current.scrollTop = ref.current.scrollHeight;
-    }
-  }, [state.items, state.seq]);
-
-  // Text is revealed between event ticks, so following the tail has to watch
-  // the content's size rather than React state.
-  useEffect(() => {
-    const scroller = ref.current;
-    const content = contentRef.current;
-    if (!scroller || !content) return;
-    const ro = new ResizeObserver(() => {
-      if (pinned.current) scroller.scrollTop = scroller.scrollHeight;
-    });
-    ro.observe(content);
-    return () => ro.disconnect();
-  }, []);
+  useLayoutEffect(stick, [stick, state.items, state.seq]);
 
   // Only the final agent block is still growing; everything above it is
   // settled and renders in full. A block the harness opened but never filled is
@@ -550,64 +519,91 @@ export function Transcript({
   );
 
   return (
-    <div ref={ref} className="scroll-thin min-h-0 flex-1 overflow-y-auto overscroll-contain">
-      {/* The floating composer overlays the tail, so the content ends with
-          enough room that the last message can scroll clear of it. */}
-      <div ref={contentRef} className="mx-auto flex max-w-3xl flex-col gap-3.5 px-4 pt-6 pb-36 md:px-5">
-        <WorkspaceCard
-          state={state}
-          onRetry={onRetryProvision}
-          onCleanup={onCleanup}
-          onForceDelete={onForceDelete}
-        />
-        {state.items.length === 0 && !state.workspace.phase && (
-          <div className="text-muted-foreground flex flex-col items-center gap-2 py-20 text-center">
-            <TerminalIcon className="size-5 opacity-60" />
-            <p className="text-sm">Nothing yet.</p>
-            <p className="text-[13px]">Send a prompt to start the turn.</p>
-          </div>
-        )}
-
-        {rows.map((row, i) => {
-          const key = row.kind === "item" ? row.item.id : row.id;
-          // The card goes after the last row of the turn it describes, which is
-          // the row whose successor belongs to a different turn.
-          const turnID = rowTurnID(row);
-          const nextTurnID = i + 1 < rows.length ? rowTurnID(rows[i + 1]) : undefined;
-          const diff = turnID && turnID !== nextTurnID ? turnDiffs.get(turnID) : undefined;
-
-          return (
-            <Fragment key={key}>
-              {row.kind === "fold" ? (
-                <TurnFold turn={row.turn} items={row.items} />
-              ) : row.kind === "run" ? (
-                <ToolRun items={row.items} live={row.live} />
-              ) : row.item.kind === "tool" ? (
-                <ToolCard item={row.item} />
-              ) : (
-                <Message
-                  item={row.item}
-                  streaming={state.phase === "turn" && row.item.id === liveAgentId}
-                  recovered={!!row.item.turnId && recoveredTurns.has(row.item.turnId)}
-                />
-              )}
-              {diff && (
-                <ChangedFiles diff={diff} latest={turnID === lastTurnID} onOpenDiff={onOpenDiff} />
-              )}
-            </Fragment>
-          );
-        })}
-
-        {state.phase === "turn" &&
-          liveAgentId === undefined &&
-          !rows.some((r) => r.kind === "run" && r.live) && (
-            <div className="text-muted-foreground flex items-center gap-2 text-sm">
-              <Spinner className="text-primary size-3.5" /> thinking…
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref={scrollerRef}
+        className="scroll-thin min-h-0 flex-1 overflow-y-auto overscroll-contain"
+      >
+        {/* The floating composer overlays the tail, so the content ends with
+            enough room that the last message can scroll clear of it. */}
+        <div
+          ref={contentRef}
+          className="mx-auto flex max-w-3xl flex-col gap-3.5 px-4 pt-6 pb-36 md:px-5"
+        >
+          <WorkspaceCard
+            state={state}
+            onRetry={onRetryProvision}
+            onCleanup={onCleanup}
+            onForceDelete={onForceDelete}
+          />
+          {state.items.length === 0 && !state.workspace.phase && (
+            <div className="text-muted-foreground flex flex-col items-center gap-2 py-20 text-center">
+              <TerminalIcon className="size-5 opacity-60" />
+              <p className="text-sm">Nothing yet.</p>
+              <p className="text-[13px]">Send a prompt to start the turn.</p>
             </div>
           )}
 
-        {interrupted && <InterruptedCard turn={interrupted} onContinue={onContinue} />}
+          {rows.map((row, i) => {
+            const key = row.kind === "item" ? row.item.id : row.id;
+            // The card goes after the last row of the turn it describes, which is
+            // the row whose successor belongs to a different turn.
+            const turnID = rowTurnID(row);
+            const nextTurnID = i + 1 < rows.length ? rowTurnID(rows[i + 1]) : undefined;
+            const diff = turnID && turnID !== nextTurnID ? turnDiffs.get(turnID) : undefined;
+
+            return (
+              <Fragment key={key}>
+                {row.kind === "fold" ? (
+                  <TurnFold turn={row.turn} items={row.items} />
+                ) : row.kind === "run" ? (
+                  <ToolRun items={row.items} live={row.live} />
+                ) : row.item.kind === "tool" ? (
+                  <ToolCard item={row.item} />
+                ) : (
+                  <Message
+                    item={row.item}
+                    streaming={state.phase === "turn" && row.item.id === liveAgentId}
+                    recovered={!!row.item.turnId && recoveredTurns.has(row.item.turnId)}
+                  />
+                )}
+                {diff && (
+                  <ChangedFiles diff={diff} latest={turnID === lastTurnID} onOpenDiff={onOpenDiff} />
+                )}
+              </Fragment>
+            );
+          })}
+
+          {state.phase === "turn" &&
+            liveAgentId === undefined &&
+            !rows.some((r) => r.kind === "run" && r.live) && (
+              <div className="text-muted-foreground flex items-center gap-2 text-sm">
+                <Spinner className="text-primary size-3.5" /> thinking…
+              </div>
+            )}
+
+          {interrupted && <InterruptedCard turn={interrupted} onContinue={onContinue} />}
+        </div>
       </div>
+
+      {/* Anchored to the scroller rather than to the content, so it sits in
+          the same place wherever the transcript happens to be scrolled. The
+          offset clears the floating composer, matching the room the content
+          above already reserves for it. The wrapper is inert to the pointer:
+          only the button itself may take a click, or a strip of dead space
+          would run across the transcript. */}
+      {!pinned && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-36 flex justify-center">
+          <IconButton
+            label="Scroll to bottom"
+            variant="outline"
+            onClick={scrollToBottom}
+            className="fade-in bg-background pointer-events-auto rounded-full shadow-md"
+          >
+            <ChevronDownIcon />
+          </IconButton>
+        </div>
+      )}
     </div>
   );
 }
