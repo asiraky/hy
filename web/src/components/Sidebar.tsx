@@ -1,5 +1,12 @@
 import { CircleAlertIcon, FolderIcon, GitBranchIcon, PanelLeftIcon, PlusIcon, XIcon } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 
 import type { ConnectionStatus } from "~/client";
 import { HarnessBadge } from "~/components/HarnessBadge";
@@ -18,6 +25,7 @@ import {
 } from "~/components/ui/dialog";
 import { Label } from "~/components/ui/label";
 import { Separator } from "~/components/ui/separator";
+import { Spinner } from "~/components/ui/spinner";
 import { Sheet, SheetContent, SheetTitle } from "~/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
@@ -25,6 +33,9 @@ import type { SessionMeta } from "~/protocol";
 import { useIsDesktop } from "~/useMediaQuery";
 
 const BUSY_PHASES = ["turn", "provisioning", "creating", "cleaning"];
+// How long a row takes to fold away once it has left the list. Kept in step
+// with the duration on the row itself.
+const EXIT_MS = 260;
 const FAILED_PHASES = ["provision_failed", "cleanup_failed"];
 
 function ago(ms: number) {
@@ -48,8 +59,12 @@ interface SidebarProps {
   onOpenChange: (open: boolean) => void;
   onSelect: (id: string) => void;
   onNew: () => void;
-  /** removeWorktree is the user's answer to the dialog's checkbox, never inferred. */
-  onDelete: (id: string, removeWorktree: boolean) => void;
+  /**
+   * removeWorktree is the user's answer to the dialog's checkbox, never
+   * inferred. The promise, if one is returned, only says the request was
+   * accepted — the delete is finished when the session leaves `sessions`.
+   */
+  onDelete: (id: string, removeWorktree: boolean) => void | Promise<unknown>;
   /** Opens the "how to reach this server" panel. */
   onShowAccess: () => void;
   // Supplied by the server via the adapter; the sidebar knows no harness names.
@@ -76,6 +91,23 @@ function SessionList({
   // confirmation, and the checkout only goes if it is asked for there.
   const [confirming, setConfirming] = useState<SessionMeta | null>(null);
   const [removeWorktree, setRemoveWorktree] = useState(false);
+  // A delete is not instant — the server tears the workspace down first, and
+  // the row only leaves the list when that finishes. Three pieces of state
+  // carry the wait:
+  //
+  // `deleting` keeps the dialog open, and honest, while the work runs.
+  // `frozen` pins the list to the order it had when Delete was pressed: the
+  //   server stamps the session as it enters "cleaning" and the list is
+  //   ordered by that stamp, so without this the row shoots to the top and
+  //   sits there until it vanishes.
+  // `exiting` keeps the row on screen, in its own place, for one last
+  //   animation after it has already left the list.
+  const [deleting, setDeleting] = useState<SessionMeta | null>(null);
+  const [frozen, setFrozen] = useState<string[] | null>(null);
+  const [exiting, setExiting] = useState<SessionMeta | null>(null);
+  // The delete this component is currently living through, for the one thing
+  // that arrives too late to read state: a refusal from the server.
+  const latest = useRef<string | null>(null);
   const ask = (s: SessionMeta) => {
     // Defaulted on for a worktree hy provisioned, because that is what hy did
     // before and it is usually right; off for one it merely borrowed.
@@ -102,7 +134,81 @@ function SessionList({
     confirming.cwd !== projectRoot(confirming.projectId);
   const removable = hasWorktree && sharers.length === 0;
 
-  if (sessions.length === 0) {
+  // Handing the row off to its exit animation is done here, during the render
+  // that drops it, rather than in an effect: an effect would let one commit
+  // through with the row already gone, and the DOM node we want to animate
+  // would be destroyed before it could move.
+  if (deleting && !sessions.some((s) => s.id === deleting.id)) {
+    setDeleting(null);
+    // Only the dialog that was asking about *this* session; the user may have
+    // dismissed it and opened another meanwhile.
+    setConfirming((c) => (c?.id === deleting.id ? null : c));
+    setExiting(deleting);
+  }
+
+  // Teardown failed, so the row is staying. App is already asking what to do
+  // about it; the dialog stops spinning and gets out of the way.
+  const failed =
+    deleting && sessions.some((s) => s.id === deleting.id && s.phase === "cleanup_failed")
+      ? deleting.id
+      : null;
+  useEffect(() => {
+    if (!failed) return;
+    setDeleting(null);
+    setConfirming((c) => (c?.id === failed ? null : c));
+    setFrozen(null);
+  }, [failed]);
+
+  // The animation is the only thing still holding either of these.
+  useEffect(() => {
+    if (!exiting) return;
+    const t = setTimeout(() => {
+      setExiting(null);
+      setFrozen(null);
+    }, EXIT_MS + 60);
+    return () => clearTimeout(t);
+  }, [exiting]);
+
+  // While a delete is in flight the sidebar renders the order it had when the
+  // user committed to it, with the departing row put back at its own index.
+  const rows = useMemo(() => {
+    if (!frozen) return sessions;
+    const rank = new Map(frozen.map((id, i) => [id, i]));
+    // Anything the server has added since sorts ahead, which is where a new
+    // session belongs in a most-recent-first list anyway.
+    const list = [...sessions].sort((a, b) => (rank.get(a.id) ?? -1) - (rank.get(b.id) ?? -1));
+    if (exiting && !sessions.some((s) => s.id === exiting.id)) {
+      const at = frozen.indexOf(exiting.id);
+      if (at >= 0) list.splice(Math.min(at, list.length), 0, exiting);
+    }
+    return list;
+  }, [sessions, frozen, exiting]);
+
+  // The dialog is only "busy" for the session it is currently asking about: it
+  // can be dismissed mid-delete and reopened on another row, and that row's
+  // Delete button must still be a live button.
+  const busy = !!deleting && deleting.id === confirming?.id;
+
+  const startDelete = () => {
+    if (!confirming || busy) return;
+    const target = confirming;
+    latest.current = target.id;
+    setFrozen(sessions.map((s) => s.id));
+    setExiting(null);
+    setDeleting(target);
+    Promise.resolve(onDelete(target.id, removable && removeWorktree)).catch(() => {
+      // The failure has already been reported where it was raised; all that is
+      // left here is to stop claiming the delete is still happening. Written
+      // against the current state, not the state at the click: a slow refusal
+      // must not clear a delete the user has since started on another row.
+      if (latest.current !== target.id) return;
+      setDeleting(null);
+      setFrozen(null);
+      setConfirming((c) => (c?.id === target.id ? null : c));
+    });
+  };
+
+  if (rows.length === 0) {
     return (
       <p className="text-muted-foreground px-3 py-10 text-center text-[13px]">
         No sessions yet.
@@ -119,94 +225,120 @@ function SessionList({
   // phantom right margin; on hover (desktop) the timestamp yields to the X.
   return (
     <>
-      {sessions.map((s) => {
+      {rows.map((s) => {
         const active = s.id === activeId;
+        const leaving = exiting?.id === s.id;
+        const going = deleting?.id === s.id;
         return (
+          // The row leaves from wherever it stands: it fades and slides out
+          // while its own height folds shut under it, so the rows below close
+          // the gap in the same motion instead of snapping up. The height is
+          // the `1fr`→`0fr` grid track, which is the one way to transition to
+          // a content-sized height the row never had to declare.
           <div
             key={s.id}
+            inert={leaving}
             className={cn(
-              "group relative mb-0.5 rounded-lg transition-colors",
-              active
-                ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                : "hover:bg-sidebar-accent/60",
+              "grid transition-[grid-template-rows,opacity,transform,margin] duration-[260ms] ease-out motion-reduce:transition-none",
+              leaving
+                ? "mb-0 grid-rows-[0fr] -translate-x-2 scale-[0.98] opacity-0"
+                : "mb-0.5 grid-rows-[1fr]",
             )}
           >
-            <button
-              type="button"
-              onClick={() => onSelect(s.id)}
-              aria-current={active ? "true" : undefined}
-              className="focus-visible:ring-ring block w-full min-w-0 cursor-pointer rounded-lg px-2.5 py-2 text-left outline-none focus-visible:ring-2"
+            <div
+              className={cn(
+                "group relative rounded-lg transition-colors",
+                leaving && "overflow-hidden",
+                active
+                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                  : "hover:bg-sidebar-accent/60",
+                // Already on its way out: it shows what it is doing (the busy
+                // dot below) but no longer takes clicks.
+                going && "pointer-events-none opacity-60",
+              )}
             >
-              {/* Two matched lines: text on the left, a small mark on the
-                  right — timestamp above, provider logo below. */}
-              <span className="flex items-center gap-1.5 pr-8 md:pr-0">
-                <span className="min-w-0 flex-1 truncate text-[13px]">
-                  {s.title || "Untitled"}
+              <button
+                type="button"
+                onClick={() => onSelect(s.id)}
+                aria-current={active ? "true" : undefined}
+                className="focus-visible:ring-ring block w-full min-w-0 cursor-pointer rounded-lg px-2.5 py-2 text-left outline-none focus-visible:ring-2"
+              >
+                {/* Two matched lines: text on the left, a small mark on the
+                    right — timestamp above, provider logo below. */}
+                <span className="flex items-center gap-1.5 pr-8 md:pr-0">
+                  <span className="min-w-0 flex-1 truncate text-[13px]">
+                    {s.title || "Untitled"}
+                  </span>
+                  {BUSY_PHASES.includes(s.phase) && (
+                    <span
+                      role="status"
+                      aria-label="Working"
+                      className="bg-primary size-1.5 shrink-0 animate-pulse rounded-full motion-reduce:animate-none"
+                    />
+                  )}
+                  {FAILED_PHASES.includes(s.phase) && (
+                    <CircleAlertIcon
+                      aria-label="Needs attention"
+                      className="text-destructive size-3 shrink-0"
+                    />
+                  )}
+                  <span className="text-muted-foreground shrink-0 font-mono text-[10px] transition-opacity md:group-hover:opacity-0 md:group-focus-within:opacity-0">
+                    {ago(s.updatedAt)}
+                  </span>
                 </span>
-                {BUSY_PHASES.includes(s.phase) && (
-                  <span
-                    role="status"
-                    aria-label="Working"
-                    className="bg-primary size-1.5 shrink-0 animate-pulse rounded-full motion-reduce:animate-none"
-                  />
-                )}
-                {FAILED_PHASES.includes(s.phase) && (
-                  <CircleAlertIcon
-                    aria-label="Needs attention"
-                    className="text-destructive size-3 shrink-0"
-                  />
-                )}
-                <span className="text-muted-foreground shrink-0 font-mono text-[10px] transition-opacity md:group-hover:opacity-0 md:group-focus-within:opacity-0">
-                  {ago(s.updatedAt)}
+                <span className="text-muted-foreground mt-1 flex min-w-0 items-center gap-1 font-mono text-[10px]">
+                  <FolderIcon aria-hidden className="size-3 shrink-0" />
+                  <span className="truncate">
+                    {projectName(s.projectId) ?? s.cwd.split("/").slice(-2).join("/")}
+                  </span>
+                  {s.branch && (
+                    <>
+                      <GitBranchIcon aria-hidden className="ml-1 size-3 shrink-0" />
+                      <span className="truncate">{s.branch}</span>
+                    </>
+                  )}
+                  <span className="ml-auto flex shrink-0 items-center pl-1.5">
+                    <HarnessBadge
+                      harness={s.harness}
+                      accent={accentOf(s.harness)}
+                      className="size-3.5"
+                    />
+                  </span>
                 </span>
-              </span>
-              <span className="text-muted-foreground mt-1 flex min-w-0 items-center gap-1 font-mono text-[10px]">
-                <FolderIcon aria-hidden className="size-3 shrink-0" />
-                <span className="truncate">
-                  {projectName(s.projectId) ?? s.cwd.split("/").slice(-2).join("/")}
-                </span>
-                {s.branch && (
-                  <>
-                    <GitBranchIcon aria-hidden className="ml-1 size-3 shrink-0" />
-                    <span className="truncate">{s.branch}</span>
-                  </>
-                )}
-                <span className="ml-auto flex shrink-0 items-center pl-1.5">
-                  <HarnessBadge
-                    harness={s.harness}
-                    accent={accentOf(s.harness)}
-                    className="size-3.5"
-                  />
-                </span>
-              </span>
-            </button>
+              </button>
 
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Delete session ${s.title || "Untitled"}`}
-                  onClick={() => ask(s)}
-                  // Aligned to the provider logo's column below it: the logo
-                  // (14px, full-bleed) is centred 17px from the row's edge,
-                  // and the X's lucide glyph carries ~1.5px of optical padding
-                  // inside its 16px box — right-px puts the visible strokes on
-                  // that same centre line.
-                  // The visible square stays 32px so it keeps that alignment
-                  // at every size; `after` grows the hit area to 44px without
-                  // moving anything, which a larger button could not do.
-                  className="hover:text-destructive absolute top-0.5 right-px size-8 shrink-0 after:absolute after:-inset-1.5 after:content-[''] md:size-8 md:opacity-0 md:after:hidden md:group-hover:opacity-100 md:focus-visible:opacity-100"
-                >
-                  <XIcon />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Delete session</TooltipContent>
-            </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Delete session ${s.title || "Untitled"}`}
+                    onClick={() => ask(s)}
+                    // Aligned to the provider logo's column below it: the logo
+                    // (14px, full-bleed) is centred 17px from the row's edge,
+                    // and the X's lucide glyph carries ~1.5px of optical padding
+                    // inside its 16px box — right-px puts the visible strokes on
+                    // that same centre line.
+                    // The visible square stays 32px so it keeps that alignment
+                    // at every size; `after` grows the hit area to 44px without
+                    // moving anything, which a larger button could not do.
+                    className="hover:text-destructive absolute top-0.5 right-px size-8 shrink-0 after:absolute after:-inset-1.5 after:content-[''] md:size-8 md:opacity-0 md:after:hidden md:group-hover:opacity-100 md:focus-visible:opacity-100"
+                  >
+                    <XIcon />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Delete session</TooltipContent>
+              </Tooltip>
+            </div>
           </div>
         );
       })}
 
+      {/* It stays put while the delete runs: closing it on the click would be
+          claiming the session is gone at the moment the work starts. It is
+          still dismissable, though — a teardown script that hangs must not
+          take the window with it. Dismissing only hides the progress; the
+          delete carries on and the row still leaves on its own. */}
       <Dialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
@@ -260,17 +392,20 @@ function SessionList({
           )}
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirming(null)}>
+            <Button variant="outline" onClick={() => setConfirming(null)} disabled={busy}>
               Cancel
             </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                if (confirming) onDelete(confirming.id, removable && removeWorktree);
-                setConfirming(null);
-              }}
-            >
-              Delete
+            <Button variant="destructive" onClick={startDelete} disabled={busy}>
+              {busy ? (
+                <>
+                  <Spinner aria-hidden className="size-4" />
+                  {/* Named, because tearing a worktree down is the slow part
+                      and the one worth waiting through. */}
+                  {removable && removeWorktree ? "Deleting worktree…" : "Deleting…"}
+                </>
+              ) : (
+                "Delete"
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -379,11 +379,21 @@ export function App() {
     [activeId],
   );
 
+  // The returned promise settles when the server has *accepted* the delete,
+  // not when it is done — the session is gone when it leaves the list, which
+  // is what the sidebar waits on. Rejecting it is the sidebar's cue to stop
+  // waiting, so the error is re-thrown after it has been reported.
   const remove = useCallback(
     (id: string, removeWorktree: boolean) => {
       if (id !== activeRef.current) select(id);
-      clientRef.current?.command("delete_session", { sessionId: id, removeWorktree }).catch((e) => {
+      const client = clientRef.current;
+      if (!client) {
+        toast.error("Could not delete that session", { description: "Not connected." });
+        return Promise.reject(new Error("not connected"));
+      }
+      return client.command("delete_session", { sessionId: id, removeWorktree }).catch((e) => {
         toast.error("Could not delete that session", { description: e.message });
+        throw e;
       });
     },
     [select],
