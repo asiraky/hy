@@ -181,6 +181,23 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
     case "usage.updated":
       return { ...s, usage: p };
 
+    case "context.compacted":
+      // Anchored to the event's sequence so a replay lands the same item and
+      // two boundaries never collide. No turn id: compaction is housekeeping,
+      // so it stands on its own line rather than folding into a turn. Mirrors
+      // internal/projection/state.go.
+      return {
+        ...s,
+        items: upsert(s, `compact:${ev.seq}`, (it) => {
+          it.kind = "notice";
+          it.receivedAt ??= ev.timestamp;
+          it.noticeKind = "compaction";
+          it.trigger = p.trigger;
+          it.preTokens = p.preTokens;
+          it.postTokens = p.postTokens;
+        }),
+      };
+
     case "permission.requested":
       return {
         ...s,

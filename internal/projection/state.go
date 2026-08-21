@@ -5,6 +5,7 @@ package projection
 
 import (
 	"encoding/json"
+	"strconv"
 
 	"github.com/asiraky/hy/internal/proto"
 )
@@ -13,6 +14,9 @@ import (
 const (
 	ItemMessage = "message"
 	ItemTool    = "tool"
+	// ItemNotice is a system event worth a line in the timeline that is
+	// neither a message nor a tool call — currently a context compaction.
+	ItemNotice = "notice"
 )
 
 // Item is one entry in the session timeline, in the order it first appeared.
@@ -35,6 +39,12 @@ type Item struct {
 	Status   string              `json:"status,omitempty"`
 	Input    json.RawMessage     `json:"input,omitempty"`
 	Content  []proto.ToolContent `json:"content,omitempty"`
+
+	// notice
+	NoticeKind string `json:"noticeKind,omitempty"` // compaction
+	Trigger    string `json:"trigger,omitempty"`    // auto | manual
+	PreTokens  int64  `json:"preTokens,omitempty"`
+	PostTokens int64  `json:"postTokens,omitempty"`
 }
 
 // Turn records the lifecycle of one prompt/response cycle.
@@ -376,6 +386,24 @@ func (s *State) Apply(ev proto.Event) {
 		var p proto.UsageUpdatedPayload
 		decode(ev.Payload, &p)
 		s.Usage = p
+
+	case proto.ContextCompacted:
+		var p proto.ContextCompactedPayload
+		decode(ev.Payload, &p)
+		// Anchored to the event's sequence so a replay lands the same item and
+		// two boundaries never collide. It carries no turn id: compaction is
+		// the harness's own housekeeping, so it stands on its own line rather
+		// than folding into a turn.
+		s.upsert("compact:"+strconv.FormatInt(ev.Seq, 10), func(it *Item) {
+			it.Kind = ItemNotice
+			if it.ReceivedAt == 0 {
+				it.ReceivedAt = ev.Timestamp
+			}
+			it.NoticeKind = "compaction"
+			it.Trigger = p.Trigger
+			it.PreTokens = p.PreTokens
+			it.PostTokens = p.PostTokens
+		})
 
 	case proto.PermissionRequested:
 		var p proto.PermissionRequestedPayload

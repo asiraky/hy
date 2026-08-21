@@ -1,4 +1,5 @@
 import {
+  ArchiveIcon,
   ArrowRightIcon,
   BrainIcon,
   CheckIcon,
@@ -21,6 +22,7 @@ import { IconButton } from "~/components/IconButton";
 import { Markdown } from "~/components/Markdown";
 import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
+import { fmtTokens } from "~/lib/format";
 import { cn } from "~/lib/utils";
 import type { Item, SessionState, ToolStatus, Turn } from "~/protocol";
 import { buildRows, foldLabel, rowTurnID, summarise } from "~/rows";
@@ -203,6 +205,27 @@ function TurnFold({ turn, items }: { turn: Turn; items: Item[] }) {
       </button>
 
       {open && <ExpandedItems items={items} />}
+    </div>
+  );
+}
+
+// A compaction boundary, as one quiet centered line in the flow. The harness
+// compressed the conversation to reclaim window; the reader mostly needs to
+// know it happened and roughly how much it recovered.
+function NoticeCard({ item }: { item: Item }) {
+  const detail =
+    item.preTokens && item.postTokens
+      ? `${fmtTokens(item.preTokens)} → ${fmtTokens(item.postTokens)}`
+      : "";
+  return (
+    <div className="fade-in flex justify-center">
+      <div className="text-muted-foreground flex items-center gap-1.5 rounded-full border px-3 py-1 text-[12px]">
+        <ArchiveIcon className="size-3.5 shrink-0" />
+        <span>
+          {item.trigger === "manual" ? "Context compacted" : "Context auto-compacted"}
+          {detail && ` — ${detail}`}
+        </span>
+      </div>
     </div>
   );
 }
@@ -573,6 +596,8 @@ export function Transcript({
                   <ToolRun items={row.items} live={row.live} />
                 ) : row.item.kind === "tool" ? (
                   <ToolCard item={row.item} />
+                ) : row.item.kind === "notice" ? (
+                  <NoticeCard item={row.item} />
                 ) : (
                   <Message
                     item={row.item}
