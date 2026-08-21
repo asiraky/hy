@@ -485,6 +485,17 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 		issues, issuesErr := c.srv.mgr.ListIssues(ctx, a.ProjectID)
 		return map[string]any{"issues": issues, "issuesError": issuesErr}, nil
 
+	case "session_pr":
+		var a sessionArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		// Shaped like list_issues: the pull request is advisory, `gh` can take
+		// seconds to answer, and not knowing is an ordinary answer rather than
+		// a failure — so the reason travels beside the result, not as an error.
+		pr, prErr := c.srv.mgr.SessionPR(ctx, a.SessionID)
+		return map[string]any{"pr": pr, "prError": prErr}, nil
+
 	case "session_changes":
 		var a sessionArgs
 		if err := json.Unmarshal(f.Args, &a); err != nil {
