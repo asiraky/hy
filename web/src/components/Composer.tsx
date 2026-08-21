@@ -1,5 +1,5 @@
 import { ArrowUpIcon, SquareIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
 import { ContextMeter } from "~/components/ContextMeter";
 import { ModelPicker } from "~/components/ModelPicker";
@@ -8,6 +8,8 @@ import type { HarnessMeta, Usage } from "~/protocol";
 import { useIsDesktop } from "~/useMediaQuery";
 
 export function Composer({
+  draft,
+  onDraftChange,
   disabled,
   busy,
   onSend,
@@ -21,6 +23,13 @@ export function Composer({
   onSwitchModel,
   usage,
 }: {
+  /**
+   * The in-progress message. Owned by the parent and keyed per session there,
+   * so it survives this component being unmounted and remounted across a
+   * session switch — the draft is not this component's to lose.
+   */
+  draft: string;
+  onDraftChange: (text: string) => void;
   disabled: boolean;
   busy: boolean;
   onSend: (text: string) => void;
@@ -37,24 +46,24 @@ export function Composer({
   /** The session's token usage, source of the context meter. */
   usage?: Usage;
 }) {
-  const [text, setText] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
   // There is no ⇧↵ worth advertising on a phone, so keep the hint to desktop.
   const isDesktop = useIsDesktop();
 
-  // Grow with the content, up to a cap.
+  // Grow with the content, up to a cap. Runs on mount too, so a restored draft
+  // opens at the right height instead of a single collapsed row.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     el.style.height = "0px";
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-  }, [text]);
+  }, [draft]);
 
   const send = () => {
-    const t = text.trim();
+    const t = draft.trim();
     if (!t || disabled) return;
     onSend(t);
-    setText("");
+    onDraftChange("");
   };
 
   return (
@@ -63,7 +72,7 @@ export function Composer({
         <textarea
           ref={ref}
           rows={1}
-          value={text}
+          value={draft}
           disabled={disabled}
           aria-label="Message"
           placeholder={
@@ -73,7 +82,7 @@ export function Composer({
                 ? "Ask anything…  (↵ to send · ⇧↵ for newline)"
                 : "Ask anything…"
           }
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => onDraftChange(e.target.value)}
           onKeyDown={(e) => {
             if (e.key !== "Enter") return;
             // Shift+Enter is the newline; let the textarea handle it.
@@ -124,7 +133,7 @@ export function Composer({
           ) : (
             <Button
               size="icon"
-              disabled={disabled || !text.trim()}
+              disabled={disabled || !draft.trim()}
               onClick={send}
               aria-label="Send"
               className="size-11 rounded-full md:size-8"

@@ -221,6 +221,64 @@ describe("the empty content column", () => {
   });
 });
 
+describe("composer drafts", () => {
+  const boot = async () => {
+    viewport("desktop");
+    render(<App />);
+    await act(async () => {
+      events.onProjects([project]);
+      events.onHarnesses([harness], "/tmp/repo");
+      events.onSessions([session("a"), session("b")]);
+    });
+  };
+
+  const composer = () => screen.getByLabelText("Message") as HTMLTextAreaElement;
+
+  const open = async (id: string) => {
+    await act(async () => {
+      fireEvent.click(screen.getByText(`Session ${id}`));
+      events.onState(id, state(id, "default"));
+    });
+  };
+
+  it("keeps a half-typed message when you switch away and come back", async () => {
+    await boot();
+    await open("a");
+
+    await act(async () => {
+      fireEvent.change(composer(), { target: { value: "draft for a" } });
+    });
+    expect(composer().value).toBe("draft for a");
+
+    // Switching sessions unmounts the whole content subtree, Composer included.
+    await open("b");
+    expect(composer().value).toBe("");
+
+    await open("a");
+    expect(composer().value).toBe("draft for a");
+  });
+
+  it("clears the draft once the message is sent", async () => {
+    await boot();
+    await open("a");
+
+    await act(async () => {
+      fireEvent.change(composer(), { target: { value: "hello" } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(composer(), { key: "Enter" });
+    });
+
+    expect(command).toHaveBeenCalledWith("prompt", { sessionId: "a", text: "hello" });
+    expect(composer().value).toBe("");
+
+    // Coming back to the session shows the cleared field, not the sent text.
+    await open("b");
+    await open("a");
+    expect(composer().value).toBe("");
+  });
+});
+
 describe("losing the attached session", () => {
   it("lets go even if the session never sent a first snapshot", async () => {
     viewport("phone");

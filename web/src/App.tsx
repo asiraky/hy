@@ -47,6 +47,19 @@ export function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [state, setState] = useState<SessionState | null>(null);
+  // Composer drafts, kept per session up here rather than inside the Composer.
+  // Switching sessions nulls `state`, which unmounts the whole content subtree
+  // (Composer included) and remounts it for the next session — so a draft owned
+  // by the Composer would be destroyed on every switch. Holding it in the
+  // parent, keyed by session id, lets a half-typed message survive the swap and
+  // still be there when you come back. Session scope only: no persistence, and
+  // the map is pruned as sessions go away (see below).
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const setDraft = useCallback(
+    (id: string, text: string) =>
+      setDrafts((d) => (d[id] === text ? d : { ...d, [id]: text })),
+    [],
+  );
   const isDesktop = useIsDesktop();
   // Whether the last-session key was set at boot. Read once, before anything
   // can write it, because it decides what the very first frame shows. Storage
@@ -384,6 +397,24 @@ export function App() {
     if (!isDesktop) setSidebarOpen(true);
   }, [sessions, activeId, isDesktop]);
 
+  // Drop drafts for sessions that no longer exist, so a deleted session does
+  // not leave its text behind for the life of the tab. The active session is
+  // spared even when the list has not caught up with it yet: a freshly created
+  // session is attached before the broadcast listing it arrives, and its draft
+  // must not be pruned in that gap.
+  useEffect(() => {
+    setDrafts((d) => {
+      const live = new Set(sessions.map((s) => s.id));
+      const next: Record<string, string> = {};
+      let changed = false;
+      for (const [id, text] of Object.entries(d)) {
+        if (live.has(id) || id === activeId) next[id] = text;
+        else changed = true;
+      }
+      return changed ? next : d;
+    });
+  }, [sessions, activeId]);
+
   // Nothing measures the composer on its own, so a fixed padding could only
   // ever guess at its height — and it grows (a tall draft, a permission prompt
   // appearing above it) well past any guess. A ResizeObserver on the whole
@@ -541,6 +572,8 @@ export function App() {
               )}
 
               <Composer
+                draft={activeId ? (drafts[activeId] ?? "") : ""}
+                onDraftChange={(text) => activeId && setDraft(activeId, text)}
                 disabled={state.closed || workspaceBusy || workspaceFailed}
                 disabledPlaceholder={workspaceBusy ? (state.phase === "cleaning" ? "Cleaning up workspace…" : "Preparing workspace…") : workspaceFailed ? "Workspace needs attention" : undefined}
                 busy={state.phase === "turn"}
