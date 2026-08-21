@@ -16,7 +16,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // high-DPI layouts) are why it is not zero.
 const AT_BOTTOM_PX = 8;
 
-const atBottom = (el: HTMLElement) =>
+// Exported for the resume cache, which records "was at the tail" with the
+// same tolerance the pin itself uses.
+export const atBottom = (el: HTMLElement) =>
   el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX;
 
 // Nothing to leave, so nothing to read as leaving: a transcript that fits its
@@ -33,15 +35,20 @@ const canScroll = (el: HTMLElement) => el.scrollHeight - el.clientHeight > AT_BO
  * inside it whose height changes — text revealed between renders grows the
  * content without React knowing, so the pin has to watch the box, not state.
  * `stick()` is for the cases React does drive; it is a no-op while unpinned.
+ *
+ * `initialPinned` is for a scroller restoring a saved position: mounting
+ * pinned would snap it straight to the bottom before the restore could land.
  */
-export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>() {
+export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>(
+  initialPinned = true,
+) {
   const scrollerRef = useRef<S>(null);
   const contentRef = useRef<C>(null);
 
   // The pin is state because a button hangs off it, and a ref because the
   // scroll and resize handlers below read it outside of React's world.
-  const [pinned, setPinned] = useState(true);
-  const pinnedRef = useRef(true);
+  const [pinned, setPinned] = useState(initialPinned);
+  const pinnedRef = useRef(initialPinned);
 
   // The last scroll position we saw. A drop from it is the one signal that
   // catches scrollbar drags, which produce no other event of their own.

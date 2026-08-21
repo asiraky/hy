@@ -33,8 +33,9 @@ import { Spinner } from "~/components/ui/spinner";
 import { fmtTokens } from "~/lib/format";
 import { cn } from "~/lib/utils";
 import type { Item, SessionState, ToolStatus, Turn } from "~/protocol";
+import { saveResume } from "~/resume";
 import { buildRows, foldLabel, rowTurnID, summarise } from "~/rows";
-import { useAutoScroll } from "~/useAutoScroll";
+import { atBottom, useAutoScroll } from "~/useAutoScroll";
 import { useSmoothText } from "~/useSmoothText";
 
 // Room reserved beneath the transcript's tail: the overlay's measured height
@@ -583,6 +584,7 @@ function InterruptedCard({ turn, onContinue }: { turn: Turn; onContinue: () => v
 
 export function Transcript({
   state,
+  initialScroll,
   onRetryProvision,
   onCleanup,
   onForceDelete,
@@ -590,6 +592,9 @@ export function Transcript({
   onOpenDiff,
 }: {
   state: SessionState;
+  /** Where a resumed page was scrolled when it went to background (resume.ts).
+      Applied once, on mount; the parent clears the prop right after. */
+  initialScroll?: { top: number; atBottom: boolean };
   onRetryProvision: () => void;
   onCleanup: () => void;
   onForceDelete: () => void;
@@ -597,13 +602,54 @@ export function Transcript({
   onOpenDiff: (path?: string) => void;
 }) {
   // Follow the tail unless the reader has scrolled up; the button below is
-  // how they get back.
+  // how they get back. A restore that was scrolled up mounts unpinned, or the
+  // first stick would snap it to the bottom over the restored position.
   const { scrollerRef, contentRef, pinned, stick, scrollToBottom } = useAutoScroll<
     HTMLDivElement,
     HTMLDivElement
-  >();
+  >(initialScroll?.atBottom ?? true);
+
+  // The one-shot restore, from the ref because the prop is cleared after
+  // mount and later renders must not re-apply a stale position. A restore
+  // that was at the tail needs no offset: the pin above starts armed and the
+  // stick below lands it, exactly as if the reader had never left.
+  const initialScrollRef = useRef(initialScroll);
+  useLayoutEffect(() => {
+    const init = initialScrollRef.current;
+    const el = scrollerRef.current;
+    if (!el || !init || init.atBottom) return;
+    el.scrollTop = init.top;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useLayoutEffect(stick, [stick, state.items, state.seq]);
+
+  // The other half of resume.ts: as the page goes to background — the moment
+  // a mobile browser may discard the tab — save the state and where it was
+  // scrolled, so the reload that follows can paint this transcript instead of
+  // "Attaching…". The state rides in a ref so the listeners subscribe once
+  // rather than per event.
+  const latestState = useRef(state);
+  useEffect(() => {
+    latestState.current = state;
+  }, [state]);
+  useEffect(() => {
+    const save = () => {
+      const el = scrollerRef.current;
+      if (!el) return;
+      saveResume(latestState.current, el.scrollTop, atBottom(el));
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") save();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", save);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", save);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Only the final agent block is still growing; everything above it is
   // settled and renders in full. A block the harness opened but never filled is
