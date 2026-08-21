@@ -30,39 +30,44 @@ export async function copyText(text: string): Promise<void> {
  * The pre-Clipboard-API copy: select text in an offscreen field, then ask the
  * document to copy the selection.
  *
- * The details are load-bearing on iOS Safari. The field has to be in the
- * layout (not `display:none`) and un-zoomable (`font-size: 16px` avoids the
- * focus zoom), it must be `readonly` so tapping copy cannot raise the
- * keyboard, and the selection has to be made with a Range as well as
- * `setSelectionRange` — Safari ignores the latter alone on a readonly field.
+ * The details are load-bearing. The field has to be focused before the
+ * selection is made — Blink only caches `setSelectionRange` on an unfocused
+ * text control and never touches the document selection, so an unfocused field
+ * copies nothing. It has to stay `readonly` so focusing it cannot raise the
+ * keyboard on a phone, and 16px so focusing it cannot zoom the page in Mobile
+ * Safari. It is positioned offscreen rather than hidden because a field with
+ * no layout cannot hold a selection at all.
  */
 function legacyCopy(text: string): boolean {
   const selection = window.getSelection();
-  // Whatever the reader had selected before pressing copy is theirs; put it
-  // back rather than leaving our scratch field's selection behind.
-  const previous = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+  // Whatever the reader had selected, and whatever had focus — usually the
+  // composer — is theirs. Put both back rather than leaving our scratch field's
+  // state behind.
+  const previousRange = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+  const previouslyFocused = document.activeElement;
 
   const field = document.createElement("textarea");
   field.value = text;
   field.setAttribute("readonly", "");
-  field.contentEditable = "true";
   field.style.cssText =
-    "position:fixed;top:0;left:0;width:1px;height:1px;padding:0;border:0;opacity:0;font-size:16px;";
+    "position:fixed;top:0;left:-9999px;width:1px;height:1px;padding:0;border:0;font-size:16px;";
   document.body.appendChild(field);
 
   try {
-    const range = document.createRange();
-    range.selectNodeContents(field);
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-    field.setSelectionRange?.(0, text.length);
+    field.focus({ preventScroll: true });
+    field.setSelectionRange(0, field.value.length);
+    // `execCommand("copy")` reports success even when there was no selection to
+    // copy, so its return value alone cannot be trusted: check that the field
+    // really is selected first, or a silent failure becomes a lying "Copied".
+    if (text.length > 0 && field.selectionEnd - field.selectionStart !== text.length) return false;
     return document.execCommand?.("copy") ?? false;
   } catch {
     return false;
   } finally {
     field.remove();
     selection?.removeAllRanges();
-    if (previous) selection?.addRange(previous);
+    if (previousRange) selection?.addRange(previousRange);
+    if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus({ preventScroll: true });
   }
 }
 
