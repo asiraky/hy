@@ -363,6 +363,12 @@ func (s *session) SetModel(ctx context.Context, model string) error {
 	}
 	s.mu.Lock()
 	s.model = model
+	// The cached window belonged to the old model. Clearing it stops a stale
+	// value (a 1M Opus window shown for a 200k Sonnet) from persisting: the
+	// next result recomputes from the new model, and the next context_usage
+	// report replaces it with the harness's authoritative figure.
+	s.usage.ContextWindow = 0
+	s.usage.ContextLimit = 0
 	s.mu.Unlock()
 	return nil
 }
@@ -664,10 +670,13 @@ func (s *session) handleSDKMessage(msg map[string]json.RawMessage) {
 
 // contextWindowFor is the fallback window used only when the harness cannot
 // report context usage directly (an older CLI without the control method): the
-// standard 200k unless the model id opts into the 1M beta. When
-// getContextUsage is available it supplies the real window and this is unused.
+// standard 200k unless the model is one of the 1M ones. The Opus 5 generation
+// is 1M whether or not its id carries the "[1m]" tag (the harness reports the
+// bare "claude-opus-5" mid-session), and older Opus ids run at 1M too, so the
+// family name is recognised as well as the tag. When getContextUsage is
+// available it supplies the real window and this is unused.
 func contextWindowFor(model string) int64 {
-	if strings.Contains(model, "[1m]") {
+	if strings.Contains(model, "[1m]") || strings.Contains(model, "opus") {
 		return 1_000_000
 	}
 	return 200_000

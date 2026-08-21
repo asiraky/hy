@@ -402,7 +402,20 @@ export function Composer({
               lockInstance
               disabled={disabled}
               value={{ harness, instance, model }}
-              onChange={(next) => onSwitchModel?.(next.model)}
+              onChange={(next) => {
+                onSwitchModel?.(next.model);
+                // Effort is per model: a level the old model allowed (Codex's
+                // "ultra") may be one the new model rejects, which would break
+                // its next turn. When the chosen model does not support the
+                // current effort, drop to its strongest supported level —
+                // closest to the intent, and a valid, displayable value.
+                const nextEfforts =
+                  resolveModel(resolveInstance(pickerInstances(harnesses), instance, harness), next.model)
+                    ?.efforts ?? [];
+                if (effort && nextEfforts.length > 0 && !nextEfforts.includes(effort)) {
+                  onSwitchEffort?.(nextEfforts[nextEfforts.length - 1]);
+                }
+              }}
               open={modelPickerOpen}
               onOpenChange={setModelPickerOpen}
               className="text-muted-foreground hover:text-foreground h-11 w-auto max-w-[45%] min-w-0 border-0 px-2 shadow-none md:h-8 md:min-h-8"

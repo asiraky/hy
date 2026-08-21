@@ -20,21 +20,26 @@ import (
 const modelListTimeout = 60 * time.Second
 
 // Models is the fallback list, used only until a live answer arrives or when
-// the harness cannot be asked. It is family aliases and nothing else: no
-// versions, because claiming a version we did not read from the harness is how
-// the old hardcoded list went stale, and no specific model ids, because an id
-// this build believes in may not be one the installed Claude Code serves.
+// the harness cannot be asked. The current models are family aliases and
+// nothing else: no versions, because claiming a version we did not read from
+// the harness is how the old hardcoded list went stale. The curated legacy
+// group is appended — those ids are verified to run, so a pending or failed
+// discovery should not be the reason they cannot be picked.
 //
 // The default row carries no id at all. That is deliberate: an empty model
 // means "whatever the harness picks", which is the only default that cannot be
 // wrong — and it says so, rather than being an unexplained "Default".
 func (a *Adapter) Models() []adapter.ModelMeta {
-	return []adapter.ModelMeta{
+	base := []adapter.ModelMeta{
 		{ID: "", Label: "Default", Version: "chosen by Claude Code", Description: "No model is named, so the harness starts whatever it is set to use", Default: true},
 		{ID: "fable", Label: "Fable"},
 		{ID: "opus", Label: "Opus"},
 		{ID: "sonnet", Label: "Sonnet"},
 	}
+	// The legacy models the harness still runs are offered even before (or
+	// without) a live answer: they were hardcoded precisely because they work,
+	// so a pending or failed discovery should not hide them.
+	return append(base, legacyModels...)
 }
 
 // legacyModels are older Claude models the installed Claude Code still accepts
@@ -178,7 +183,9 @@ func mapClaudeModels(in []modelInfo) []adapter.ModelMeta {
 		// Two aliases can name the same concrete model (the recommended
 		// "default" and a "opus[1m]" both resolve to Opus 5). Keep one row:
 		// the named alias for its label, carrying the recommended flag across.
-		if key := m.ResolvedModel; key != "" {
+		// The key drops the "[1m]" context tag so a tagged and a bare form of
+		// the same model still collapse together.
+		if key := stripContextTag(m.ResolvedModel); key != "" {
 			if i, seen := byResolved[key]; seen {
 				kept := current[i]
 				if kept.ID == "default" && row.ID != "default" {
@@ -206,6 +213,16 @@ func mapClaudeModels(in []modelInfo) []adapter.ModelMeta {
 // dropped however the harness names it.
 func isHaiku(m modelInfo) bool {
 	return strings.Contains(m.Value, "haiku") || strings.Contains(m.ResolvedModel, "haiku")
+}
+
+// stripContextTag drops a trailing context-window tag like "[1m]" from a model
+// id, so "claude-opus-5[1m]" and the bare "claude-opus-5" the harness reports
+// mid-session are treated as the same model.
+func stripContextTag(id string) string {
+	if i := strings.LastIndex(id, "["); i >= 0 && strings.HasSuffix(id, "]") {
+		return id[:i]
+	}
+	return id
 }
 
 // sortByStrength orders the current models Fable, then Opus, then Sonnet, then
