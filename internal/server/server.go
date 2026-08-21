@@ -193,6 +193,10 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("/ws", s.serveWS)
 
+	// A pty per open terminal tab, scoped to the session's checkout. Behind
+	// the gate like everything else: private by default.
+	mux.HandleFunc("/api/term", s.serveTerm)
+
 	// In development the bundle on disk is stale or absent, so Vite is the
 	// source of truth for everything that is not the API.
 	switch {

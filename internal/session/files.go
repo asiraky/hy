@@ -120,6 +120,20 @@ func (m *Manager) SessionReadFile(ctx context.Context, sessionID, path string) (
 	return out, nil
 }
 
+// SessionWorkspaceRoot is the directory a session's terminal (and any other
+// workspace-scoped surface) starts in. Unlike the file surfaces it has no
+// warning channel: a terminal with nowhere to run is an error.
+func (m *Manager) SessionWorkspaceRoot(ctx context.Context, sessionID string) (string, error) {
+	root, warning, err := m.workspaceRoot(ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if warning != "" {
+		return "", fmt.Errorf("%s", warning)
+	}
+	return root, nil
+}
+
 // workspaceRoot is where a session's file surface is rooted: the git toplevel
 // of its checkout when there is one, else the checkout directory itself. The
 // warning mirrors diffScope's: an unusable root is an answer, not an error.
