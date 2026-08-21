@@ -403,7 +403,9 @@ export function App() {
       ro.disconnect();
       layout.style.removeProperty("--composer-h");
     };
-  }, [hasSession]);
+    // themePreview toggles the whole main tree in and out below, so the
+    // measured elements are remounted under it: re-run to observe the new ones.
+  }, [hasSession, themePreview]);
 
   if (themePreview) return <ThemePreview />;
 

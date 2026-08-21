@@ -161,8 +161,12 @@ export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>() {
     const scroller = scrollerRef.current;
     const content = contentRef.current;
     if (!scroller || !content || typeof ResizeObserver === "undefined") return;
+    // Watch the border box, not the content box: the tail's reserved room is
+    // bottom padding that tracks the floating composer, and a composer growing
+    // past that headroom would otherwise creep over the tail without ever
+    // resizing the content box — so the pin would never re-snap to clear it.
     const ro = new ResizeObserver(() => stick());
-    ro.observe(content);
+    ro.observe(content, { box: "border-box" });
     return () => ro.disconnect();
   }, [stick]);
 
