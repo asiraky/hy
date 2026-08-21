@@ -24,7 +24,7 @@ export function PermissionPrompt({
     <div
       role="group"
       aria-label="Permission request"
-      className="attention-in border-attention/50 bg-attention-surface/60 shrink-0 border-t-2"
+      className="attention-in border-attention bg-attention-surface shrink-0 border-t-2"
     >
       <div className="mx-auto max-w-3xl px-4 py-3.5 md:px-5">
         <div className="flex items-center gap-2">
@@ -38,7 +38,7 @@ export function PermissionPrompt({
         <p className="mt-1.5 font-mono text-[13px] break-words">{request.title}</p>
 
         {detail && (
-          <pre className="scroll-thin bg-muted/70 text-muted-foreground mt-2 max-h-20 overflow-auto overscroll-contain rounded-md p-2 font-mono text-[11px] leading-relaxed md:max-h-32">
+          <pre className="scroll-thin bg-muted text-muted-foreground mt-2 max-h-20 overflow-auto overscroll-contain rounded-md p-2 font-mono text-[11px] leading-relaxed md:max-h-32">
             {detail}
           </pre>
         )}
