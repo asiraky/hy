@@ -479,6 +479,28 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 		}
 		return map[string]any{"diff": diff}, nil
 
+	case "session_file_tree":
+		var a fileTreeArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		tree, err := c.srv.mgr.SessionFileTree(ctx, a.SessionID, a.IncludeIgnored)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"tree": tree}, nil
+
+	case "session_read_file":
+		var a readFileArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		file, err := c.srv.mgr.SessionReadFile(ctx, a.SessionID, a.Path)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"file": file}, nil
+
 	case "get_user_config":
 		cfg, err := userconfig.Load()
 		if err != nil {

@@ -142,6 +142,7 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
           it.role = p.role;
           it.contentKind = p.kind;
           it.turnId = p.turnId;
+          if (p.parentToolCallId) it.parentId = p.parentToolCallId;
           it.text = (it.text ?? "") + p.delta;
         }),
       };
@@ -159,6 +160,7 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
           it.title = p.title;
           it.status = p.status;
           it.input = p.rawInput;
+          if (p.parentToolCallId) it.parentId = p.parentToolCallId;
         }),
       };
 
@@ -171,6 +173,7 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
           if (p.status) it.status = p.status;
           if (p.title) it.title = p.title;
           if (p.rawInput) it.input = p.rawInput;
+          if (p.parentToolCallId) it.parentId = p.parentToolCallId;
           if (p.content?.length) it.content = [...(it.content ?? []), ...p.content];
         }),
       };

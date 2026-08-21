@@ -10,6 +10,7 @@ import { useMemo, useState } from "react";
 
 import { Button } from "~/components/ui/button";
 import { cn } from "~/lib/utils";
+import { buildTree, collectDirs, fileName, type TreeNode } from "~/lib/tree";
 import type { ChangedFile, TurnDiff } from "~/protocol";
 
 // A preview stands in for a list too long to show: one file per area of the
@@ -81,81 +82,6 @@ function trim(n: number): string {
   return n < 10 ? n.toFixed(1).replace(/\.0$/, "") : String(Math.round(n));
 }
 
-// ---- the tree ----
-
-interface TreeNode {
-  // path is the full path for a file, and the directory prefix for a folder.
-  path: string;
-  // name is what the row shows: a basename, or a run of single-child folders
-  // collapsed into one label.
-  name: string;
-  children?: TreeNode[];
-  file?: ChangedFile;
-  additions: number;
-  deletions: number;
-}
-
-/**
- * Group the paths into the folders they live in. Showing basenames in a tree is
- * what lets a row stay readable on a phone: the full path is the shape of the
- * tree above it, so no row has to be truncated in the middle to fit.
- */
-function buildTree(files: ChangedFile[]): TreeNode[] {
-  const root: TreeNode = { path: "", name: "", children: [], additions: 0, deletions: 0 };
-
-  for (const file of files) {
-    const segments = file.path.split("/").filter(Boolean);
-    let node = root;
-    node.additions += file.additions;
-    node.deletions += file.deletions;
-
-    for (let i = 0; i < segments.length; i++) {
-      const last = i === segments.length - 1;
-      const path = segments.slice(0, i + 1).join("/");
-      let next = node.children?.find((c) => c.path === path);
-      if (!next) {
-        next = { path, name: segments[i], additions: 0, deletions: 0, ...(last ? {} : { children: [] }) };
-        node.children?.push(next);
-      }
-      // One path can be both: a change set may delete `foo` and add `foo/bar`.
-      // The node then carries a file and children at once, and the row renders
-      // both rather than dropping whichever arrived second.
-      if (last) next.file = file;
-      else if (!next.children) next.children = [];
-      next.additions += file.additions;
-      next.deletions += file.deletions;
-      node = next;
-    }
-  }
-
-  return (root.children ?? []).map(compactChain).sort(byKindThenName);
-}
-
-// A folder with one child folder and nothing else is a step on the way to
-// somewhere, not a place. Collapsing the run into `apps/web/src` spends one row
-// on what would otherwise take three.
-function compactChain(node: TreeNode): TreeNode {
-  let current = node;
-  let name = node.name;
-  while (!current.file && current.children?.length === 1 && current.children[0].children) {
-    current = current.children[0];
-    name = `${name}/${current.name}`;
-  }
-  return {
-    ...current,
-    name,
-    children: current.children?.map(compactChain).sort(byKindThenName),
-  };
-}
-
-function byKindThenName(a: TreeNode, b: TreeNode): number {
-  const aDir = a.children ? 0 : 1;
-  const bDir = b.children ? 0 : 1;
-  // A node that is both sorts with the directories, where its children are.
-  if (aDir !== bDir) return aDir - bDir;
-  return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
-}
-
 // ---- the preview, for a change set too big to list ----
 
 interface Scope {
@@ -202,11 +128,6 @@ function previewFiles(files: ChangedFile[]): ChangedFile[] {
   return picked;
 }
 
-function fileName(path: string): string {
-  const slash = path.lastIndexOf("/");
-  return slash === -1 ? path : path.slice(slash + 1);
-}
-
 // ---- rows ----
 
 function FileRow({
@@ -215,7 +136,7 @@ function FileRow({
   indented,
   onOpen,
 }: {
-  node: TreeNode;
+  node: TreeNode<ChangedFile>;
   depth: number;
   indented: boolean;
   onOpen: (path: string) => void;
@@ -254,7 +175,7 @@ function DirectoryRow({
   onToggle,
   onOpen,
 }: {
-  node: TreeNode;
+  node: TreeNode<ChangedFile>;
   depth: number;
   openDirs: Set<string>;
   onToggle: (path: string) => void;
@@ -301,7 +222,7 @@ function Row({
   onToggle,
   onOpen,
 }: {
-  node: TreeNode;
+  node: TreeNode<ChangedFile>;
   depth: number;
   openDirs: Set<string>;
   onToggle: (path: string) => void;
@@ -341,7 +262,10 @@ export function ChangedFiles({
   onOpenDiff: (path?: string) => void;
 }) {
   const files = diff.files;
-  const tree = useMemo(() => buildTree(files), [files]);
+  const tree = useMemo(
+    () => buildTree(files.map((f) => ({ path: f.path, file: f, additions: f.additions, deletions: f.deletions }))),
+    [files],
+  );
   const scopes = useMemo(() => summariseScopes(files), [files]);
   const preview = useMemo(() => previewFiles(files), [files]);
 
@@ -458,17 +382,4 @@ export function ChangedFiles({
       )}
     </div>
   );
-}
-
-function collectDirs(nodes: TreeNode[]): string[] {
-  const out: string[] = [];
-  const walk = (list: TreeNode[]) => {
-    for (const node of list) {
-      if (!node.children) continue;
-      out.push(node.path);
-      walk(node.children);
-    }
-  };
-  walk(nodes);
-  return out;
 }

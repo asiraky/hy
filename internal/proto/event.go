@@ -231,6 +231,10 @@ type MessageChunkPayload struct {
 	Kind    string `json:"kind"` // text | thought
 	BlockID string `json:"blockId"`
 	Delta   string `json:"delta"`
+	// ParentToolCallID names the tool call (a Task/Agent spawn) this chunk was
+	// produced inside, when the harness reports one. Empty means the top-level
+	// conversation.
+	ParentToolCallID string `json:"parentToolCallId,omitempty"`
 }
 
 type ToolContent struct {
@@ -248,14 +252,18 @@ type ToolCallStartedPayload struct {
 	Title      string          `json:"title"`
 	Status     string          `json:"status"`
 	RawInput   json.RawMessage `json:"rawInput,omitempty"`
+	// ParentToolCallID links a call made by a subagent to the Task/Agent call
+	// that spawned it. Empty means the top-level conversation.
+	ParentToolCallID string `json:"parentToolCallId,omitempty"`
 }
 
 type ToolCallUpdatedPayload struct {
-	ToolCallID string          `json:"toolCallId"`
-	Status     string          `json:"status,omitempty"`
-	Title      string          `json:"title,omitempty"`
-	Content    []ToolContent   `json:"content,omitempty"`
-	RawInput   json.RawMessage `json:"rawInput,omitempty"`
+	ToolCallID       string          `json:"toolCallId"`
+	Status           string          `json:"status,omitempty"`
+	Title            string          `json:"title,omitempty"`
+	Content          []ToolContent   `json:"content,omitempty"`
+	RawInput         json.RawMessage `json:"rawInput,omitempty"`
+	ParentToolCallID string          `json:"parentToolCallId,omitempty"`
 }
 
 type PlanEntry struct {

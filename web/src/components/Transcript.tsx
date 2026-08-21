@@ -607,19 +607,23 @@ export function Transcript({
   // leave the turn looking idle while the agent works. And a block whose turn
   // has finished is not it either — the newest text being settled means
   // nothing is streaming, however the phase got confused.
+  // Work done inside a subagent narrates in the subagents surface, not here:
+  // interleaving three agents' tool calls into one column reads as noise.
+  const ownItems = useMemo(() => state.items.filter((it) => !it.parentId), [state.items]);
+
   const liveAgentId = useMemo(() => {
-    for (let i = state.items.length - 1; i >= 0; i--) {
-      const it = state.items[i];
+    for (let i = ownItems.length - 1; i >= 0; i--) {
+      const it = ownItems[i];
       if (it.kind !== "message" || it.role !== "agent" || (it.text ?? "").trim() === "") continue;
       const turn = it.turnId ? state.turns.find((t) => t.id === it.turnId) : undefined;
       return turn?.done ? undefined : it.id;
     }
     return undefined;
-  }, [state.items, state.turns]);
+  }, [ownItems, state.turns]);
 
   const rows = useMemo(
-    () => buildRows(state.items, state.turns, state.phase),
-    [state.items, state.turns, state.phase],
+    () => buildRows(ownItems, state.turns, state.phase),
+    [ownItems, state.turns, state.phase],
   );
 
   // Only the newest turn can be continued, and only once nothing is running:

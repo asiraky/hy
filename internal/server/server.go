@@ -49,6 +49,11 @@ type Server struct {
 	// already holds.
 	liveMu sync.Mutex
 	live   map[*conn]struct{}
+
+	// termLive tracks open terminal sockets by device, for the same reason —
+	// a revoked phone must not keep an interactive shell.
+	termMu   sync.Mutex
+	termLive map[*websocket.Conn]string
 }
 
 type Options struct {
@@ -71,6 +76,7 @@ type Options struct {
 func New(o Options) *Server {
 	s := &Server{
 		live:       map[*conn]struct{}{},
+		termLive:   map[*websocket.Conn]string{},
 		id:         uuid.NewString(),
 		mgr:        o.Manager,
 		store:      o.Store,
@@ -192,6 +198,10 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	mux.HandleFunc("/ws", s.serveWS)
+
+	// A pty per open terminal tab, scoped to the session's checkout. Behind
+	// the gate like everything else: private by default.
+	mux.HandleFunc("/api/term", s.serveTerm)
 
 	// In development the bundle on disk is stale or absent, so Vite is the
 	// source of truth for everything that is not the API.
@@ -332,6 +342,19 @@ func (s *Server) closeDevice(id string) {
 
 	for _, c := range doomed {
 		_ = c.ws.Close(websocket.StatusPolicyViolation, "device revoked")
+	}
+
+	s.termMu.Lock()
+	var doomedTerms []*websocket.Conn
+	for ws, device := range s.termLive {
+		if device == id {
+			doomedTerms = append(doomedTerms, ws)
+		}
+	}
+	s.termMu.Unlock()
+
+	for _, ws := range doomedTerms {
+		_ = ws.Close(websocket.StatusPolicyViolation, "device revoked")
 	}
 }
 

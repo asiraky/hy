@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Client, wsURL, type ConnectionStatus } from "./client";
 import { useIsDesktop } from "./useMediaQuery";
-import type { Access, FileDiff, HarnessMeta, Project, ProjectConfig, SessionChanges, SessionMeta, SessionState, UserConfig, Workspace } from "./protocol";
+import type { Access, FileContent, FileDiff, FileTree, HarnessMeta, Project, ProjectConfig, SessionChanges, SessionMeta, SessionState, UserConfig, Workspace } from "./protocol";
 import { AccessPanel } from "./components/Access";
-import { Changes } from "./components/Changes";
+import { Panel, type PanelRequest } from "./components/panel/Panel";
+import { liveAgentCount } from "./components/panel/AgentsSurface";
+import { OpenPathContext } from "./lib/openPath";
 import { Composer } from "./components/Composer";
 import { NewSession } from "./components/NewSession";
 import type { NewSessionInput } from "./components/NewSession";
@@ -47,6 +49,12 @@ export function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [state, setState] = useState<SessionState | null>(null);
+  // Read by long-lived callbacks (openPath) that must see the current state
+  // without re-creating themselves on every event.
+  const stateRef = useRef<SessionState | null>(null);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
   // Composer drafts, kept per session up here rather than inside the Composer.
   // Switching sessions nulls `state`, which unmounts the whole content subtree
   // (Composer included) and remounts it for the next session — so a draft owned
@@ -106,16 +114,29 @@ export function App() {
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
-  // Which file the changes panel should reveal, and a counter that changes on
-  // every request. Without the counter, asking for the same file twice would
-  // look identical to the panel and it would not scroll back to it.
-  const [reveal, setReveal] = useState<{ path: string; nonce: number } | null>(null);
+  // What the panel should put on screen, and a counter that changes on every
+  // request. Without the counter, asking for the same file twice would look
+  // identical to the panel and it would not bring it back into view.
+  const [panelRequest, setPanelRequest] = useState<PanelRequest | null>(null);
 
   // Opening the diff from a turn's card: show the panel, and put it on the file
   // that was clicked.
   const openDiff = useCallback((path?: string) => {
     setShowChanges(true);
-    if (path) setReveal((current) => ({ path, nonce: (current?.nonce ?? 0) + 1 }));
+    setPanelRequest((current) => ({ kind: "diff", path, nonce: (current?.nonce ?? 0) + 1 }));
+  }, []);
+
+  // Opening a path clicked in prose. The panel routes it: the diff surface
+  // when the session changed it, the file surface otherwise. An absolute path
+  // under the checkout is relativised first; the server only serves the
+  // workspace.
+  const openPath = useCallback((path: string, line?: number) => {
+    const cwd = stateRef.current?.cwd ?? "";
+    let rel = path;
+    if (cwd && (rel === cwd || rel.startsWith(cwd + "/"))) rel = rel.slice(cwd.length).replace(/^\//, "");
+    if (rel === "") return;
+    setShowChanges(true);
+    setPanelRequest((current) => ({ kind: "path", path: rel, line, nonce: (current?.nonce ?? 0) + 1 }));
   }, []);
 
   const clientRef = useRef<Client | null>(null);
@@ -193,7 +214,7 @@ export function App() {
       setChangesExpanded(false);
       // A file asked for in one session means nothing in the next, and another
       // session holding the same path would otherwise open it unasked.
-      setReveal(null);
+      setPanelRequest(null);
       setState(null);
       localStorage.setItem(LAST_SESSION, id);
       clientRef.current?.attach(id);
@@ -242,6 +263,24 @@ export function App() {
     async (path: string) => {
       const res = await clientRef.current!.command("session_file_diff", { sessionId: activeId, path });
       return res.diff as FileDiff;
+    },
+    [activeId],
+  );
+
+  // The real filesystem, for the files and file surfaces: git is the diff
+  // surface, and a file the session never touched is exactly what it can't show.
+  const loadFileTree = useCallback(
+    async (includeIgnored: boolean) => {
+      const res = await clientRef.current!.command("session_file_tree", { sessionId: activeId, includeIgnored });
+      return res.tree as FileTree;
+    },
+    [activeId],
+  );
+
+  const loadFile = useCallback(
+    async (path: string) => {
+      const res = await clientRef.current!.command("session_read_file", { sessionId: activeId, path });
+      return res.file as FileContent;
     },
     [activeId],
   );
@@ -513,11 +552,17 @@ export function App() {
               )}
 
               <IconButton
-                label={showChanges ? "Hide changed files" : "Show changed files"}
+                label={showChanges ? "Hide the panel" : "Show the panel"}
                 onClick={() => setShowChanges((v) => !v)}
-                className={cn(showChanges && "bg-accent")}
+                className={cn("relative", showChanges && "bg-accent")}
               >
                 <FileDiffIcon />
+                {/* A live agent-count badge: work is happening off-transcript. */}
+                {liveAgentCount(state.items) > 0 && (
+                  <span className="bg-primary text-primary-foreground absolute -top-0.5 -right-0.5 flex size-3.5 items-center justify-center rounded-full text-[9px] tabular-nums">
+                    {liveAgentCount(state.items)}
+                  </span>
+                )}
               </IconButton>
 
               {activeProject && (
@@ -543,7 +588,9 @@ export function App() {
                 being cut by a border. */}
             <div className="from-background pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-gradient-to-b to-transparent" />
 
-            <Transcript state={state} onContinue={()=>activeId&&clientRef.current?.command("continue_session",{sessionId:activeId})} onRetryProvision={()=>activeId&&clientRef.current?.command("retry_provision",{sessionId:activeId})} onCleanup={()=>activeId&&clientRef.current?.command("cleanup_session",{sessionId:activeId})} onForceDelete={()=>activeId&&forceDelete(activeId)} onOpenDiff={openDiff} />
+            <OpenPathContext.Provider value={openPath}>
+              <Transcript state={state} onContinue={()=>activeId&&clientRef.current?.command("continue_session",{sessionId:activeId})} onRetryProvision={()=>activeId&&clientRef.current?.command("retry_provision",{sessionId:activeId})} onCleanup={()=>activeId&&clientRef.current?.command("cleanup_session",{sessionId:activeId})} onForceDelete={()=>activeId&&forceDelete(activeId)} onOpenDiff={openDiff} />
+            </OpenPathContext.Provider>
 
             {/* The mirror of the header fade: content dissolves into the
                 composer instead of sliding under a hard edge, and it hides the
@@ -602,7 +649,11 @@ export function App() {
       </main>
 
       {state && activeId && (
-        <Changes
+        <Panel
+          // Remounted per session: the tab model is per-session state.
+          key={activeId}
+          sessionId={activeId}
+          items={state.items}
           open={showChanges}
           onClose={() => { setShowChanges(false); setChangesExpanded(false); }}
           expanded={changesExpanded}
@@ -611,7 +662,9 @@ export function App() {
           revision={`${activeId}:${state.phase === "turn" ? "turn" : "settled"}`}
           loadChanges={loadChanges}
           loadDiff={loadFileDiff}
-          reveal={reveal}
+          loadTree={loadFileTree}
+          loadFile={loadFile}
+          request={panelRequest}
         />
       )}
 

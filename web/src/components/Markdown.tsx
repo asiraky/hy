@@ -1,11 +1,14 @@
 import type { Element, Text } from "hast";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
 
+import { fileIconFor } from "~/lib/fileIcons";
+import { useOpenPath } from "~/lib/openPath";
+import { detectPath } from "~/lib/paths";
 import { cn } from "~/lib/utils";
 
 // Text arrives a character at a time, so at any moment the parser is being
@@ -100,6 +103,36 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
   );
 }
 
+/**
+ * Inline code, upgraded to a clickable file chip when it reads as a path and
+ * something has offered to open one. Agents backtick paths nearly always, so
+ * intercepting here covers most of it without walking arbitrary text — and a
+ * span that arrives a character at a time simply flips from code to chip the
+ * moment it qualifies, which is a styling change, not a reflow.
+ */
+function InlineCode({ children }: { children?: ReactNode }) {
+  const open = useOpenPath();
+  const text = typeof children === "string" ? children : undefined;
+  const detected = open && text ? detectPath(text) : null;
+
+  if (!detected) {
+    return <code className="bg-muted rounded px-1 py-0.5 font-mono text-[0.9em]">{children}</code>;
+  }
+
+  const { Icon, tone } = fileIconFor(detected.path);
+  return (
+    <button
+      type="button"
+      onClick={() => open!(detected.path, detected.line)}
+      title={`Open ${detected.path}`}
+      className="bg-muted hover:bg-accent focus-visible:ring-ring inline-flex max-w-full cursor-pointer items-baseline gap-1 rounded border px-1 py-0.5 align-baseline font-mono text-[0.9em] transition-colors outline-none focus-visible:ring-2"
+    >
+      <Icon className={cn("size-[0.85em] shrink-0 self-center", tone)} />
+      <span className="truncate">{text}</span>
+    </button>
+  );
+}
+
 // Block spacing is set on the elements themselves rather than on the container
 // so a message that is one paragraph — which most are — has no leading or
 // trailing gap of its own to fight with the transcript's own rhythm.
@@ -140,9 +173,7 @@ const COMPONENTS: Components = {
   em: ({ children }) => <em className="italic">{children}</em>,
   // Only inline code reaches this: fenced blocks are taken by `pre` below and
   // rendered without descending into their children.
-  code: ({ children }) => (
-    <code className="bg-muted rounded px-1 py-0.5 font-mono text-[0.9em]">{children}</code>
-  ),
+  code: ({ children }) => <InlineCode>{children}</InlineCode>,
   pre: ({ node }) => <CodeBlock code={codeText(node)} lang={codeLang(node)} />,
   table: ({ children }) => (
     <div className="scroll-thin my-2 overflow-x-auto overscroll-x-contain rounded-lg border first:mt-0 last:mb-0">

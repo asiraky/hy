@@ -41,6 +41,8 @@ export interface Item {
   id: string;
   kind: "message" | "tool" | "notice";
   turnId?: string;
+  /** The Task/Agent tool call this item's work happened inside, for subagents. */
+  parentId?: string;
   /** When the item's first event landed, in millis. Display metadata only. */
   receivedAt?: number;
   role?: "user" | "agent";
@@ -83,6 +85,24 @@ export interface SessionChanges {
   truncated?: boolean;
   /** Why the list is empty, when the reason is not "nothing changed". */
   warning?: string;
+}
+
+/** Every path under a session's checkout, relative to its root. */
+export interface FileTree {
+  root: string;
+  files: string[];
+  truncated?: boolean;
+  /** Why the list is empty, when the reason is not "an empty checkout". */
+  warning?: string;
+}
+
+/** One file's bytes, for the read-only viewer. */
+export interface FileContent {
+  path: string;
+  content: string;
+  size: number;
+  binary?: boolean;
+  truncated?: boolean;
 }
 
 export interface FileDiff {

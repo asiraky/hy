@@ -1,0 +1,49 @@
+import { describe, expect, it } from "vitest";
+
+import { detectPath } from "./paths";
+
+describe("detectPath", () => {
+  it("accepts slashed paths", () => {
+    expect(detectPath("internal/session/lifecycle.go")).toEqual({ path: "internal/session/lifecycle.go", line: undefined });
+    expect(detectPath("web/src/App.tsx")).toEqual({ path: "web/src/App.tsx", line: undefined });
+    expect(detectPath("./web/main.ts")).toEqual({ path: "web/main.ts", line: undefined });
+  });
+
+  it("accepts bare filenames with an extension", () => {
+    expect(detectPath("App.tsx")).toEqual({ path: "App.tsx", line: undefined });
+    expect(detectPath("go.mod")).toEqual({ path: "go.mod", line: undefined });
+  });
+
+  it("accepts the extensionless allowlist", () => {
+    expect(detectPath("Makefile")).toEqual({ path: "Makefile", line: undefined });
+    expect(detectPath("Dockerfile")).toEqual({ path: "Dockerfile", line: undefined });
+    expect(detectPath("README")).toEqual({ path: "README", line: undefined });
+  });
+
+  it("splits line and column anchors", () => {
+    expect(detectPath("ws.go:289")).toEqual({ path: "ws.go", line: 289 });
+    expect(detectPath("web/src/App.tsx:12:5")).toEqual({ path: "web/src/App.tsx", line: 12 });
+  });
+
+  it("rejects domains and URLs", () => {
+    expect(detectPath("example.com")).toBeNull();
+    expect(detectPath("claude.ai")).toBeNull();
+    expect(detectPath("https://example.com/a/b.ts")).toBeNull();
+    expect(detectPath("www.example.com")).toBeNull();
+  });
+
+  it("rejects bare words, flags, dates and code", () => {
+    expect(detectPath("filter")).toBeNull();
+    expect(detectPath("useMemo")).toBeNull();
+    expect(detectPath("--no-color")).toBeNull();
+    expect(detectPath("1/2/2024")).toBeNull();
+    expect(detectPath("a + b")).toBeNull();
+    expect(detectPath("items.map(f)")).toBeNull();
+    expect(detectPath("..")).toBeNull();
+    expect(detectPath("../outside.txt")).toBeNull();
+  });
+
+  it("keeps directory references", () => {
+    expect(detectPath("web/src/")).toEqual({ path: "web/src", line: undefined });
+  });
+});
