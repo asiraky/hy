@@ -264,9 +264,9 @@ export function App() {
   );
 
   const remove = useCallback(
-    (id: string) => {
+    (id: string, removeWorktree: boolean) => {
       if (id !== activeRef.current) select(id);
-      clientRef.current?.command("delete_session", { sessionId: id }).catch((e) => {
+      clientRef.current?.command("delete_session", { sessionId: id, removeWorktree }).catch((e) => {
         toast.error("Could not delete that session", { description: e.message });
       });
     },

@@ -531,6 +531,9 @@ type CreateProjectOptions struct {
 	Effort    string
 	Branch    string
 	Workspace string
+	// BaseRef is the ref a new worktree is branched from, chosen per session.
+	// Empty defers to the project's default base branch.
+	BaseRef string
 	// WorkspacePath attaches the session to a checkout that already exists
 	// instead of provisioning one. It is the minority case, so it overrides
 	// Workspace rather than being another value of it.
@@ -581,9 +584,10 @@ func (m *Manager) CreateProject(ctx context.Context, o CreateProjectOptions) (*A
 		return nil, fmt.Errorf("%s is not available: %s", reg.inst.DisplayName, avail.Reason)
 	}
 
-	// Acquiring a checkout is a check followed by a write, and two websocket
-	// commands are two goroutines. Without this, both could find the project
-	// root free and both start a harness in it.
+	// Two websocket commands are two goroutines, and creating a session reads
+	// the workspace list before writing a row that changes it. Serialising the
+	// pair keeps the busy flags a session is created against consistent with
+	// what was on disk a moment earlier.
 	m.leases.Lock()
 	defer m.leases.Unlock()
 
@@ -602,9 +606,10 @@ func (m *Manager) CreateProject(ctx context.Context, o CreateProjectOptions) (*A
 		}
 	case o.Workspace == "local":
 		// The main checkout, which hy did not create and must not clean up.
-		// Resolving it as a workspace reuses the attach guard: a checkout a
-		// live session already holds comes back busy, because two harnesses
-		// editing one directory corrupt each other's work.
+		// Resolving it as a workspace still reuses the attach guard — the path
+		// has to be a checkout Git reports for this project — but a checkout
+		// another session already holds is no longer refused. The presenter
+		// warns; the user decides.
 		w, resolveErr := m.ResolveWorkspace(ctx, p.ID, p.Root)
 		if resolveErr != nil {
 			return nil, resolveErr
@@ -630,7 +635,7 @@ func (m *Manager) CreateProject(ctx context.Context, o CreateProjectOptions) (*A
 		}
 	}
 
-	meta := store.SessionMeta{ID: uuid.NewString(), Cwd: cwd, Harness: reg.inst.Driver, ProviderInstance: reg.inst.ID, CreatedAt: proto.NowMillis(), UpdatedAt: proto.NowMillis(), Phase: "creating", ProjectID: p.ID, Branch: o.Branch, Model: o.Model, Mode: o.Mode, Effort: o.Effort, WorkspaceMode: o.Workspace, ProvisionScript: relHook(p.Root, provision), DeprovisionScript: relHook(p.Root, deprovision)}
+	meta := store.SessionMeta{ID: uuid.NewString(), Cwd: cwd, Harness: reg.inst.Driver, ProviderInstance: reg.inst.ID, CreatedAt: proto.NowMillis(), UpdatedAt: proto.NowMillis(), Phase: "creating", ProjectID: p.ID, Branch: o.Branch, Model: o.Model, Mode: o.Mode, Effort: o.Effort, WorkspaceMode: o.Workspace, BaseRef: o.BaseRef, ProvisionScript: relHook(p.Root, provision), DeprovisionScript: relHook(p.Root, deprovision)}
 	if err := m.store.CreateSession(ctx, meta); err != nil {
 		return nil, err
 	}
@@ -786,7 +791,9 @@ func (m *Manager) Cleanup(ctx context.Context, id string) error {
 		return err
 	}
 	m.adopt(a)
-	go m.cleanup(meta, p, a, false)
+	// "Clean up workspace" asks for exactly that, so a lease hy provisioned is
+	// released; a checkout it merely borrowed still is not hy's to delete.
+	go m.cleanup(meta, p, a, false, meta.WorkspaceMode == "managed")
 	return nil
 }
 
@@ -947,13 +954,26 @@ func (m *Manager) closeLocked(ctx context.Context, id, reason string) error {
 	return nil
 }
 
-// Delete removes a session and its log entirely.
-func (m *Manager) Delete(ctx context.Context, id string) error {
+// Delete removes a session and its log entirely. removeWorktree is the user's
+// answer to the checkbox in the confirmation dialog: without it nothing on disk
+// is touched, whatever mode the session ran in.
+func (m *Manager) Delete(ctx context.Context, id string, removeWorktree bool) error {
 	m.lifecycle.Lock()
 	defer m.lifecycle.Unlock()
 	meta, err := m.store.Session(ctx, id)
 	if err != nil {
 		return err
+	}
+	if removeWorktree {
+		if meta.WorkspaceMode == "local" {
+			return errors.New("the main checkout is not hy's to remove")
+		}
+		// Sessions may share a checkout, so the last one out is the only one
+		// that may take it with them. The dialog hides the checkbox in this
+		// case; a stale client could still ask.
+		if holder, shared := m.otherSessionIn(ctx, id, meta.Cwd); shared {
+			return fmt.Errorf("%s is still used by %q", filepath.Base(meta.Cwd), holder)
+		}
 	}
 	if meta.Phase == "closed" {
 		if err := m.store.DeleteSession(ctx, id); err != nil {
@@ -994,8 +1014,36 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	m.adopt(a)
-	go m.cleanup(meta, p, a, true)
+	go m.cleanup(meta, p, a, true, removeWorktree)
 	return nil
+}
+
+// otherSessionIn reports a session other than id whose checkout is the same
+// directory, and which has not been closed. It is the "somebody else is still
+// in here" test that guards worktree removal now that sharing is allowed.
+func (m *Manager) otherSessionIn(ctx context.Context, id, cwd string) (string, bool) {
+	if strings.TrimSpace(cwd) == "" {
+		return "", false
+	}
+	target := canonicalPath(cwd)
+	sessions, err := m.store.ListSessions(ctx)
+	if err != nil {
+		// An unreadable list is not permission to delete somebody's checkout.
+		return "another session", true
+	}
+	for _, s := range sessions {
+		if s.ID == id || s.Phase == "closed" || s.Cwd == "" {
+			continue
+		}
+		if canonicalPath(s.Cwd) != target {
+			continue
+		}
+		if s.Title == "" {
+			return "untitled session", true
+		}
+		return s.Title, true
+	}
+	return "", false
 }
 
 // ForceDelete skips the project deprovision hook after it has failed. It only
@@ -1019,6 +1067,9 @@ func (m *Manager) ForceDelete(ctx context.Context, id string) error {
 	// to whoever made it and a local session is the user's own working
 	// directory; forcing either session away must not touch their files.
 	if meta.WorkspaceMode == "managed" {
+		if holder, shared := m.otherSessionIn(ctx, id, meta.Cwd); shared {
+			return fmt.Errorf("%s is still used by %q", filepath.Base(meta.Cwd), holder)
+		}
 		if err := m.removeGitWorktree(ctx, meta, p, nil, true); err != nil {
 			return err
 		}

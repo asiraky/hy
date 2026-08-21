@@ -7,6 +7,7 @@ import { IconButton } from "~/components/IconButton";
 import { StatusDot } from "~/components/StatusDot";
 import { ThemeToggle } from "~/components/ThemeToggle";
 import { Button } from "~/components/ui/button";
+import { Checkbox } from "~/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -15,6 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
+import { Label } from "~/components/ui/label";
 import { Separator } from "~/components/ui/separator";
 import { Sheet, SheetContent, SheetTitle } from "~/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
@@ -46,7 +48,8 @@ interface SidebarProps {
   onOpenChange: (open: boolean) => void;
   onSelect: (id: string) => void;
   onNew: () => void;
-  onDelete: (id: string) => void;
+  /** removeWorktree is the user's answer to the dialog's checkbox, never inferred. */
+  onDelete: (id: string, removeWorktree: boolean) => void;
   /** Opens the "how to reach this server" panel. */
   onShowAccess: () => void;
   // Supplied by the server via the adapter; the sidebar knows no harness names.
@@ -62,9 +65,27 @@ function SessionList({
   accentOf,
   projectName,
 }: Pick<SidebarProps, "sessions" | "activeId" | "onSelect" | "onDelete" | "accentOf" | "projectName">) {
-  // Deleting tears down a worktree, so a stray click on the X must not be
-  // enough on its own — the row's X only opens this confirmation.
+  // Deleting a session can take a checkout on disk with it, so a stray click
+  // on the X must not be enough on its own — the row's X only opens this
+  // confirmation, and the checkout only goes if it is asked for there.
   const [confirming, setConfirming] = useState<SessionMeta | null>(null);
+  const [removeWorktree, setRemoveWorktree] = useState(false);
+  const ask = (s: SessionMeta) => {
+    // Defaulted on for a worktree hy provisioned, because that is what hy did
+    // before and it is usually right; off for one it merely borrowed.
+    setRemoveWorktree(s.workspaceMode === "managed");
+    setConfirming(s);
+  };
+
+  const mode = confirming?.workspaceMode ?? "";
+  // "The last session hy knows of" is a question the sidebar can already
+  // answer: it holds every session's cwd.
+  const sharers = confirming
+    ? sessions.filter(
+        (s) => s.id !== confirming.id && s.phase !== "closed" && s.cwd === confirming.cwd,
+      )
+    : [];
+  const removable = !!confirming && mode !== "local" && sharers.length === 0;
 
   if (sessions.length === 0) {
     return (
@@ -151,7 +172,7 @@ function SessionList({
                   variant="ghost"
                   size="icon"
                   aria-label={`Delete session ${s.title || "Untitled"}`}
-                  onClick={() => setConfirming(s)}
+                  onClick={() => ask(s)}
                   // Aligned to the provider logo's column below it: the logo
                   // (14px, full-bleed) is centred 17px from the row's edge,
                   // and the X's lucide glyph carries ~1.5px of optical padding
@@ -175,12 +196,54 @@ function SessionList({
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>Delete “{confirming?.title || "Untitled"}”?</DialogTitle>
+            {/* Whatever else it says, it says plainly whether anything on disk
+                is at risk. The old copy promised a worktree removal that a
+                borrowed session never performed. */}
             <DialogDescription>
-              {confirming?.workspaceMode === "local"
-                ? "This permanently deletes the session. Your checkout is left untouched."
-                : "This removes the session's Git worktree and permanently deletes the session. This cannot be undone."}
+              {mode === "local"
+                ? "This permanently deletes the session and its transcript. Your checkout is left untouched."
+                : "This permanently deletes the session and its transcript."}
             </DialogDescription>
           </DialogHeader>
+
+          {confirming && mode !== "local" && (
+            <div className="space-y-2 text-[12px]">
+              {removable ? (
+                <>
+                  <div className="flex items-start gap-2">
+                    <Checkbox
+                      id="delete-remove-worktree"
+                      checked={removeWorktree}
+                      onCheckedChange={(v) => setRemoveWorktree(v === true)}
+                      className="mt-0.5"
+                    />
+                    <div className="min-w-0">
+                      <Label htmlFor="delete-remove-worktree" className="cursor-pointer">
+                        Also delete the worktree
+                      </Label>
+                      <span className="text-muted-foreground block font-mono text-[11px] break-all">
+                        {confirming.cwd}
+                      </span>
+                    </div>
+                  </div>
+                  <p className="text-muted-foreground text-[11px]">
+                    {confirming.branch
+                      ? `The branch ${confirming.branch} is kept either way.`
+                      : "Branches are never deleted."}
+                    {mode === "borrowed" && " hy did not create this worktree."}
+                  </p>
+                </>
+              ) : (
+                <p className="text-muted-foreground text-[11px]">
+                  The worktree is left on disk: {sharers.length} other session
+                  {sharers.length === 1 ? "" : "s"} still
+                  {sharers.length === 1 ? " uses" : " use"} it
+                  {sharers[0]?.title ? ` (“${sharers[0].title}”)` : ""}.
+                </p>
+              )}
+            </div>
+          )}
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirming(null)}>
               Cancel
@@ -188,7 +251,7 @@ function SessionList({
             <Button
               variant="destructive"
               onClick={() => {
-                if (confirming) onDelete(confirming.id);
+                if (confirming) onDelete(confirming.id, removable && removeWorktree);
                 setConfirming(null);
               }}
             >

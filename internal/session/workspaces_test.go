@@ -114,10 +114,10 @@ func TestListWorkspacesMarksCheckoutsHeldByLiveSessions(t *testing.T) {
 	if !ok || !side.Busy || side.BusySessionID != "s1" || side.BusyTitle != "already here" {
 		t.Fatalf("held worktree not reported busy: %+v", side)
 	}
-	// Two harnesses in one checkout corrupt each other's edits, so attaching
-	// must be refused rather than merely discouraged in the UI.
-	if _, err := mgr.ResolveWorkspace(context.Background(), p.ID, worktree); err == nil {
-		t.Fatal("attaching to a busy workspace should fail")
+	// Busy is advice, not a lock: nothing about Git stops two sessions sharing
+	// a checkout, so attaching still succeeds and the presenter warns.
+	if _, err := mgr.ResolveWorkspace(context.Background(), p.ID, worktree); err != nil {
+		t.Fatalf("attaching to a busy workspace should be allowed: %v", err)
 	}
 }
 
@@ -345,9 +345,9 @@ func TestLocalSessionRunsInTheProjectRootAndSkipsHooks(t *testing.T) {
 	}
 }
 
-// Two agents in one directory overwrite each other's edits, so the second is
-// refused rather than merely warned about.
-func TestSecondLocalSessionIsRefusedWhileTheFirstIsLive(t *testing.T) {
+// Sharing the main checkout is the user's call: hy reports that somebody is
+// already there and starts the session anyway.
+func TestSecondLocalSessionIsAllowedWhileTheFirstIsLive(t *testing.T) {
 	root, _, _ := gitRepo(t)
 	st, p := testProject(t, root)
 	mgr := NewManager(st, func(string, ...any) {}, &fakeAdapter{})
@@ -362,26 +362,27 @@ func TestSecondLocalSessionIsRefusedWhileTheFirstIsLive(t *testing.T) {
 		return e == nil && m.Phase == "ready"
 	})
 
-	if _, err := mgr.CreateProject(context.Background(), CreateProjectOptions{ProjectID: p.ID, Workspace: "local"}); err == nil {
-		t.Fatal("a second local session in the same checkout should be refused")
-	}
-	// A worktree session is unaffected: it has a directory of its own.
-	if _, err := mgr.CreateProject(context.Background(), CreateProjectOptions{
-		ProjectID: p.ID, Workspace: "managed", Branch: "issue/9-elsewhere",
-	}); err != nil {
-		t.Fatalf("a managed session should still be allowed: %v", err)
-	}
-
-	// Once the holder closes, the checkout is free again.
-	if err := mgr.Cleanup(context.Background(), first.ID); err != nil {
+	// The warning the presenter shows is this flag, and it has to be set
+	// before the second session can be warned about anything.
+	spaces, err := mgr.ListWorkspaces(context.Background(), p.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if w, ok := find(spaces, root); !ok || !w.Busy {
+		t.Fatalf("the held root should be reported busy: %+v", w)
+	}
+
+	second, err := mgr.CreateProject(context.Background(), CreateProjectOptions{ProjectID: p.ID, Workspace: "local"})
+	if err != nil {
+		t.Fatalf("a second local session in the same checkout should be allowed: %v", err)
+	}
 	waitFor(t, func() bool {
-		m, e := st.Session(context.Background(), first.ID)
-		return e == nil && m.Phase == "closed"
+		m, e := st.Session(context.Background(), second.ID)
+		return e == nil && m.Phase == "ready"
 	})
-	if _, err := mgr.CreateProject(context.Background(), CreateProjectOptions{ProjectID: p.ID, Workspace: "local"}); err != nil {
-		t.Fatalf("the checkout should be reusable once released: %v", err)
+	m, _ := st.Session(context.Background(), second.ID)
+	if resolve(m.Cwd) != resolve(root) {
+		t.Fatalf("second session cwd %s, want %s", m.Cwd, root)
 	}
 }
 
@@ -543,9 +544,10 @@ func TestProjectRootInsideARepositoryIsStillAttachable(t *testing.T) {
 	}
 }
 
-// The check for a free checkout and the claim on it are two steps, so they
-// have to be one critical section.
-func TestConcurrentLocalSessionsCannotBothClaimTheRoot(t *testing.T) {
+// Creating a session reads the workspace list and then writes a row that
+// changes it, so the pair is one critical section — but the outcome is that
+// every caller gets a session, not that one of them wins a lock.
+func TestConcurrentLocalSessionsAllShareTheRoot(t *testing.T) {
 	root, _, _ := gitRepo(t)
 	st, p := testProject(t, root)
 	mgr := NewManager(st, func(string, ...any) {}, &fakeAdapter{})
@@ -570,7 +572,7 @@ func TestConcurrentLocalSessionsCannotBothClaimTheRoot(t *testing.T) {
 	}
 	close(start)
 	wg.Wait()
-	if won != 1 {
-		t.Fatalf("%d concurrent local sessions claimed the same checkout, want 1", won)
+	if won != racers {
+		t.Fatalf("%d of %d concurrent local sessions started, want all of them", won, racers)
 	}
 }

@@ -292,7 +292,7 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 			return nil, err
 		}
 		if a.ProjectID != "" {
-			actor, err := c.srv.mgr.CreateProject(ctx, session.CreateProjectOptions{ProjectID: a.ProjectID, Harness: a.Harness, Instance: a.Instance, Model: a.Model, Mode: a.Mode, Branch: a.Branch, Workspace: a.Workspace, WorkspacePath: a.WorkspacePath})
+			actor, err := c.srv.mgr.CreateProject(ctx, session.CreateProjectOptions{ProjectID: a.ProjectID, Harness: a.Harness, Instance: a.Instance, Model: a.Model, Mode: a.Mode, Branch: a.Branch, Workspace: a.Workspace, WorkspacePath: a.WorkspacePath, BaseRef: a.BaseRef})
 			if err != nil {
 				return nil, err
 			}
@@ -543,11 +543,11 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 		return map[string]any{"status": "cleaning"}, c.srv.mgr.Cleanup(ctx, a.SessionID)
 
 	case "delete_session":
-		var a sessionArgs
+		var a deleteSessionArgs
 		if err := json.Unmarshal(f.Args, &a); err != nil {
 			return nil, err
 		}
-		return map[string]any{"status": "deleting"}, c.srv.mgr.Delete(ctx, a.SessionID)
+		return map[string]any{"status": "deleting"}, c.srv.mgr.Delete(ctx, a.SessionID, a.RemoveWorktree)
 
 	case "force_delete_session":
 		var a sessionArgs

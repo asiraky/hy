@@ -22,8 +22,9 @@ type Workspace struct {
 	Head string `json:"head,omitempty"`
 	// IsRoot marks the project root, which is always attachable and never removed.
 	IsRoot bool `json:"isRoot,omitempty"`
-	// Busy marks a workspace a live session already holds. Two harnesses editing
-	// one checkout corrupt each other's work, so these are offered but disabled.
+	// Busy marks a workspace a live session already holds. Sharing one checkout
+	// is allowed — there is no Git reason two sessions cannot — so this is
+	// advice the presenter warns with, not a lock anything enforces.
 	Busy          bool   `json:"busy,omitempty"`
 	BusySessionID string `json:"busySessionId,omitempty"`
 	BusyTitle     string `json:"busyTitle,omitempty"`
@@ -207,9 +208,9 @@ func (m *Manager) ResolveWorkspace(ctx context.Context, projectID, path string) 
 		if info, statErr := os.Stat(w.Path); statErr != nil || !info.IsDir() {
 			return Workspace{}, fmt.Errorf("%s is no longer a directory", w.Path)
 		}
-		if w.Busy {
-			return Workspace{}, fmt.Errorf("%s is already in use by %q", filepath.Base(w.Path), w.BusyTitle)
-		}
+		// Busy is deliberately not a refusal: the presenter warns that another
+		// session is already here and the user decides. Nothing about Git
+		// stops two agents sharing a checkout; only their own edits do.
 		return w, nil
 	}
 	return Workspace{}, fmt.Errorf("%s is not a worktree of this project", path)
