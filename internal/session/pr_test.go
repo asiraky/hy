@@ -36,9 +36,12 @@ func fakeGh(t *testing.T, stdout, stderr string, exit int) (argsFile string) {
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
+// prJSON wraps one pull request the way `gh pr list --json` returns it.
+func prJSON(body string) string { return "[" + body + "]" }
+
 // prSession registers a session the PR lookup will accept, in a directory that
 // exists, so only the thing under test decides the outcome.
-func prSession(t *testing.T, mode, branch string) *Manager {
+func prSession(t *testing.T, mode, branch string) (*Manager, string) {
 	t.Helper()
 	root, worktree, _ := gitRepo(t)
 	st, p := testProject(t, root)
@@ -53,7 +56,18 @@ func prSession(t *testing.T, mode, branch string) *Manager {
 	}
 	mgr := NewManager(st, func(string, ...any) {}, &fakeAdapter{})
 	t.Cleanup(mgr.Shutdown)
-	return mgr
+	return mgr, worktree
+}
+
+// headOf is the commit a checkout is actually sitting on, which is what a
+// finished branch's merged pull request should agree with.
+func headOf(t *testing.T, dir string) string {
+	t.Helper()
+	out, err := runGit(context.Background(), dir, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func TestParsePRCallsAPullRequestMergedOnlyWithBothStateAndTimestamp(t *testing.T) {
@@ -62,12 +76,12 @@ func TestParsePRCallsAPullRequestMergedOnlyWithBothStateAndTimestamp(t *testing.
 		json string
 		want bool
 	}{
-		{"merged", `{"number":7,"state":"MERGED","mergedAt":"2026-08-20T01:02:03Z"}`, true},
-		{"lowercase state", `{"number":7,"state":"merged","mergedAt":"2026-08-20T01:02:03Z"}`, true},
-		{"open", `{"number":7,"state":"OPEN","mergedAt":""}`, false},
-		{"closed unmerged", `{"number":7,"state":"CLOSED","mergedAt":""}`, false},
-		{"state without timestamp", `{"number":7,"state":"MERGED","mergedAt":""}`, false},
-		{"timestamp without state", `{"number":7,"state":"CLOSED","mergedAt":"2026-08-20T01:02:03Z"}`, false},
+		{"merged", prJSON(`{"number":7,"state":"MERGED","mergedAt":"2026-08-20T01:02:03Z"}`), true},
+		{"lowercase state", prJSON(`{"number":7,"state":"merged","mergedAt":"2026-08-20T01:02:03Z"}`), true},
+		{"open", prJSON(`{"number":7,"state":"OPEN","mergedAt":""}`), false},
+		{"closed unmerged", prJSON(`{"number":7,"state":"CLOSED","mergedAt":""}`), false},
+		{"state without timestamp", prJSON(`{"number":7,"state":"MERGED","mergedAt":""}`), false},
+		{"timestamp without state", prJSON(`{"number":7,"state":"CLOSED","mergedAt":"2026-08-20T01:02:03Z"}`), false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -83,7 +97,10 @@ func TestParsePRCallsAPullRequestMergedOnlyWithBothStateAndTimestamp(t *testing.
 }
 
 func TestParsePRRefusesOutputWithNoPullRequestInIt(t *testing.T) {
-	if _, reason := parsePR([]byte(`{}`)); reason == "" {
+	if _, reason := parsePR([]byte(`[]`)); reason == "" {
+		t.Fatal("an empty list must not pass as a pull request")
+	}
+	if _, reason := parsePR([]byte(`[{}]`)); reason == "" {
 		t.Fatal("an empty object must not pass as a pull request")
 	}
 	if _, reason := parsePR([]byte(`not json`)); reason == "" {
@@ -91,29 +108,49 @@ func TestParsePRRefusesOutputWithNoPullRequestInIt(t *testing.T) {
 	}
 }
 
-func TestSessionPRAsksGhAboutTheSessionsOwnBranch(t *testing.T) {
-	argsFile := fakeGh(t, `{"number":75,"title":"Prompt","url":"https://example/75","state":"MERGED","mergedAt":"2026-08-20T01:02:03Z"}`, "", 0)
-	mgr := prSession(t, "managed", "issue/75-prompt")
+func TestSessionPRAsksGhAboutTheSessionsOwnBranchByName(t *testing.T) {
+	// Deliberately a branch that is also a valid pull request number: the
+	// selector must be unambiguous or this session adopts PR #75's fate.
+	mgr, worktree := prSession(t, "managed", "75")
+	argsFile := fakeGh(t, prJSON(`{"number":9,"title":"Prompt","url":"https://example/9","state":"MERGED","mergedAt":"2026-08-20T01:02:03Z","headRefOid":"`+headOf(t, worktree)+`"}`), "", 0)
 
 	pr, reason := mgr.SessionPR(context.Background(), "s1")
 	if reason != "" {
 		t.Fatalf("unexpected reason %q", reason)
 	}
-	if pr == nil || pr.Number != 75 || !pr.Merged {
+	if pr == nil || pr.Number != 9 || !pr.Merged {
 		t.Fatalf("merged pull request not reported: %+v", pr)
 	}
 	args, err := os.ReadFile(argsFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(args), "issue/75-prompt") {
-		t.Fatalf("gh was not asked about the session branch: %q", args)
+	if !strings.Contains(string(args), "--head\n75\n") {
+		t.Fatalf("the branch must be passed as a branch, not a positional selector: %q", args)
+	}
+}
+
+func TestSessionPRWillNotCallABranchFinishedAfterItHasMovedOn(t *testing.T) {
+	mgr, _ := prSession(t, "managed", "issue/75-prompt")
+	// The merge happened at a commit the worktree is no longer sitting on:
+	// there is unmerged work here, whatever the pull request says.
+	fakeGh(t, prJSON(`{"number":75,"state":"MERGED","mergedAt":"2026-08-20T01:02:03Z","headRefOid":"0000000000000000000000000000000000000000"}`), "", 0)
+
+	pr, reason := mgr.SessionPR(context.Background(), "s1")
+	if reason != "" {
+		t.Fatalf("unexpected reason %q", reason)
+	}
+	if pr == nil {
+		t.Fatal("the pull request itself is still worth reporting")
+	}
+	if pr.Merged {
+		t.Fatal("a branch with commits the merge never contained is not finished work")
 	}
 }
 
 func TestSessionPRSaysNothingForALocalSession(t *testing.T) {
-	fakeGh(t, `{"number":75,"state":"MERGED","mergedAt":"2026-08-20T01:02:03Z"}`, "", 0)
-	mgr := prSession(t, "local", "main")
+	mgr, _ := prSession(t, "local", "main")
+	fakeGh(t, prJSON(`{"number":75,"state":"MERGED","mergedAt":"2026-08-20T01:02:03Z"}`), "", 0)
 
 	pr, reason := mgr.SessionPR(context.Background(), "s1")
 	if pr != nil {
@@ -125,8 +162,8 @@ func TestSessionPRSaysNothingForALocalSession(t *testing.T) {
 }
 
 func TestSessionPRSaysNothingForASessionWithNoBranch(t *testing.T) {
-	fakeGh(t, `{"number":75,"state":"MERGED","mergedAt":"2026-08-20T01:02:03Z"}`, "", 0)
-	mgr := prSession(t, "managed", "")
+	mgr, _ := prSession(t, "managed", "")
+	fakeGh(t, prJSON(`{"number":75,"state":"MERGED","mergedAt":"2026-08-20T01:02:03Z"}`), "", 0)
 
 	if pr, reason := mgr.SessionPR(context.Background(), "s1"); pr != nil || reason == "" {
 		t.Fatalf("pr = %+v, reason = %q", pr, reason)
@@ -134,14 +171,23 @@ func TestSessionPRSaysNothingForASessionWithNoBranch(t *testing.T) {
 }
 
 func TestSessionPRTreatsAGhFailureAsSimplyNotKnowing(t *testing.T) {
-	fakeGh(t, "", "no pull requests found for branch \"issue/75-prompt\"", 1)
-	mgr := prSession(t, "borrowed", "issue/75-prompt")
+	mgr, _ := prSession(t, "borrowed", "issue/75-prompt")
+	fakeGh(t, "", "gh: not authenticated", 1)
 
 	pr, reason := mgr.SessionPR(context.Background(), "s1")
 	if pr != nil {
-		t.Fatalf("a missing pull request is not a pull request: %+v", pr)
+		t.Fatalf("a failed lookup is not a pull request: %+v", pr)
 	}
-	if !strings.Contains(reason, "no pull requests found") {
+	if !strings.Contains(reason, "not authenticated") {
 		t.Fatalf("gh's own words should survive: %q", reason)
+	}
+}
+
+func TestSessionPRTreatsAnEmptyListAsNoPullRequestYet(t *testing.T) {
+	mgr, _ := prSession(t, "managed", "issue/75-prompt")
+	fakeGh(t, "[]", "", 0)
+
+	if pr, reason := mgr.SessionPR(context.Background(), "s1"); pr != nil || reason == "" {
+		t.Fatalf("pr = %+v, reason = %q", pr, reason)
 	}
 }

@@ -22,13 +22,16 @@ type PullRequest struct {
 	Merged bool   `json:"merged,omitempty"`
 	// MergedAt is RFC 3339, and empty for a pull request that never landed.
 	MergedAt string `json:"mergedAt,omitempty"`
+	// HeadRefOid is the commit the pull request's branch pointed at. It is what
+	// tells a finished branch from one that was merged and then worked on again.
+	HeadRefOid string `json:"headRefOid,omitempty"`
 }
 
 const prLookupTimeout = 12 * time.Second
 
 // prFields is what `gh pr view` is asked for. Kept next to the struct that
 // receives it so the two cannot drift apart unnoticed.
-const prFields = "number,title,url,state,mergedAt"
+const prFields = "number,title,url,state,mergedAt,headRefOid"
 
 // SessionPR reports the pull request for a session's branch, if there is one.
 //
@@ -60,10 +63,13 @@ func (m *Manager) SessionPR(ctx context.Context, sessionID string) (*PullRequest
 
 	ctx, cancel := context.WithTimeout(ctx, prLookupTimeout)
 	defer cancel()
-	// The branch is passed explicitly rather than letting gh infer it from
-	// HEAD: the worktree may well be checked out somewhere else by now, and
-	// the session's branch is the thing being asked about either way.
-	cmd := exec.CommandContext(ctx, "gh", "pr", "view", meta.Branch, "--json", prFields)
+	// `gh pr list --head` rather than `gh pr view <branch>`, because view's
+	// positional argument is overloaded: it takes a number, a URL or a branch,
+	// and a branch named "75" is read as pull request #75 — someone else's, in
+	// all likelihood, and quite possibly a merged one. --head is only ever a
+	// branch name, so no branch can be mistaken for a pull request.
+	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
+		"--head", meta.Branch, "--state", "all", "--limit", "1", "--json", prFields)
 	cmd.Dir = meta.Cwd
 	out, err := cmd.Output()
 	if err != nil {
@@ -72,7 +78,7 @@ func (m *Manager) SessionPR(ctx context.Context, sessionID string) (*PullRequest
 			return nil, strings.TrimSpace(string(ee.Stderr))
 		}
 		if ctx.Err() != nil {
-			return nil, "gh pr view timed out"
+			return nil, "gh pr list timed out"
 		}
 		return nil, err.Error()
 	}
@@ -80,22 +86,38 @@ func (m *Manager) SessionPR(ctx context.Context, sessionID string) (*PullRequest
 	if parseErr != "" {
 		return nil, parseErr
 	}
+	// A branch that has moved on since its pull request merged is not finished
+	// work: the worktree holds commits the merge never contained. Keeping the
+	// branch and carrying on is an ordinary way to work, and hy offering to
+	// delete that worktree would be offering to delete those commits.
+	if pr.Merged && pr.HeadRefOid != "" {
+		if head, headErr := runGit(ctx, meta.Cwd, "rev-parse", "HEAD"); headErr == nil {
+			if !strings.EqualFold(strings.TrimSpace(string(head)), pr.HeadRefOid) {
+				pr.Merged = false
+			}
+		}
+		// A HEAD that cannot be read leaves Merged as gh reported it: the
+		// prompt only ever opens a confirmation, and the confirmation is where
+		// anything is actually agreed to.
+	}
 	return pr, ""
 }
 
-// parsePR turns `gh pr view --json` output into a PullRequest. Merged is
-// decided by both the state and the timestamp: either one alone has been
-// enough to mislead — a closed-then-reopened pull request keeps a mergedAt in
-// some views — and requiring both makes the false positive, the one that
-// offers to delete a worktree still being worked in, the unlikely direction.
+// parsePR reads `gh pr list --json` output, which is an array, and takes the
+// most recent entry gh offered. Merged is decided by both the state and the
+// timestamp: either one alone has been enough to mislead — a closed-then-
+// reopened pull request keeps a mergedAt in some views — and requiring both
+// makes the false positive, the one that offers to delete a worktree still
+// being worked in, the unlikely direction.
 func parsePR(out []byte) (*PullRequest, string) {
-	var pr PullRequest
-	if err := json.Unmarshal(out, &pr); err != nil {
+	var prs []PullRequest
+	if err := json.Unmarshal(out, &prs); err != nil {
 		return nil, "could not parse gh output: " + err.Error()
 	}
-	if pr.Number == 0 {
+	if len(prs) == 0 || prs[0].Number == 0 {
 		return nil, "gh reported no pull request"
 	}
+	pr := prs[0]
 	pr.Merged = strings.EqualFold(pr.State, "MERGED") && pr.MergedAt != ""
 	return &pr, ""
 }

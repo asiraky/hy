@@ -308,6 +308,9 @@ export interface PullRequest {
   /** Both a merged state and a merge timestamp; neither alone is trusted. */
   merged?: boolean;
   mergedAt?: string;
+  /** The commit the branch pointed at when it merged; a branch that has moved
+   *  past it has unmerged work, and is not reported as merged. */
+  headRefOid?: string;
 }
 
 /**
