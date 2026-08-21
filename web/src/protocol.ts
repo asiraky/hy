@@ -87,6 +87,24 @@ export interface SessionChanges {
   warning?: string;
 }
 
+/** Every path under a session's checkout, relative to its root. */
+export interface FileTree {
+  root: string;
+  files: string[];
+  truncated?: boolean;
+  /** Why the list is empty, when the reason is not "an empty checkout". */
+  warning?: string;
+}
+
+/** One file's bytes, for the read-only viewer. */
+export interface FileContent {
+  path: string;
+  content: string;
+  size: number;
+  binary?: boolean;
+  truncated?: boolean;
+}
+
 export interface FileDiff {
   path: string;
   oldPath?: string;
