@@ -442,6 +442,19 @@ func (s *session) handleRequest(ctx context.Context, method string, params json.
 		return nil, err
 	}
 
+	// AskUserQuestion is not a permission gate — it is a question for the human,
+	// and the SDK only routes it through canUseTool because that is the one
+	// callback a headless host exposes. Answering it with the generic allow/deny
+	// prompt is wrong twice over: the human sees "Allow Once" instead of the
+	// choices, and echoing the input back unchanged leaves the tool with no
+	// answers, so it parks forever and the model hangs. The tool's own input
+	// schema carries an `answers` field "collected by the permission component";
+	// we raise a durable elicitation for the choices and feed the selections back
+	// through it. See askUserQuestion.
+	if p.ToolName == "AskUserQuestion" {
+		return s.askUserQuestion(ctx, p.Input)
+	}
+
 	outcome, err := s.host.RequestPermission(ctx, adapter.PermissionRequest{
 		TurnID:   s.currentTurn(),
 		ToolName: p.ToolName,
@@ -456,6 +469,126 @@ func (s *session) handleRequest(ctx context.Context, method string, params json.
 		return map[string]any{"behavior": "allow", "updatedInput": p.Input}, nil
 	}
 	return map[string]any{"behavior": "deny", "message": "Denied by user"}, nil
+}
+
+// askQuestion is one entry of an AskUserQuestion tool call.
+type askQuestion struct {
+	Question    string `json:"question"`
+	Header      string `json:"header"`
+	MultiSelect bool   `json:"multiSelect"`
+	Options     []struct {
+		Label       string `json:"label"`
+		Description string `json:"description"`
+	} `json:"options"`
+}
+
+// askUserQuestion services an AskUserQuestion tool call as a durable elicitation:
+// each question becomes an enum field the human answers from any attached device,
+// and the chosen labels are returned as the tool's `answers` via updatedInput,
+// which is how the SDK resolves the call. An empty answer set — the human
+// declined, or the elicitation could not be raised — is the tool's own "user did
+// not answer" path, so the model continues rather than hanging.
+func (s *session) askUserQuestion(ctx context.Context, rawInput json.RawMessage) (any, error) {
+	var parsed struct {
+		Questions []askQuestion `json:"questions"`
+	}
+	if err := json.Unmarshal(rawInput, &parsed); err != nil {
+		return nil, err
+	}
+
+	// Keep the original input object intact so updatedInput echoes every field
+	// the tool expects; we add only `answers`.
+	var input map[string]any
+	if err := json.Unmarshal(rawInput, &input); err != nil {
+		return nil, err
+	}
+	allow := func(answers map[string]string) (any, error) {
+		input["answers"] = answers
+		return map[string]any{"behavior": "allow", "updatedInput": input}, nil
+	}
+
+	// Questions map onto index keys (q0, q1, …) rather than their text so the
+	// schema stays well-formed; the answers, though, are keyed by question text,
+	// which is the shape the tool reads back and is guaranteed unique.
+	properties := map[string]any{}
+	required := make([]string, 0, len(parsed.Questions))
+	keys := make([]string, len(parsed.Questions))
+	for i, q := range parsed.Questions {
+		key := fmt.Sprintf("q%d", i)
+		keys[i] = key
+		field := map[string]any{"type": "string", "title": q.Question}
+		if q.Header != "" {
+			field["description"] = q.Header
+		}
+		if len(q.Options) > 0 {
+			values := make([]string, 0, len(q.Options))
+			descriptions := map[string]string{}
+			for _, o := range q.Options {
+				values = append(values, o.Label)
+				if o.Description != "" {
+					descriptions[o.Label] = o.Description
+				}
+			}
+			field["enum"] = values
+			if len(descriptions) > 0 {
+				// The presenter shows these beside each option; losing them can
+				// leave a terse label ("Blue") without the trade-off it stood for.
+				field["x-optionDescriptions"] = descriptions
+			}
+			// AskUserQuestion always offers a free-text answer alongside the
+			// listed choices — the tool tells the model not to add its own
+			// "Other" because the presenter supplies it. Carry that through.
+			field["x-allowOther"] = true
+		}
+		if q.MultiSelect {
+			// The human may pick more than one; the presenter returns an array,
+			// which we join comma-separated per the tool's answer contract.
+			field["x-multiSelect"] = true
+		}
+		properties[key] = field
+		required = append(required, key)
+	}
+
+	schema, err := json.Marshal(map[string]any{
+		"type": "object", "properties": properties, "required": required,
+	})
+	if err != nil {
+		return allow(map[string]string{})
+	}
+
+	result, err := s.host.Elicit(ctx, adapter.ElicitationRequest{
+		TurnID: s.currentTurn(),
+		Prompt: "The assistant needs your input to continue.",
+		Schema: schema,
+	})
+	if err != nil || result.Action != "accept" {
+		return allow(map[string]string{})
+	}
+
+	var values map[string]any
+	_ = json.Unmarshal(result.Value, &values)
+	answers := map[string]string{}
+	for i, q := range parsed.Questions {
+		// A single-select answer arrives as a string; a multi-select one as an
+		// array of labels, which the tool wants joined comma-separated.
+		switch v := values[keys[i]].(type) {
+		case string:
+			if v != "" {
+				answers[q.Question] = v
+			}
+		case []any:
+			parts := make([]string, 0, len(v))
+			for _, e := range v {
+				if s, ok := e.(string); ok && s != "" {
+					parts = append(parts, s)
+				}
+			}
+			if len(parts) > 0 {
+				answers[q.Question] = strings.Join(parts, ", ")
+			}
+		}
+	}
+	return allow(answers)
 }
 
 func (s *session) handleNotification(method string, params json.RawMessage) {
