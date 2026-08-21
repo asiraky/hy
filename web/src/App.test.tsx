@@ -277,6 +277,36 @@ describe("composer drafts", () => {
     await open("a");
     expect(composer().value).toBe("");
   });
+
+  it("keeps a new session's draft while the list has not caught up with it", async () => {
+    await boot();
+
+    // Create a session: it is attached, and can be typed into, before the
+    // broadcast listing it arrives.
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: /New session/ })[0]);
+    });
+    command.mockImplementation(async (name: string) =>
+      name === "create_session" ? { sessionId: "fresh" } : ({} as any),
+    );
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "Start" }));
+    });
+    await act(async () => events.onState("fresh", state("fresh", "default")));
+    await act(async () => {
+      fireEvent.change(composer(), { target: { value: "draft for fresh" } });
+    });
+
+    // Switch away, then a list lands that still predates the new session. The
+    // draft must not be pruned as if the session were gone.
+    await open("a");
+    await act(async () => events.onSessions([session("a"), session("b")]));
+
+    // The broadcast finally carries it; returning shows the draft intact.
+    await act(async () => events.onSessions([session("a"), session("b"), session("fresh")]));
+    await open("fresh");
+    expect(composer().value).toBe("draft for fresh");
+  });
 });
 
 describe("losing the attached session", () => {

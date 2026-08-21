@@ -397,23 +397,26 @@ export function App() {
     if (!isDesktop) setSidebarOpen(true);
   }, [sessions, activeId, isDesktop]);
 
-  // Drop drafts for sessions that no longer exist, so a deleted session does
-  // not leave its text behind for the life of the tab. The active session is
-  // spared even when the list has not caught up with it yet: a freshly created
-  // session is attached before the broadcast listing it arrives, and its draft
-  // must not be pruned in that gap.
+  // Drop drafts for sessions that have left the list, so a deleted session does
+  // not leave its text behind for the life of the tab. "Absent from the list"
+  // only means gone if the session was ever *in* the list: a freshly created
+  // session is attached — and can be typed into — before the broadcast listing
+  // it arrives, and treating that gap as a disappearance would prune its draft.
+  // Same reasoning, and the same guard, as `seenActive` above.
+  const seenSessions = useRef<Set<string>>(new Set());
   useEffect(() => {
+    for (const s of sessions) seenSessions.current.add(s.id);
     setDrafts((d) => {
       const live = new Set(sessions.map((s) => s.id));
       const next: Record<string, string> = {};
       let changed = false;
       for (const [id, text] of Object.entries(d)) {
-        if (live.has(id) || id === activeId) next[id] = text;
+        if (live.has(id) || !seenSessions.current.has(id)) next[id] = text;
         else changed = true;
       }
       return changed ? next : d;
     });
-  }, [sessions, activeId]);
+  }, [sessions]);
 
   // Nothing measures the composer on its own, so a fixed padding could only
   // ever guess at its height — and it grows (a tall draft, a permission prompt
