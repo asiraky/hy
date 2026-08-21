@@ -1,11 +1,11 @@
 import type { Element, Text } from "hast";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
-import { toast } from "sonner";
 
+import { useCopy } from "~/lib/clipboard";
 import { fileIconFor } from "~/lib/fileIcons";
 import { useOpenPath } from "~/lib/openPath";
 import { detectPath } from "~/lib/paths";
@@ -58,29 +58,12 @@ function codeLang(node: Element | undefined): string {
 }
 
 function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  useEffect(() => () => clearTimeout(timer.current), []);
-
-  const copy = useCallback(async () => {
-    try {
-      // Only available over https or on localhost; hy is served over both, so
-      // the failure has to be said out loud rather than silently doing nothing.
-      if (!navigator.clipboard) throw new Error("Clipboard unavailable in this context");
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), 1500);
-    } catch (e) {
-      toast.error("Could not copy", { description: e instanceof Error ? e.message : String(e) });
-    }
-  }, [text]);
+  const { copied, copy } = useCopy();
 
   return (
     <button
       type="button"
-      onClick={copy}
+      onClick={() => void copy(text)}
       aria-label={copied ? "Copied" : "Copy code"}
       className="text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring flex size-6 shrink-0 items-center justify-center rounded-md transition-colors outline-none focus-visible:ring-2"
     >

@@ -30,6 +30,7 @@ import { IconButton } from "~/components/IconButton";
 import { Markdown } from "~/components/Markdown";
 import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
+import { useCopy } from "~/lib/clipboard";
 import { fmtTokens } from "~/lib/format";
 import { cn } from "~/lib/utils";
 import type { Item, SessionState, ToolStatus, Turn } from "~/protocol";
@@ -250,23 +251,16 @@ function receivedTime(ms?: number): string {
  * so it fades in on hover on a desktop and stays small everywhere.
  */
 function MessageMeta({ item }: { item: Item }) {
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopy();
   const time = receivedTime(item.receivedAt);
   if (!time && !item.text) return null;
-
-  const copy = () => {
-    navigator.clipboard?.writeText(item.text ?? "").then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  };
 
   return (
     <div className="text-muted-foreground flex items-center gap-1.5 text-[13px] opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
       {time && <span className="font-mono">{time}</span>}
       <button
         type="button"
-        onClick={copy}
+        onClick={() => void copy(item.text ?? "")}
         aria-label="Copy message"
         className="hover:text-foreground focus-visible:ring-ring flex cursor-pointer items-center gap-1 rounded-md px-1 py-0.5 outline-none focus-visible:ring-2"
       >
