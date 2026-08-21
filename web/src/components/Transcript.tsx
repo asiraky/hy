@@ -294,10 +294,14 @@ function UserMessage({ item }: { item: Item }) {
   const bodyRef = useRef<HTMLDivElement>(null);
 
   // Measure the overflow rather than counting characters: the same text is a
-  // very different height depending on how it wraps. While collapsed the body
-  // is clamped, so a scrollHeight past the clamp is the real signal there's
-  // more. Skip the measure while expanded — the clamp is gone, the two heights
-  // agree, and re-measuring would only wrongly clear the toggle.
+  // very different height depending on how it wraps. The clamp is applied
+  // whenever the bubble isn't expanded (see `clamped` below), so while
+  // collapsed a scrollHeight past the clamp is the real signal there's more.
+  // Measuring against the clamped element is what makes this work — measure an
+  // unconstrained element and its scrollHeight and clientHeight always agree,
+  // so nothing would ever look overflowing. Skip the measure while expanded:
+  // the clamp is off, the two heights agree, and re-measuring would only
+  // wrongly clear the toggle.
   useLayoutEffect(() => {
     if (expanded) return;
     const el = bodyRef.current;
@@ -309,7 +313,11 @@ function UserMessage({ item }: { item: Item }) {
     return () => ro.disconnect();
   }, [item.text, expanded]);
 
-  const collapsed = !expanded && overflowing;
+  // Clamp whenever not expanded — including before the first measurement — so
+  // the measurement above runs against a constrained element. A short message
+  // is shorter than the clamp, so the cap does nothing visible to it; only a
+  // message that actually overflows gets the fade and the toggle.
+  const clamped = !expanded;
 
   const toggle = () => {
     // Collapsing can leave the bubble's top scrolled off above the viewport;
@@ -323,17 +331,19 @@ function UserMessage({ item }: { item: Item }) {
       <div
         ref={bodyRef}
         style={
-          collapsed
+          clamped
             ? {
                 maxHeight: `${MAX_COLLAPSED_USER_MESSAGE_LINES}lh`,
-                WebkitMaskImage: COLLAPSED_USER_MESSAGE_MASK,
-                maskImage: COLLAPSED_USER_MESSAGE_MASK,
+                ...(overflowing && {
+                  WebkitMaskImage: COLLAPSED_USER_MESSAGE_MASK,
+                  maskImage: COLLAPSED_USER_MESSAGE_MASK,
+                }),
               }
             : undefined
         }
         className={cn(
           "bg-user-bubble text-user-bubble-foreground max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2 text-[14px] leading-relaxed break-words whitespace-pre-wrap",
-          collapsed && "overflow-hidden",
+          clamped && "overflow-hidden",
         )}
       >
         {item.text}
