@@ -51,8 +51,10 @@ type WorkspaceKind = "main" | "branch" | "attach";
 
 // The Base dropdown's "use the project default" option. A Radix Select item
 // cannot carry an empty value, so this stands in for the empty baseRef that
-// defers to the project's own base branch.
-const BASE_DEFAULT = "__default__";
+// defers to the project's own base branch. The space makes it an impossible
+// Git branch name, so it can never collide with a real branch listed beside
+// it and be mistaken for the default.
+const BASE_DEFAULT = "project default";
 
 const WORKSPACE_KINDS: { id: WorkspaceKind; label: string; hint: string }[] = [
   { id: "main", label: "Main checkout", hint: "Works in the project directory itself." },
