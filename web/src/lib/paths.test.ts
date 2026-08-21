@@ -46,4 +46,32 @@ describe("detectPath", () => {
   it("keeps directory references", () => {
     expect(detectPath("web/src/")).toEqual({ path: "web/src", line: undefined });
   });
+
+  it("rejects slashed tokens that are protocol/method names, not paths", () => {
+    expect(detectPath("system/init")).toBeNull();
+    expect(detectPath("turn/interrupt")).toBeNull();
+    expect(detectPath("rawMaxTokens/maxTokens")).toBeNull();
+    expect(detectPath("a/b")).toBeNull();
+  });
+
+  it("keeps extensionless slashed paths when anchored or explicitly a directory", () => {
+    expect(detectPath("internal/adapter/claude.go")).toEqual({ path: "internal/adapter/claude.go", line: undefined });
+    expect(detectPath("system/init:5")).toEqual({ path: "system/init", line: 5 });
+    expect(detectPath("internal/session/")).toEqual({ path: "internal/session", line: undefined });
+  });
+
+  it("keeps extensionless slashed paths with a relative or absolute prefix", () => {
+    expect(detectPath("./scripts/build")).toEqual({ path: "scripts/build", line: undefined });
+    expect(detectPath("/Users/aaron/code/hy/bin/dev")).toEqual({ path: "/Users/aaron/code/hy/bin/dev", line: undefined });
+  });
+
+  it("keeps known bare filenames inside a directory", () => {
+    expect(detectPath("docs/README")).toEqual({ path: "docs/README", line: undefined });
+    expect(detectPath(".github/CODEOWNERS")).toEqual({ path: ".github/CODEOWNERS", line: undefined });
+  });
+
+  it("does not treat a dotted hostname segment as an extension", () => {
+    expect(detectPath("github.com/asiraky/hy")).toBeNull();
+    expect(detectPath("api.example.com/system/init")).toBeNull();
+  });
 });

@@ -48,15 +48,21 @@ export function detectPath(raw: string): DetectedPath | null {
   }
 
   if (!SHAPE.test(text)) return null;
-  if (text.startsWith("./")) text = text.slice(2);
+  // An explicit relative (`./`) or absolute (`/`) prefix is itself a strong
+  // path signal, independent of any extension.
+  const explicitRel = text.startsWith("./");
+  const absolute = text.startsWith("/");
+  if (explicitRel) text = text.slice(2);
   if (text === "" || text === "." || text === "..") return null;
   // A parent-relative path points outside anything we can open.
   if (text.startsWith("../") || text.includes("/../")) return null;
   // Flag-looking spans (`--no-color`) and lone dotfiles of punctuation.
   if (text.startsWith("-")) return null;
 
-  // A single trailing slash (`web/`) is a directory reference — allowed.
-  if (text.endsWith("/")) text = text.slice(0, -1);
+  // A single trailing slash (`web/`, `web/src/`) is an explicit directory
+  // reference — a strong path signal even without an extension.
+  const trailingSlash = text.endsWith("/");
+  if (trailingSlash) text = text.slice(0, -1);
   if (text === "") return null;
   const hasSlash = text.includes("/");
   const base = hasSlash ? text.slice(text.lastIndexOf("/") + 1) : text;
@@ -73,6 +79,21 @@ export function detectPath(raw: string): DetectedPath | null {
     // All-numeric segments are a date or a fraction (`1/2/2024`), not a path.
     const segments = text.split("/").filter(Boolean);
     if (segments.every((s) => /^\d+$/.test(s))) return null;
+    // A slash alone is too weak: `system/init`, `turn/interrupt` and `a/b`
+    // alternatives (`rawMaxTokens/maxTokens`) are protocol/method names, not
+    // files. Admit only with a corroborating path signal: an extension on the
+    // basename (`foo/bar.ts`), a known bare filename (`docs/README`), a `:line`
+    // anchor, an explicit directory (trailing slash, `web/src/`), or an
+    // explicit relative/absolute prefix (`./scripts/build`, `/usr/bin/dev`).
+    // The extension must sit on the basename, so a dotted hostname segment
+    // (`github.com/asiraky/hy`) does not masquerade as one.
+    const hasExt = ext !== "" && /^[a-z0-9]{1,10}$/.test(ext) && !/^\d+$/.test(ext);
+    const knownBare =
+      BARE_FILES.has(base.toLowerCase()) ||
+      BARE_FILES.has(base.toLowerCase().replace(/\.(md|txt|rst)$/, ""));
+    if (!hasExt && !knownBare && line === undefined && !trailingSlash && !explicitRel && !absolute) {
+      return null;
+    }
     return { path: text, line };
   }
   if (BARE_FILES.has(base.toLowerCase()) || BARE_FILES.has(base.toLowerCase().replace(/\.(md|txt|rst)$/, ""))) {
