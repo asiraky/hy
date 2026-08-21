@@ -522,10 +522,28 @@ func (s *session) askUserQuestion(ctx context.Context, rawInput json.RawMessage)
 		}
 		if len(q.Options) > 0 {
 			values := make([]string, 0, len(q.Options))
+			descriptions := map[string]string{}
 			for _, o := range q.Options {
 				values = append(values, o.Label)
+				if o.Description != "" {
+					descriptions[o.Label] = o.Description
+				}
 			}
 			field["enum"] = values
+			if len(descriptions) > 0 {
+				// The presenter shows these beside each option; losing them can
+				// leave a terse label ("Blue") without the trade-off it stood for.
+				field["x-optionDescriptions"] = descriptions
+			}
+			// AskUserQuestion always offers a free-text answer alongside the
+			// listed choices — the tool tells the model not to add its own
+			// "Other" because the presenter supplies it. Carry that through.
+			field["x-allowOther"] = true
+		}
+		if q.MultiSelect {
+			// The human may pick more than one; the presenter returns an array,
+			// which we join comma-separated per the tool's answer contract.
+			field["x-multiSelect"] = true
 		}
 		properties[key] = field
 		required = append(required, key)
@@ -551,8 +569,23 @@ func (s *session) askUserQuestion(ctx context.Context, rawInput json.RawMessage)
 	_ = json.Unmarshal(result.Value, &values)
 	answers := map[string]string{}
 	for i, q := range parsed.Questions {
-		if v, ok := values[keys[i]].(string); ok && v != "" {
-			answers[q.Question] = v
+		// A single-select answer arrives as a string; a multi-select one as an
+		// array of labels, which the tool wants joined comma-separated.
+		switch v := values[keys[i]].(type) {
+		case string:
+			if v != "" {
+				answers[q.Question] = v
+			}
+		case []any:
+			parts := make([]string, 0, len(v))
+			for _, e := range v {
+				if s, ok := e.(string); ok && s != "" {
+					parts = append(parts, s)
+				}
+			}
+			if len(parts) > 0 {
+				answers[q.Question] = strings.Join(parts, ", ")
+			}
 		}
 	}
 	return allow(answers)

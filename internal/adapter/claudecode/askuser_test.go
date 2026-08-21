@@ -82,8 +82,11 @@ func TestAskUserQuestionRoutesThroughElicitation(t *testing.T) {
 			// The schema must offer the two options as an enum on the question.
 			var schema struct {
 				Properties map[string]struct {
-					Title string   `json:"title"`
-					Enum  []string `json:"enum"`
+					Title              string            `json:"title"`
+					Enum               []string          `json:"enum"`
+					AllowOther         bool              `json:"x-allowOther"`
+					MultiSelect        bool              `json:"x-multiSelect"`
+					OptionDescriptions map[string]string `json:"x-optionDescriptions"`
 				} `json:"properties"`
 			}
 			if err := json.Unmarshal(req.Schema, &schema); err != nil {
@@ -98,6 +101,14 @@ func TestAskUserQuestionRoutesThroughElicitation(t *testing.T) {
 			}
 			if len(field.Enum) != 2 || field.Enum[0] != "Red" || field.Enum[1] != "Blue" {
 				t.Errorf("enum = %v, want [Red Blue]", field.Enum)
+			}
+			// AskUserQuestion always carries a free-text escape and its option
+			// rationales; the presenter needs both.
+			if !field.AllowOther {
+				t.Error("expected x-allowOther on the question field")
+			}
+			if field.OptionDescriptions["Red"] != "the warm one" {
+				t.Errorf("x-optionDescriptions = %v, want Red->'the warm one'", field.OptionDescriptions)
 			}
 
 			return adapter.ElicitationResult{
@@ -134,6 +145,64 @@ func TestAskUserQuestionRoutesThroughElicitation(t *testing.T) {
 	// The original questions must survive so the tool still has its full input.
 	if _, ok := updated["questions"]; !ok {
 		t.Error("updatedInput dropped the original questions field")
+	}
+}
+
+const multiSelectInput = `{
+  "questions": [
+    {
+      "question": "Which features?",
+      "header": "Features",
+      "multiSelect": true,
+      "options": [
+        {"label": "Caching", "description": ""},
+        {"label": "Metrics", "description": ""},
+        {"label": "Tracing", "description": ""}
+      ]
+    }
+  ]
+}`
+
+// A multi-select question flags x-multiSelect and its several chosen labels come
+// back as an array, which must be joined comma-separated — the tool's answer
+// contract for multi-select.
+func TestAskUserQuestionMultiSelectJoinsAnswers(t *testing.T) {
+	host := &fakeHost{
+		elicit: func(req adapter.ElicitationRequest) (adapter.ElicitationResult, error) {
+			var schema struct {
+				Properties map[string]struct {
+					MultiSelect bool `json:"x-multiSelect"`
+				} `json:"properties"`
+			}
+			if err := json.Unmarshal(req.Schema, &schema); err != nil {
+				t.Fatalf("schema not valid JSON: %v", err)
+			}
+			if !schema.Properties["q0"].MultiSelect {
+				t.Error("expected x-multiSelect on the question field")
+			}
+			return adapter.ElicitationResult{
+				Action: "accept",
+				Value:  json.RawMessage(`{"q0": ["Caching", "Tracing"]}`),
+			}, nil
+		},
+	}
+	s := &session{host: host}
+
+	params, _ := json.Marshal(map[string]any{
+		"toolName": "AskUserQuestion",
+		"input":    json.RawMessage(multiSelectInput),
+	})
+	res, err := s.handleRequest(context.Background(), "permission", params)
+	if err != nil {
+		t.Fatalf("handleRequest: %v", err)
+	}
+	behavior, updated := decodePermissionResult(t, res)
+	if behavior != "allow" {
+		t.Fatalf("behavior = %q, want allow", behavior)
+	}
+	answers, _ := updated["answers"].(map[string]any)
+	if answers["Which features?"] != "Caching, Tracing" {
+		t.Errorf("answer = %v, want 'Caching, Tracing'", answers["Which features?"])
 	}
 }
 
