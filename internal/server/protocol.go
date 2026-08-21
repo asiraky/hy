@@ -119,6 +119,17 @@ type fileDiffArgs struct {
 	Path      string `json:"path"`
 }
 
+type fileTreeArgs struct {
+	SessionID string `json:"sessionId"`
+	// IncludeIgnored turns the .gitignore filter off for the listing.
+	IncludeIgnored bool `json:"includeIgnored"`
+}
+
+type readFileArgs struct {
+	SessionID string `json:"sessionId"`
+	Path      string `json:"path"`
+}
+
 type setModeArgs struct {
 	SessionID string `json:"sessionId"`
 	Mode      string `json:"mode"`
