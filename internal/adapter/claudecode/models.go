@@ -36,20 +36,6 @@ func (a *Adapter) Models() []adapter.ModelMeta {
 	}
 }
 
-// legacyModels are the older Opus versions Claude Code still accepts but no
-// longer advertises: supportedModels() lists only current models, while
-// `claude --model` documents full model names as valid. They are the one piece
-// of model data hy hardcodes, so they need review whenever a new Opus ships —
-// a name that stops being served will simply fail at session start, which is
-// why they are grouped away rather than offered first.
-//
-// Reviewed against claude CLI 2.1.237.
-var legacyModels = []adapter.ModelMeta{
-	{ID: "claude-opus-4-8", Label: "Opus 4.8", Version: "Opus 4.8", Description: "The previous Opus generation."},
-	{ID: "claude-opus-4-7", Label: "Opus 4.7", Version: "Opus 4.7", Description: "An older Opus generation."},
-	{ID: "claude-opus-4-6", Label: "Opus 4.6", Version: "Opus 4.6", Description: "An older Opus generation."},
-}
-
 // modelInfo is the SDK's ModelInfo, as the sidecar relays it.
 type modelInfo struct {
 	Value                 string   `json:"value"`
@@ -134,16 +120,21 @@ func (a *Adapter) ListModels(ctx context.Context, env map[string]string) ([]adap
 	}
 }
 
-// mapClaudeModels turns the SDK's rows into hy's, and appends the curated
-// legacy group. The SDK packs generation and purpose into one description
-// ("Opus 5 with 1M context · Best for everyday, complex tasks"); splitting on
-// its own separator is what lets a row show which Opus it is next to what the
-// model is for.
+// mapClaudeModels turns the SDK's rows into hy's. The SDK packs generation and
+// purpose into one description ("Opus 5 with 1M context · Best for everyday,
+// complex tasks"); splitting on its own separator is what lets a row show which
+// Opus it is next to what the model is for.
+//
+// Only the harness's own list is offered. hy used to append a hardcoded
+// "legacy" group of older Opus ids, but the installed Claude Code no longer
+// serves them: selecting one left the picker showing a model the harness was
+// not running (and a context window that did not match its label). A model this
+// build believes in but the harness will not serve is worse than absent.
 func mapClaudeModels(in []modelInfo) []adapter.ModelMeta {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make([]adapter.ModelMeta, 0, len(in)+len(legacyModels))
+	out := make([]adapter.ModelMeta, 0, len(in))
 	for _, m := range in {
 		if m.Value == "" {
 			continue
@@ -160,10 +151,6 @@ func mapClaudeModels(in []modelInfo) []adapter.ModelMeta {
 			Default: m.Value == "default",
 			Efforts: m.SupportedEffortLevels,
 		})
-	}
-	for _, m := range legacyModels {
-		m.Group = adapter.GroupLegacy
-		out = append(out, m)
 	}
 	return out
 }
