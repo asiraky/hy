@@ -7,8 +7,6 @@ import (
 	"strings"
 
 	"github.com/asiraky/hy/internal/adapter"
-	"github.com/asiraky/hy/internal/proto"
-	"github.com/google/uuid"
 )
 
 type codexSkill struct {
@@ -116,25 +114,16 @@ func codexBuiltinComposerItems() []adapter.ComposerItem {
 
 // RunComposerAction maps the small advertised command set onto app-server.
 // The opaque action ids are interpreted only here, inside the Codex adapter.
-func (s *session) RunComposerAction(ctx context.Context, action, args string) (any, error) {
-	method, params, startsTurn, err := codexComposerActionRequest(s.threadID, action, args)
+func (s *session) RunComposerAction(ctx context.Context, in adapter.ComposerActionInput) (any, error) {
+	method, params, err := codexComposerActionRequest(s.threadID, in.Action, in.Args)
 	if err != nil {
 		return nil, err
 	}
 
-	var turnID string
-	if startsTurn {
-		turnID = uuid.NewString()
-		s.mu.Lock()
-		s.turnID = turnID
-		s.mu.Unlock()
-		prompt := "/" + action
-		if strings.TrimSpace(args) != "" {
-			prompt += " " + strings.TrimSpace(args)
-		}
-		s.emit(proto.Emit(proto.TurnStarted, proto.TurnStartedPayload{TurnID: turnID, Prompt: prompt}))
-	}
-	if action == "compact" {
+	s.mu.Lock()
+	s.turnID = in.TurnID
+	s.mu.Unlock()
+	if in.Action == "compact" {
 		s.mu.Lock()
 		s.manualCompact = true
 		s.mu.Unlock()
@@ -142,33 +131,28 @@ func (s *session) RunComposerAction(ctx context.Context, action, args string) (a
 
 	var response map[string]any
 	if err := s.conn.Call(ctx, method, params, &response); err != nil {
-		if action == "compact" {
+		if in.Action == "compact" {
 			s.mu.Lock()
 			s.manualCompact = false
 			s.mu.Unlock()
 		}
-		if turnID != "" {
-			s.mu.Lock()
-			if s.turnID == turnID {
-				s.turnID = ""
-			}
-			s.mu.Unlock()
-			s.emit(proto.Emit(proto.TurnFinished, proto.TurnFinishedPayload{
-				TurnID: turnID, StopReason: proto.StopError, Error: err.Error(),
-			}))
+		s.mu.Lock()
+		if s.turnID == in.TurnID {
+			s.turnID = ""
 		}
+		s.mu.Unlock()
 		return nil, err
 	}
 	return response, nil
 }
 
-func codexComposerActionRequest(threadID, action, args string) (string, map[string]any, bool, error) {
+func codexComposerActionRequest(threadID, action, args string) (string, map[string]any, error) {
 	switch action {
 	case "compact":
 		if strings.TrimSpace(args) != "" {
-			return "", nil, false, fmt.Errorf("/%s does not accept arguments", action)
+			return "", nil, fmt.Errorf("/%s does not accept arguments", action)
 		}
-		return "thread/compact/start", map[string]any{"threadId": threadID}, false, nil
+		return "thread/compact/start", map[string]any{"threadId": threadID}, nil
 	case "review":
 		target := map[string]any{"type": "uncommittedChanges"}
 		if instructions := strings.TrimSpace(args); instructions != "" {
@@ -178,9 +162,9 @@ func codexComposerActionRequest(threadID, action, args string) (string, map[stri
 			"threadId": threadID,
 			"delivery": "inline",
 			"target":   target,
-		}, true, nil
+		}, nil
 	default:
-		return "", nil, false, fmt.Errorf("unknown Codex composer action %q", action)
+		return "", nil, fmt.Errorf("unknown Codex composer action %q", action)
 	}
 }
 

@@ -82,7 +82,10 @@ export function submittedComposerAction(text: string, items: ComposerItem[]) {
   for (const item of items) {
     if (item.behavior === "prompt") continue;
     if (trimmed === item.insertText) return { item, args: "" };
-    if (trimmed.startsWith(item.insertText + " ")) {
+    if (
+      trimmed.startsWith(item.insertText) &&
+      /\s/.test(trimmed.charAt(item.insertText.length))
+    ) {
       return { item, args: trimmed.slice(item.insertText.length).trim() };
     }
   }

@@ -254,8 +254,14 @@ type ComposerCataloguer interface {
 
 // ComposerActionRunner handles catalogue entries that map to a provider RPC
 // rather than prompt text. Action is opaque outside the adapter.
+type ComposerActionInput struct {
+	TurnID string
+	Action string
+	Args   string
+}
+
 type ComposerActionRunner interface {
-	RunComposerAction(ctx context.Context, action, args string) (any, error)
+	RunComposerAction(ctx context.Context, in ComposerActionInput) (any, error)
 }
 
 // PermissionRequest is what an adapter asks a human, via the host.

@@ -391,6 +391,7 @@ describe("composer drafts", () => {
         sessionId: "a",
         action: "compact",
         args: "",
+        invocation: "/compact",
       }),
     );
 
@@ -403,9 +404,66 @@ describe("composer drafts", () => {
         sessionId: "a",
         action: "review",
         args: "focus on races",
+        invocation: "/review focus on races",
       }),
     );
     expect(command).not.toHaveBeenCalledWith("prompt", expect.anything());
+  });
+
+  it("does not leak slash actions while the provider catalogue is still unknown", async () => {
+    let resolveCatalogue!: (value: any) => void;
+    const pendingCatalogue = new Promise((resolve) => {
+      resolveCatalogue = resolve;
+    });
+    command.mockImplementation(async (name: string) =>
+      name === "list_composer_items" ? pendingCatalogue : ({} as any),
+    );
+    await boot();
+    await open("a");
+
+    fireEvent.change(composer(), { target: { value: "/compact", selectionStart: 8 } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(command).not.toHaveBeenCalledWith("prompt", expect.anything());
+    expect(composer().value).toBe("/compact");
+
+    await act(async () => resolveCatalogue({ items: [] }));
+  });
+
+  it("preserves text typed while a native action response is pending", async () => {
+    let resolveAction!: (value: any) => void;
+    const pendingAction = new Promise((resolve) => {
+      resolveAction = resolve;
+    });
+    const review = {
+      id: "command:review",
+      name: "review",
+      kind: "command",
+      trigger: "/",
+      insertText: "/review",
+      behavior: "adapter-action",
+      action: "review",
+    };
+    command.mockImplementation(async (name: string) => {
+      if (name === "list_composer_items") return { items: [review] };
+      if (name === "run_composer_action") return pendingAction;
+      return {} as any;
+    });
+    await boot();
+    await open("a");
+    await waitFor(() =>
+      expect(command).toHaveBeenCalledWith("list_composer_items", { sessionId: "a" }),
+    );
+
+    fireEvent.focus(composer());
+    fireEvent.change(composer(), { target: { value: "/review", selectionStart: 7 } });
+    fireEvent.keyDown(composer(), { key: "Enter" });
+    await waitFor(() =>
+      expect(command).toHaveBeenCalledWith("run_composer_action", expect.anything()),
+    );
+    fireEvent.change(composer(), { target: { value: "my next message", selectionStart: 15 } });
+    await act(async () => resolveAction({}));
+
+    expect(composer().value).toBe("my next message");
   });
 
   it("inserts a provider-native skill completion without executing it", async () => {

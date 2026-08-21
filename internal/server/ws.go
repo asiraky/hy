@@ -407,7 +407,7 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return actor.RunComposerAction(ctx, a.Action, a.Args)
+		return actor.RunComposerAction(ctx, a.Action, a.Args, a.Invocation)
 
 	case "resolve_permission":
 		var a resolveArgs

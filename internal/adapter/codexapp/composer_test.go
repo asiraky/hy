@@ -47,25 +47,25 @@ func TestCodexBuiltinComposerItemsHaveRealHandlers(t *testing.T) {
 }
 
 func TestCodexComposerActionRequests(t *testing.T) {
-	method, params, startsTurn, err := codexComposerActionRequest("thread-1", "compact", "")
-	if err != nil || method != "thread/compact/start" || startsTurn || params["threadId"] != "thread-1" {
-		t.Fatalf("compact request = %q %+v starts=%v err=%v", method, params, startsTurn, err)
+	method, params, err := codexComposerActionRequest("thread-1", "compact", "")
+	if err != nil || method != "thread/compact/start" || params["threadId"] != "thread-1" {
+		t.Fatalf("compact request = %q %+v err=%v", method, params, err)
 	}
 
-	method, params, startsTurn, err = codexComposerActionRequest("thread-1", "review", "focus on races")
-	if err != nil || method != "review/start" || !startsTurn {
-		t.Fatalf("review request = %q %+v starts=%v err=%v", method, params, startsTurn, err)
+	method, params, err = codexComposerActionRequest("thread-1", "review", "focus on races")
+	if err != nil || method != "review/start" {
+		t.Fatalf("review request = %q %+v err=%v", method, params, err)
 	}
 	target := params["target"].(map[string]any)
 	if target["type"] != "custom" || target["instructions"] != "focus on races" {
 		t.Errorf("review target = %+v", target)
 	}
 
-	_, _, _, err = codexComposerActionRequest("thread-1", "compact", "surprise")
+	_, _, err = codexComposerActionRequest("thread-1", "compact", "surprise")
 	if err == nil {
 		t.Fatal("/compact accepted arguments it cannot use")
 	}
-	_, _, _, err = codexComposerActionRequest("thread-1", "imaginary", "")
+	_, _, err = codexComposerActionRequest("thread-1", "imaginary", "")
 	if err == nil {
 		t.Fatal("an unadvertised action reached app-server")
 	}

@@ -464,10 +464,10 @@ func (a *Actor) ComposerItems(ctx context.Context) ([]adapter.ComposerItem, erro
 	return v.([]adapter.ComposerItem), nil
 }
 
-// RunComposerAction routes an opaque provider action without turning it into
-// a user prompt or transcript turn.
-func (a *Actor) RunComposerAction(ctx context.Context, action, args string) (any, error) {
-	return a.call(ctx, command{kind: cmdRunComposer, prompt: args, mode: action})
+// RunComposerAction routes an opaque provider action as a canonical turn. The
+// invocation is presentation only; the adapter still interprets action.
+func (a *Actor) RunComposerAction(ctx context.Context, action, args, invocation string) (any, error) {
+	return a.call(ctx, command{kind: cmdRunComposer, prompt: args, mode: action, model: invocation})
 }
 
 // Cancel interrupts the running turn. It is a command on the inbox, never a
@@ -697,9 +697,21 @@ func (a *Actor) handle(c command) (stop bool) {
 			c.reply <- cmdResult{err: errors.New("this harness cannot run composer actions")}
 			return false
 		}
+		turnID := uuid.NewString()
+		a.turnActive = turnID
+		a.append(proto.Emit(proto.TurnStarted, proto.TurnStartedPayload{TurnID: turnID, Prompt: c.model}))
 		actionCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-		value, err := runner.RunComposerAction(actionCtx, c.mode, c.prompt)
+		value, err := runner.RunComposerAction(actionCtx, adapter.ComposerActionInput{
+			TurnID: turnID,
+			Action: c.mode,
+			Args:   c.prompt,
+		})
 		cancel()
+		if err != nil {
+			a.append(proto.Emit(proto.TurnFinished, proto.TurnFinishedPayload{
+				TurnID: turnID, StopReason: proto.StopError, Error: err.Error(),
+			}))
+		}
 		c.reply <- cmdResult{value: value, err: err}
 
 	case cmdPrompt:

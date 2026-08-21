@@ -141,9 +141,10 @@ type setModelArgs struct {
 }
 
 type runComposerActionArgs struct {
-	SessionID string `json:"sessionId"`
-	Action    string `json:"action"`
-	Args      string `json:"args"`
+	SessionID  string `json:"sessionId"`
+	Action     string `json:"action"`
+	Args       string `json:"args"`
+	Invocation string `json:"invocation"`
 }
 
 type resolveArgs struct {

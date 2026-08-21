@@ -59,14 +59,16 @@ export function Composer({
   usage?: Usage;
   loadComposerItems?: () => Promise<ComposerItem[]>;
   onRunClientAction?: (action: string) => void;
-  onRunComposerAction?: (action: string, args: string) => Promise<void>;
+  onRunComposerAction?: (action: string, args: string, invocation: string) => Promise<void>;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   // There is no ⇧↵ worth advertising on a phone, so keep the hint to desktop.
   const isDesktop = useIsDesktop();
   const [providerItems, setProviderItems] = useState<ComposerItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
+  const [catalogueReady, setCatalogueReady] = useState(!loadComposerItems);
   const loadSequence = useRef(0);
+  const draftRef = useRef(draft);
   const [cursor, setCursor] = useState(draft.length);
   const [activeIndex, setActiveIndex] = useState(0);
   const [dismissedTrigger, setDismissedTrigger] = useState("");
@@ -97,21 +99,39 @@ export function Composer({
   const reloadItems = useCallback(() => {
     if (!loadComposerItems) {
       setProviderItems([]);
+      setCatalogueReady(true);
       return;
     }
     const sequence = ++loadSequence.current;
     setLoadingItems(true);
     loadComposerItems()
       .then((next) => {
-        if (sequence === loadSequence.current) setProviderItems(next);
+        if (sequence === loadSequence.current) {
+          setProviderItems(next);
+          setCatalogueReady(true);
+        }
       })
       .catch(() => {
-        if (sequence === loadSequence.current) setProviderItems([]);
+        // Retain a previously successful catalogue. If the first request
+        // failed, catalogueReady remains false and slash text is not sent as
+        // a prompt while its behavior is unknown.
       })
       .finally(() => {
         if (sequence === loadSequence.current) setLoadingItems(false);
       });
   }, [loadComposerItems]);
+
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
+
+  const changeDraft = useCallback(
+    (next: string) => {
+      draftRef.current = next;
+      onDraftChange(next);
+    },
+    [onDraftChange],
+  );
 
   useEffect(() => {
     reloadItems();
@@ -166,7 +186,7 @@ export function Composer({
       if (!trigger) return;
       if (item.behavior === "client-action" && item.action) {
         const next = replaceComposerTrigger(draft, trigger, "");
-        onDraftChange(next.value);
+        changeDraft(next.value);
         setDismissedTrigger(triggerKey);
         if (item.action === "model") {
           // Let the command popover close before opening the picker. Focusing
@@ -182,23 +202,29 @@ export function Composer({
         setDismissedTrigger(triggerKey);
         // Keep the literal command in place if the provider rejects it; App
         // has already surfaced the error and the user can retry or edit it.
-        void onRunComposerAction?.(item.action, "").then(() => onDraftChange(next.value)).catch(() => {});
+        const submittedDraft = draft;
+        void onRunComposerAction?.(item.action, "", item.insertText)
+          .then(() => {
+            if (draftRef.current === submittedDraft) changeDraft(next.value);
+          })
+          .catch(() => {});
         return;
       }
       const next = replaceComposerTrigger(draft, trigger, `${item.insertText} `);
-      onDraftChange(next.value);
+      changeDraft(next.value);
       setDismissedTrigger(triggerKey);
       focusAt(next.cursor);
     },
-    [draft, focusAt, onDraftChange, onRunClientAction, onRunComposerAction, trigger, triggerKey],
+    [changeDraft, draft, focusAt, onRunClientAction, onRunComposerAction, trigger, triggerKey],
   );
 
   const send = async () => {
     const t = draft.trim();
     if (!t || disabled) return;
+    if (t.startsWith("/") && !catalogueReady) return;
     const intercepted = submittedComposerAction(t, items);
     if (intercepted?.item.behavior === "client-action") {
-      onDraftChange("");
+      changeDraft("");
       if (intercepted.item.action === "model") {
         window.requestAnimationFrame(() => setModelPickerOpen(true));
       } else if (intercepted.item.action) {
@@ -208,8 +234,9 @@ export function Composer({
     }
     if (intercepted?.item.behavior === "adapter-action" && intercepted.item.action) {
       try {
-        await onRunComposerAction?.(intercepted.item.action, intercepted.args);
-        onDraftChange("");
+        const submittedDraft = draftRef.current;
+        await onRunComposerAction?.(intercepted.item.action, intercepted.args, t);
+        if (draftRef.current === submittedDraft) changeDraft("");
       } catch {
         // App reports the provider error. Retain the command so it can be
         // retried or edited, without leaving a rejected promise behind.
@@ -217,7 +244,7 @@ export function Composer({
       return;
     }
     onSend(t);
-    onDraftChange("");
+    changeDraft("");
   };
 
   const menu = (
@@ -267,7 +294,7 @@ export function Composer({
             : "Ask anything…"
       }
       onChange={(e) => {
-        onDraftChange(e.target.value);
+        changeDraft(e.target.value);
         setCursor(e.target.selectionStart);
       }}
       onFocus={() => setComposerFocused(true)}

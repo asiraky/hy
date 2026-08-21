@@ -3,6 +3,7 @@ package claudecode
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
@@ -59,7 +60,11 @@ func (s *session) ComposerItems(ctx context.Context) ([]adapter.ComposerItem, er
 }
 
 func claudeConfigDir(cwd string, env map[string]string) string {
-	if configured := strings.TrimSpace(env["CLAUDE_CONFIG_DIR"]); configured != "" {
+	configured, overridden := env["CLAUDE_CONFIG_DIR"]
+	if !overridden {
+		configured = os.Getenv("CLAUDE_CONFIG_DIR")
+	}
+	if configured = strings.TrimSpace(configured); configured != "" {
 		if filepath.IsAbs(configured) {
 			return filepath.Clean(configured)
 		}
@@ -88,7 +93,7 @@ func discoverClaudeSkillOrigins(configDir, cwd string) map[string]string {
 			root{filepath.Join(cwd, ".claude", "skills"), "project"},
 		)
 	}
-	origins := make(map[string]string)
+	origins := discoverClaudePluginOrigins(configDir, cwd)
 	for _, root := range roots {
 		entries, err := os.ReadDir(root.path)
 		if err != nil {
@@ -112,6 +117,102 @@ func discoverClaudeSkillOrigins(configDir, cwd string) map[string]string {
 		}
 	}
 	return origins
+}
+
+// Claude records the install paths and scopes of installed plugins. The SDK
+// remains authoritative about which commands are actually available; these
+// paths are consulted only when a returned name needs an origin label.
+func discoverClaudePluginOrigins(configDir, cwd string) map[string]string {
+	data, err := os.ReadFile(filepath.Join(configDir, "plugins", "installed_plugins.json"))
+	if err != nil {
+		return map[string]string{}
+	}
+	var installed struct {
+		Plugins map[string][]struct {
+			Scope       string `json:"scope"`
+			ProjectPath string `json:"projectPath"`
+			InstallPath string `json:"installPath"`
+		} `json:"plugins"`
+	}
+	if json.Unmarshal(data, &installed) != nil {
+		return map[string]string{}
+	}
+
+	origins := make(map[string]string)
+	seenPaths := make(map[string]bool)
+	for _, copies := range installed.Plugins {
+		for _, plugin := range copies {
+			if !claudePluginApplies(plugin.Scope, plugin.ProjectPath, cwd) {
+				continue
+			}
+			installPath := filepath.Clean(plugin.InstallPath)
+			if installPath == "." || seenPaths[installPath] {
+				continue
+			}
+			seenPaths[installPath] = true
+			discoverClaudeSkillRoot(filepath.Join(installPath, "skills"), "plugin", origins)
+			discoverClaudeCommandRoot(filepath.Join(installPath, "commands"), "plugin", origins)
+		}
+	}
+	return origins
+}
+
+func claudePluginApplies(scope, projectPath, cwd string) bool {
+	if scope == "user" {
+		return true
+	}
+	if scope != "project" && scope != "local" {
+		return false
+	}
+	projectPath, cwd = filepath.Clean(projectPath), filepath.Clean(cwd)
+	if projectPath == "." || cwd == "." {
+		return false
+	}
+	rel, err := filepath.Rel(projectPath, cwd)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func discoverClaudeSkillRoot(path, origin string, origins map[string]string) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		f, err := os.Open(filepath.Join(path, entry.Name(), "SKILL.md"))
+		if err != nil {
+			continue
+		}
+		name := skillFrontmatterName(f, entry.Name())
+		_ = f.Close()
+		if name != "" {
+			origins[strings.ToLower(name)] = origin
+		}
+	}
+}
+
+func discoverClaudeCommandRoot(path, origin string, origins map[string]string) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".md") {
+			continue
+		}
+		fallback := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
+		f, err := os.Open(filepath.Join(path, entry.Name()))
+		if err != nil {
+			continue
+		}
+		name := skillFrontmatterName(f, fallback)
+		_ = f.Close()
+		if name != "" {
+			origins[strings.ToLower(name)] = origin
+		}
+	}
 }
 
 // Current Claude Code appends source labels to discovered skill descriptions.

@@ -41,6 +41,7 @@ describe("composer item logic", () => {
 
   it("intercepts standalone actions but not prompt entries", () => {
     expect(submittedComposerAction(" /model ", items)?.item.id).toBe("model");
+    expect(submittedComposerAction("/model\tignored", items)?.args).toBe("ignored");
     expect(submittedComposerAction("$review-code", items)).toBeNull();
   });
 });

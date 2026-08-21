@@ -306,10 +306,15 @@ export function App() {
   }, [activeId, composerRevision]);
 
   const runComposerAction = useCallback(
-    async (action: string, args: string) => {
+    async (action: string, args: string, invocation: string) => {
       if (!activeId) return;
       try {
-        await clientRef.current!.command("run_composer_action", { sessionId: activeId, action, args });
+        await clientRef.current!.command("run_composer_action", {
+          sessionId: activeId,
+          action,
+          args,
+          invocation,
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         toast.error("Could not run that command", { description: message });
@@ -669,6 +674,7 @@ export function App() {
               )}
 
               <Composer
+                key={activeId}
                 draft={activeId ? (drafts[activeId] ?? "") : ""}
                 onDraftChange={(text) => activeId && setDraft(activeId, text)}
                 disabled={state.closed || workspaceBusy || workspaceFailed}
