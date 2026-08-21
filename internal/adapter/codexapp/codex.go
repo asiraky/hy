@@ -612,7 +612,10 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 		}
 		used := p.TokenUsage.Last.InputTokens + p.TokenUsage.Last.CachedInputTokens + p.TokenUsage.Last.OutputTokens
 		if used > 0 && window > 0 {
-			pct = min(100, float64(used)/float64(window)*100)
+			// Unclamped, matching the claude path: an over-limit reading is a
+			// real signal, and the meter renders the raw ratio rather than a
+			// value pinned at 100.
+			pct = float64(used) / float64(window) * 100
 		}
 		s.emit(proto.Emit(proto.UsageUpdated, proto.UsageUpdatedPayload{
 			Input: t.InputTokens, Output: t.OutputTokens,

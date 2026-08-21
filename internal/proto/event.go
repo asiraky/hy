@@ -290,6 +290,13 @@ type UsageUpdatedPayload struct {
 	// When it exceeds ContextWindow, the difference is the room past the
 	// compaction threshold, and the UI draws that threshold as a marker.
 	ContextLimit int64 `json:"contextLimit,omitempty"`
+	// AutoCompact reports whether the harness will compact automatically as the
+	// window fills. When false the window is a hard limit rather than a
+	// compaction boundary, and the UI must not promise a compaction.
+	AutoCompact bool `json:"autoCompact,omitempty"`
+	// AutoCompactThreshold is the token count at which auto-compaction triggers,
+	// when the harness reports it — the marker the UI draws on the bar.
+	AutoCompactThreshold int64 `json:"autoCompactThreshold,omitempty"`
 	// ContextCategories is the per-category breakdown of what occupies the
 	// window (system prompt, tools, messages, …), for a segmented bar. It is
 	// present only when the harness reports it.

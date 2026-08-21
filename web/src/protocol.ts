@@ -174,6 +174,11 @@ export interface Usage {
   /** The model's full context window, when it is larger than contextWindow
    *  (i.e. auto-compaction runs against a tighter boundary). */
   contextLimit?: number;
+  /** Whether the harness compacts automatically as the window fills. When
+   *  false, the window is a hard limit and no compaction will happen. */
+  autoCompact?: boolean;
+  /** The token count at which auto-compaction triggers, when reported. */
+  autoCompactThreshold?: number;
   /** Per-category breakdown of what occupies the window, for a segmented bar. */
   contextCategories?: { name: string; tokens: number }[];
 }

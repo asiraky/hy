@@ -124,11 +124,13 @@ func TestContextUsageIsAuthoritative(t *testing.T) {
 	s.handleSDKMessage(rawSDK(t, map[string]any{
 		"type": "context_usage",
 		"usage": map[string]any{
-			"model":        "claude-sonnet-test",
-			"totalTokens":  42000,
-			"maxTokens":    1000000,
-			"rawMaxTokens": 200000,
-			"percentage":   21,
+			"model":                "claude-sonnet-test",
+			"totalTokens":          42000,
+			"maxTokens":            1000000,
+			"rawMaxTokens":         200000,
+			"percentage":           21,
+			"isAutoCompactEnabled": true,
+			"autoCompactThreshold": 184000,
 			"categories": []any{
 				map[string]any{"name": "System prompt", "tokens": 2000},
 				map[string]any{"name": "Messages", "tokens": 40000},
@@ -150,6 +152,54 @@ func TestContextUsageIsAuthoritative(t *testing.T) {
 	// The free-space row is not occupied context, so it must be dropped.
 	if len(u.ContextCategories) != 2 {
 		t.Fatalf("categories = %v, want the two used rows only", u.ContextCategories)
+	}
+	if !u.AutoCompact || u.AutoCompactThreshold != 184000 {
+		t.Fatalf("auto-compaction = (%v, %d), want (true, 184000)", u.AutoCompact, u.AutoCompactThreshold)
+	}
+}
+
+// The fallback must keep tracking later turns even after a context_usage
+// report has arrived: if a subsequent report fails to arrive, the meter must
+// reflect the newest turn rather than freeze on the last authoritative reading.
+// It also reuses the window the harness last reported rather than the heuristic.
+func TestFallbackRefreshesAfterContextUsage(t *testing.T) {
+	s := newTestSession()
+
+	// A first, authoritative report establishes the real window.
+	s.handleSDKMessage(rawSDK(t, map[string]any{
+		"type": "context_usage",
+		"usage": map[string]any{
+			"totalTokens":  50000,
+			"rawMaxTokens": 160000,
+			"maxTokens":    200000,
+		},
+	}))
+
+	// A later turn whose context_usage never arrives — only an assistant
+	// message (the new prompt size) and a result.
+	s.handleSDKMessage(rawSDK(t, map[string]any{
+		"type": "assistant",
+		"message": map[string]any{
+			"content": []any{map[string]any{"type": "text"}},
+			"usage": map[string]any{
+				"input_tokens":            2000,
+				"cache_read_input_tokens": 88000,
+				"output_tokens":           500,
+			},
+		},
+	}))
+	s.handleSDKMessage(rawSDK(t, map[string]any{
+		"type":        "result",
+		"stop_reason": "end_turn",
+		"usage":       map[string]any{"input_tokens": 2000, "cache_read_input_tokens": 88000},
+	}))
+
+	u := lastUsage(t, s)
+	if u.ContextUsed != 90000 {
+		t.Fatalf("used = %d, want the new prompt size 90000 (not frozen at 50000)", u.ContextUsed)
+	}
+	if u.ContextWindow != 160000 {
+		t.Fatalf("window = %d, want the last reported window 160000, not the heuristic", u.ContextWindow)
 	}
 }
 

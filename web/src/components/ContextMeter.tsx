@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { type PointerEvent as ReactPointerEvent, useRef, useState } from "react";
 
 import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover";
 import { fmtPct, fmtTokens } from "~/lib/format";
@@ -46,21 +46,42 @@ export function ContextMeter({ usage, model }: { usage: Usage; model?: string })
     timer.current = setTimeout(() => setOpen(false), 120);
   };
   const cancelClose = () => clearTimeout(timer.current);
+  // Touch has no hover: after a tap the pointer immediately leaves, and a
+  // finger cannot move onto the portalled popover to cancel a scheduled close.
+  // So hover-open/close is mouse-only; touch falls through to the trigger's
+  // click, which Radix toggles, and an outside tap closes it.
+  const hoverOnly = (fn: () => void) => (e: ReactPointerEvent) => {
+    if (e.pointerType !== "touch") fn();
+  };
 
   const used = usage.contextUsed ?? 0;
   const win = usage.contextWindow ?? 0;
-  // The percentage is measured against the compaction window: it answers "how
-  // close am I to compaction", which is the number that matters here.
-  const pct = usage.contextPct ?? (win > 0 ? (used / win) * 100 : 0);
-  const over = pct > 100;
+  // Measured against the compaction window, computed from the raw tokens rather
+  // than a supplied percentage so an adapter that clamps its own pct (Codex)
+  // still reads as over-limit here. It answers "how close am I to compaction".
+  const pct = win > 0 ? (used / win) * 100 : (usage.contextPct ?? 0);
+  const over = win > 0 ? used > win : pct > 100;
   const near = pct >= WARN_AT;
+
+  // Whether the harness will compact on its own. Undefined (an adapter that
+  // does not report it) is treated as "unknown", not "off".
+  const autoCompactOff = usage.autoCompact === false;
 
   // The bar is drawn against the model's full window when that is larger than
   // the compaction window, so the compaction point can sit as an interior
   // marker rather than pinned to the right edge.
   const limit = usage.contextLimit && usage.contextLimit > win ? usage.contextLimit : win;
-  const barMax = Math.max(limit, used, 1);
-  const compactionMarker = limit > win && win > 0 ? (win / barMax) * 100 : undefined;
+  // The threshold marker: the reported auto-compaction trigger if there is one,
+  // otherwise the compaction window when it sits below the model's full window.
+  const threshold =
+    usage.autoCompactThreshold && usage.autoCompactThreshold > 0
+      ? usage.autoCompactThreshold
+      : limit > win && win > 0
+        ? win
+        : undefined;
+  const barMax = Math.max(limit, used, threshold ?? 0, 1);
+  const compactionMarker =
+    !autoCompactOff && threshold !== undefined ? (threshold / barMax) * 100 : undefined;
 
   const categories = (usage.contextCategories ?? []).filter((c) => c.tokens > 0);
   const ringTone = near ? "text-destructive" : "text-muted-foreground";
@@ -72,8 +93,8 @@ export function ContextMeter({ usage, model }: { usage: Usage; model?: string })
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
-        onPointerEnter={openSoon}
-        onPointerLeave={closeSoon}
+        onPointerEnter={hoverOnly(openSoon)}
+        onPointerLeave={hoverOnly(closeSoon)}
         onFocus={() => setOpen(true)}
         onBlur={closeSoon}
         aria-label={`Context ${fmtPct(pct)} used`}
@@ -104,8 +125,8 @@ export function ContextMeter({ usage, model }: { usage: Usage; model?: string })
         sideOffset={8}
         className="w-64 p-3"
         onOpenAutoFocus={(e) => e.preventDefault()}
-        onPointerEnter={cancelClose}
-        onPointerLeave={closeSoon}
+        onPointerEnter={hoverOnly(cancelClose)}
+        onPointerLeave={hoverOnly(closeSoon)}
       >
         <div className="flex items-baseline justify-between gap-2">
           <span className={cn("text-sm font-medium tabular-nums", near && "text-destructive")}>
@@ -128,7 +149,11 @@ export function ContextMeter({ usage, model }: { usage: Usage; model?: string })
           className="bg-muted relative mt-2 h-1.5 w-full overflow-hidden rounded-full"
         >
           {categories.length > 0 ? (
-            <div className="absolute inset-y-0 left-0 flex">
+            // inset-0, not inset-y-0 left-0: an absolutely positioned box with
+            // no right edge shrinks to fit, and its children's percentage
+            // widths would then resolve against an indefinite width and
+            // collapse. Spanning the full track gives them something to size to.
+            <div className="absolute inset-0 flex">
               {categories.map((cat, i) => (
                 <div
                   key={cat.name}
@@ -169,11 +194,15 @@ export function ContextMeter({ usage, model }: { usage: Usage; model?: string })
 
         <div className="mt-2.5 border-t pt-2.5 text-[11px] leading-relaxed">
           <p className={cn(over ? "text-destructive" : "text-muted-foreground")}>
-            {over
-              ? `Over the compaction window by ${fmtTokens(used - win)} — compaction is imminent.`
-              : compactionMarker !== undefined
-                ? `Auto-compaction near ${fmtTokens(win)}, before the model's ${fmtTokens(limit)} window.`
-                : `Auto-compaction near ${fmtTokens(win)}.`}
+            {autoCompactOff
+              ? over
+                ? `Over the ${fmtTokens(win)} context limit by ${fmtTokens(used - win)}.`
+                : `Auto-compaction off — hard limit at ${fmtTokens(win)}.`
+              : over
+                ? `Past the compaction point by ${fmtTokens(used - win)} — compaction is imminent.`
+                : compactionMarker !== undefined
+                  ? `Auto-compaction near ${fmtTokens(threshold ?? win)}, before the model's ${fmtTokens(limit)} window.`
+                  : `Auto-compaction near ${fmtTokens(threshold ?? win)}.`}
           </p>
           {model && <p className="text-muted-foreground/70 mt-1 truncate">{model}</p>}
         </div>

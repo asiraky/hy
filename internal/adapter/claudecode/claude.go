@@ -291,9 +291,6 @@ type session struct {
 	// occupancy) and a context_usage message (authoritative occupancy) can
 	// each update their part without clobbering the other's.
 	usage proto.UsageUpdatedPayload
-	// haveContextUsage records that the harness has reported real occupancy at
-	// least once; after that the result-message fallback stops touching it.
-	haveContextUsage bool
 	// lastPromptTokens is the size of the most recent request's prompt — the
 	// final assistant message's fresh + cached input — which is the occupancy
 	// fallback when the harness cannot report context usage directly. It
@@ -542,12 +539,14 @@ func (s *session) handleSystem(msg map[string]json.RawMessage) {
 func (s *session) handleContextUsage(msg map[string]json.RawMessage) {
 	var m struct {
 		Usage struct {
-			Model        string  `json:"model"`
-			TotalTokens  int64   `json:"totalTokens"`
-			MaxTokens    int64   `json:"maxTokens"`
-			RawMaxTokens int64   `json:"rawMaxTokens"`
-			Percentage   float64 `json:"percentage"`
-			Categories   []struct {
+			Model                string  `json:"model"`
+			TotalTokens          int64   `json:"totalTokens"`
+			MaxTokens            int64   `json:"maxTokens"`
+			RawMaxTokens         int64   `json:"rawMaxTokens"`
+			Percentage           float64 `json:"percentage"`
+			IsAutoCompactEnabled bool    `json:"isAutoCompactEnabled"`
+			AutoCompactThreshold int64   `json:"autoCompactThreshold"`
+			Categories           []struct {
 				Name       string `json:"name"`
 				Tokens     int64  `json:"tokens"`
 				IsDeferred bool   `json:"isDeferred"`
@@ -587,12 +586,13 @@ func (s *session) handleContextUsage(msg map[string]json.RawMessage) {
 	}
 
 	s.mu.Lock()
-	s.haveContextUsage = true
 	s.usage.ContextUsed = u.TotalTokens
 	s.usage.ContextWindow = window
 	s.usage.ContextLimit = u.MaxTokens
 	s.usage.ContextPct = pct
 	s.usage.ContextCategories = cats
+	s.usage.AutoCompact = u.IsAutoCompactEnabled
+	s.usage.AutoCompactThreshold = u.AutoCompactThreshold
 	out := s.usage
 	s.mu.Unlock()
 
@@ -785,14 +785,23 @@ func (s *session) handleResult(msg map[string]json.RawMessage) {
 	s.usage.CacheRead = r.Usage.CacheReadInputTokens
 	s.usage.CacheWrite = r.Usage.CacheCreationInputTokens
 	s.usage.Cost = r.TotalCostUSD
-	if !s.haveContextUsage {
-		window := contextWindowFor(s.model)
-		used := s.lastPromptTokens
-		s.usage.ContextUsed = used
-		s.usage.ContextWindow = window
-		if used > 0 && window > 0 {
-			s.usage.ContextPct = float64(used) / float64(window) * 100
-		}
+	// Refresh the occupancy fallback every turn, not just until the first
+	// context_usage report: that report is emitted right after this and
+	// overrides these values, but if it ever fails to arrive (an older CLI, a
+	// dropped control request) the meter must still track the latest turn
+	// rather than freeze on a stale reading. Reuse the last window the harness
+	// reported so occupancy does not swing back to the heuristic each turn.
+	used := s.lastPromptTokens
+	window := s.usage.ContextWindow
+	if window == 0 {
+		window = contextWindowFor(s.model)
+	}
+	s.usage.ContextUsed = used
+	s.usage.ContextWindow = window
+	if used > 0 && window > 0 {
+		s.usage.ContextPct = float64(used) / float64(window) * 100
+	} else {
+		s.usage.ContextPct = 0
 	}
 	out := s.usage
 	s.mu.Unlock()
