@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { render, viewport } from "~/test/harness";
 import { NewSession, type NewSessionInput } from "./NewSession";
@@ -46,6 +46,17 @@ function open(over: Partial<React.ComponentProps<typeof NewSession>> = {}) {
 const surface = () => document.querySelector("[data-slot=dialog-content]")!;
 
 afterEach(() => vi.unstubAllGlobals());
+
+// Radix Select drives its trigger with pointer capture and scrolls the chosen
+// item into view — neither of which jsdom implements. No-ops are enough for the
+// Base dropdown test to open and pick.
+beforeAll(() => {
+  const proto = window.HTMLElement.prototype;
+  proto.hasPointerCapture ??= () => false;
+  proto.setPointerCapture ??= () => {};
+  proto.releasePointerCapture ??= () => {};
+  proto.scrollIntoView ??= () => {};
+});
 
 describe("NewSession", () => {
   it("takes the whole screen on a phone rather than floating as a card", () => {
@@ -190,11 +201,13 @@ describe("NewSession", () => {
     for (const name of [
       /Main checkout/,
       /New worktree from issue or branch name/,
-      /New scratch worktree/,
       /Attach to existing worktree/,
     ]) {
       expect(screen.getByRole("radio", { name })).toBeTruthy();
     }
+    // Scratch folded into the branch tile: an empty name is the scratch case,
+    // so it no longer earns a row of its own.
+    expect(screen.queryByRole("radio", { name: /New scratch worktree/ })).toBeNull();
   });
 
   it("still offers the main checkout when another session is on it, with an inline warning", async () => {
@@ -224,13 +237,18 @@ describe("NewSession", () => {
     expect(onCreate.mock.calls[0][0]).toMatchObject({ workspace: "local", branch: "" });
   });
 
-  it("creates a scratch worktree from an explicit choice, not an empty field", async () => {
+  it("creates a scratch worktree by leaving the branch name blank", async () => {
     const onCreate = vi.fn(async (_input: NewSessionInput) => {});
     open({ onCreate });
 
-    fireEvent.click(await waitFor(() => screen.getByRole("radio", { name: /New scratch worktree/ })));
-    // Nothing to fill in, so Start is live straight away.
-    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    // The managed default lands on the "New worktree" tile; leaving its name
+    // empty is the old scratch behaviour — hy makes the name up.
+    await waitFor(() =>
+      screen.getByRole("radio", { name: /New worktree from issue or branch name/ }),
+    );
+    const start = screen.getByRole("button", { name: "Start" });
+    await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(start);
     await waitFor(() => expect(onCreate).toHaveBeenCalled());
     expect(onCreate.mock.calls[0][0]).toMatchObject({
       workspace: "managed",
@@ -239,13 +257,25 @@ describe("NewSession", () => {
     });
   });
 
-  it("sends a per-session base ref for a named worktree", async () => {
+  it("sends a per-session base ref picked from the branches on disk", async () => {
     const onCreate = vi.fn(async (_input: NewSessionInput) => {});
-    open({ onCreate });
+    // The Base dropdown offers the branches already checked out; stacking on
+    // one of them is exactly what it exists for.
+    const under = {
+      path: "/tmp/repo/.worktrees/under",
+      branch: "feature/underneath",
+    } as Workspace;
+    open({ onCreate, onListWorkspaces: vi.fn(async () => [under]) });
 
     const field = await waitFor(() => screen.getByRole("combobox", { name: /Branch/ }));
     fireEvent.change(field, { target: { value: "issue/9-stack" } });
-    fireEvent.change(screen.getByLabelText("Base"), { target: { value: "feature/underneath" } });
+
+    const base = screen.getByRole("combobox", { name: "Base" });
+    base.focus();
+    fireEvent.keyDown(base, { key: "ArrowDown" });
+    const option = await waitFor(() => screen.getByRole("option", { name: "feature/underneath" }));
+    fireEvent.click(option);
+
     fireEvent.click(screen.getByRole("button", { name: "Start" }));
 
     await waitFor(() => expect(onCreate).toHaveBeenCalled());
@@ -254,12 +284,6 @@ describe("NewSession", () => {
       branch: "issue/9-stack",
       baseRef: "feature/underneath",
     });
-  });
-
-  it("will not start a named worktree with no name", async () => {
-    open();
-    await waitFor(() => screen.getByRole("combobox", { name: /Branch/ }));
-    expect(screen.getByRole("button", { name: "Start" }).hasAttribute("disabled")).toBe(true);
   });
 
   it("attaches to a worktree another session is already in, having said so", async () => {
@@ -299,8 +323,11 @@ describe("NewSession", () => {
     });
     open({ onListWorkspaces: vi.fn(() => pending) });
 
-    fireEvent.click(await waitFor(() => screen.getByRole("radio", { name: /New scratch worktree/ })));
-    // Nothing to fill in, so only the outstanding check is holding it.
+    // The managed default lands on the branch tile with an empty name, so
+    // nothing but the outstanding check is holding Start back.
+    await waitFor(() =>
+      screen.getByRole("radio", { name: /New worktree from issue or branch name/ }),
+    );
     expect(screen.getByRole("button", { name: "Start" }).hasAttribute("disabled")).toBe(true);
 
     release([]);
