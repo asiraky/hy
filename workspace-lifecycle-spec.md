@@ -123,8 +123,15 @@ Model        gpt-5.6-sol       (from project default)
 Effort       High              (from project default)
 Workspace    New worktree      (from project default)
 Branch       feature/...
-Base         staging           (from project default)
+Base         staging           (from project default, overridable per session)
 ```
+
+The workspace row is a list rather than a text field that means different
+things depending on what is typed into it. Its options are: the main checkout,
+a new worktree from an issue or a branch name, a new scratch worktree hy names
+itself, and attaching to a worktree that already exists. **Base** applies to
+the two that create a branch, which is what makes a session stackable on
+another worktree's unmerged work.
 
 The defaults are already selected but can be overridden for this session. The
 advanced fields can stay collapsed in the common case, making creation roughly
@@ -206,10 +213,13 @@ A session can use one of three workspace modes:
 | `managed` | provision hook | yes | yes | deprovision hook |
 
 Ownership is recorded when the lease is created and never inferred later from
-the path. This is the guard that prevents hy from deleting a checkout it did
-not create: only `managed` reaches teardown, and both other modes have their
-hook paths cleared at creation rather than being skipped at teardown, so a
-later change to the teardown branch cannot resurrect them.
+the path, and `local` never reaches teardown however it is asked to: the
+project directory is not hy's to remove. For the other two, ownership decides
+the *default* answer and not the answer — removing a worktree is the user's
+explicit choice in the delete dialog, ticked by default for `managed` and
+unticked for `borrowed`. Both non-managed modes still have their hook paths
+cleared at creation rather than being skipped at teardown, so a later change to
+the teardown branch cannot resurrect them.
 
 Hooks are a property of provisioning, not of running. A `local` session is the
 project's own working directory and a `borrowed` one is a checkout somebody
@@ -219,11 +229,14 @@ configuration, copying secrets — would be at best redundant and at worst
 destructive when run against a checkout that is already in use. Neither mode
 runs them.
 
-Because a `local` session holds the project directory itself, only one may be
-active per project at a time. The lease is acquired through the same busy check
-that governs attaching to an existing worktree: a checkout a live session
-already holds is refused, since two harnesses editing one directory corrupt
-each other's work.
+Sharing a checkout is allowed. Two `local` sessions may run in the project
+directory, and any number of sessions may attach to one worktree: nothing in
+Git prevents it, and the operator is often the best judge of when it is safe.
+A checkout a live session already holds is reported busy and the new-session
+dialog says so inline before the second session starts — advice at the moment
+of the decision rather than a lock. The one thing sharing does forbid is
+removal: a worktree that another session still references cannot be deleted
+with the session that is leaving it.
 
 The branch is preserved when a managed worktree is released. Discarding a
 branch is a separate, explicit Git action.
@@ -550,6 +563,8 @@ Expose three distinct actions so lifecycle intent is never hidden behind an X:
 - **Close and clean up**: close the conversation, run deprovision, remove the
   managed worktree, preserve the branch and transcript.
 - **Delete**: close and clean up first; purge the transcript only after success.
+  Whether the checkout on disk goes too is a checkbox in the confirmation, not
+  an inference from the workspace mode.
 
 ## Compatibility with the existing projects
 

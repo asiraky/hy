@@ -73,6 +73,62 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
+const state = (id: string, mode: string): any => ({
+  sessionId: id,
+  seq: 1,
+  cwd: "/tmp/repo",
+  harness: "claude",
+  model: "",
+  mode,
+  effort: "",
+  title: `Session ${id}`,
+  phase: "idle",
+  closed: false,
+  workspace: { phase: "ready", projectId: "p1", projectRoot: "/tmp/repo" },
+  items: [],
+  turns: [],
+  plan: [],
+  usage: {},
+  pendingPermissions: [],
+  pendingElicitations: [],
+});
+
+describe("a bypass session is just a session", () => {
+  it("opens with no confirmation, banner, or acknowledgement", async () => {
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirm);
+    localStorage.setItem("hy.lastSession", "a");
+    viewport("desktop");
+    render(<App />);
+    await act(async () => {
+      events.onProjects([project]);
+      events.onHarnesses(
+        [
+          {
+            ...harness,
+            permissionModes: [
+              { id: "default", label: "Default", default: true },
+              {
+                id: "bypassPermissions",
+                label: "Bypass",
+                description: "Skip all permission checks",
+              },
+            ],
+          },
+        ],
+        "/tmp/repo",
+      );
+      events.onSessions([session("a")]);
+      events.onState("a", state("a", "bypassPermissions"));
+    });
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toMatch(
+      /are you sure|without asking you first|acknowledge|proceed with caution/i,
+    );
+  });
+});
+
 describe("landing on a phone", () => {
   it("lands on the session list when there is nothing to restore", async () => {
     viewport("phone");

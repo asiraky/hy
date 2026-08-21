@@ -74,8 +74,19 @@ type createArgs struct {
 	// WorkspacePath attaches to a checkout that already exists rather than
 	// provisioning one; empty means the usual create-a-worktree path.
 	WorkspacePath string `json:"workspacePath"`
-	Model         string `json:"model"`
-	Mode          string `json:"mode"`
+	// BaseRef is the ref a new worktree branches from; empty defers to the
+	// project's default base branch.
+	BaseRef string `json:"baseRef"`
+	Model   string `json:"model"`
+	Mode    string `json:"mode"`
+}
+
+// deleteSessionArgs carries the user's answer to the confirmation dialog's
+// checkbox. Absent — an older client — means false, which is the safe reading:
+// nothing on disk is removed unless somebody asked for it.
+type deleteSessionArgs struct {
+	SessionID      string `json:"sessionId"`
+	RemoveWorktree bool   `json:"removeWorktree"`
 }
 
 type listWorkspacesArgs struct {

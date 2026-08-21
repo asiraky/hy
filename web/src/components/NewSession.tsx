@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
+import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import {
   Select,
@@ -36,10 +37,34 @@ export interface NewSessionInput {
   branch: string;
   workspace: string;
   workspacePath: string;
+  /** The ref a new worktree branches from; empty defers to the project default. */
+  baseRef: string;
 }
 
-export interface WorkspaceListing {
-  workspaces: Workspace[];
+/**
+ * The five scenarios, as five things to click. They were all reachable before
+ * — two of them only by knowing that an empty field meant something, or that a
+ * dropdown on a "Branch" label also attached — which is not the same as being
+ * offered.
+ */
+type WorkspaceKind = "main" | "branch" | "scratch" | "attach";
+
+const WORKSPACE_KINDS: { id: WorkspaceKind; label: string; hint: string }[] = [
+  { id: "main", label: "Main checkout", hint: "Works in the project directory itself." },
+  {
+    id: "branch",
+    label: "New worktree from issue or branch name",
+    hint: "A fresh checkout on a branch you name.",
+  },
+  { id: "scratch", label: "New scratch worktree", hint: "No name needed — hy picks one." },
+  {
+    id: "attach",
+    label: "Attach to existing worktree",
+    hint: "Run in a checkout that is already there.",
+  },
+];
+
+export interface IssueListing {
   issues: Issue[];
   issuesError: string;
 }
@@ -50,6 +75,7 @@ export function NewSession({
   userConfig,
   onCreate,
   onListWorkspaces,
+  onListIssues,
   onAddProject,
   onSettings,
   onRecheck,
@@ -60,7 +86,9 @@ export function NewSession({
   harnesses: HarnessMeta[];
   userConfig: UserConfig | null;
   onCreate: (input: NewSessionInput) => Promise<void>;
-  onListWorkspaces: (projectId: string) => Promise<WorkspaceListing>;
+  onListWorkspaces: (projectId: string) => Promise<Workspace[]>;
+  /** Separate from the workspaces so `gh` being slow cannot delay the busy warning. */
+  onListIssues: (projectId: string) => Promise<IssueListing>;
   onAddProject: () => void;
   onSettings: (project: Project) => void;
   onRecheck: () => void;
@@ -73,15 +101,16 @@ export function NewSession({
   const [chosen, setChosen] = useState<ModelSelection | null>(null);
   const [chosenMode, setChosenMode] = useState("");
   const [choice, setChoice] = useState<WorkspaceChoice>({ branch: "", attachPath: "" });
-  // "" defers to the project default; picking either side pins it for this
-  // session only.
-  const [chosenKind, setChosenKind] = useState<"" | "worktree" | "main">("");
-  const [listing, setListing] = useState<WorkspaceListing>({
-    workspaces: [],
-    issues: [],
-    issuesError: "",
-  });
+  // "" defers to the project default; picking one pins it for this session
+  // only.
+  const [chosenKind, setChosenKind] = useState<"" | WorkspaceKind>("");
+  // "" defers to the project's base branch, which is what the placeholder in
+  // the field says it will do.
+  const [baseRef, setBaseRef] = useState("");
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [issues, setIssues] = useState<IssueListing>({ issues: [], issuesError: "" });
   const [loadingSpaces, setLoadingSpaces] = useState(false);
+  const [loadingIssues, setLoadingIssues] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -123,38 +152,46 @@ export function NewSession({
       : "";
   const displayModeId = mode || (modes.find((m) => m.default)?.id ?? modes[0]?.id ?? "");
   const modeMeta = modes.find((m) => m.id === displayModeId);
-  // The project root is offered as the "Main checkout" side of the toggle, so
-  // listing it again inside the picker would be a second door to the same
-  // room. Its busy flag still matters: it is what blocks a second session in
-  // the directory a live one is already editing.
-  const root = listing.workspaces.find((w) => w.isRoot);
+  // The project root is its own choice in the list, so listing it again inside
+  // the attach picker would be a second door to the same room. Its busy flag
+  // still matters — it is what the warning under the choice is made of.
+  const root = workspaces.find((w) => w.isRoot);
   const rootBusy = !!root?.busy;
-  const kind: "worktree" | "main" =
-    chosenKind || (project?.config.defaults.workspace === "managed" ? "worktree" : "main");
-  // A busy root cannot be used however it was reached, so the toggle falls
-  // back rather than offering a choice that would only fail on submit.
-  const effectiveKind: "worktree" | "main" = kind === "main" && rootBusy ? "worktree" : kind;
-  const attachable = listing.workspaces.filter((w) => !w.isRoot);
+  const attachable = workspaces.filter((w) => !w.isRoot);
+  const kind: WorkspaceKind =
+    chosenKind || (project?.config.defaults.workspace === "managed" ? "branch" : "main");
 
-  // Main checkout runs where the user already works: no branch, no worktree,
-  // nothing to tear down. Otherwise attaching lets the server decide the mode
-  // from the path, and anything else is a worktree hy manages.
-  const branch = effectiveKind === "main" || choice.attachPath ? "" : choice.branch.trim();
-  const workspace = effectiveKind === "main" ? "local" : choice.attachPath ? "" : "managed";
-  const workspacePath = effectiveKind === "main" ? "" : choice.attachPath;
-  const ready = status === "online" && !!project && instance?.availability?.state === "ready";
+  // Each choice answers all three questions at once, which is the point of
+  // making them separate choices: nothing is inferred from an empty field.
+  const branch = kind === "branch" ? choice.branch.trim() : "";
+  const workspace = kind === "main" ? "local" : kind === "attach" ? "" : "managed";
+  const workspacePath = kind === "attach" ? choice.attachPath : "";
+  // A base only means anything where hy is the one creating the branch.
+  const sentBase = kind === "branch" || kind === "scratch" ? baseRef.trim() : "";
+  // Branches already on disk are the useful bases — stacking on another
+  // worktree's work is exactly what this field exists for.
+  const baseSuggestions = Array.from(
+    new Set(
+      [project?.config.defaults.baseBranch, ...workspaces.map((w) => w.branch)].filter(
+        (b): b is string => !!b,
+      ),
+    ),
+  );
+  // A choice that names nothing yet cannot start: "scratch" is the option for
+  // people who do not want to name anything.
+  const canStart = kind === "branch" ? !!branch : kind === "attach" ? !!choice.attachPath : true;
+  const ready =
+    status === "online" &&
+    !!project &&
+    instance?.availability?.state === "ready" &&
+    canStart &&
+    // The busy warning is made of this list. Starting before it arrives is
+    // starting without having been told, which is the thing the warning
+    // replaced the old hard block with.
+    !loadingSpaces;
 
   const create = async () => {
     if (!project) return;
-    // A danger mode needs a deliberate second step before anything starts.
-    if (
-      modeMeta?.danger &&
-      !window.confirm(
-        `Start this session in "${modeMeta.label}"?\n\n${modeMeta.description ?? ""}\n\nThe agent will act without asking you first.`,
-      )
-    ) {
-      return;
-    }
     setBusy(true);
     setError(null);
     try {
@@ -167,6 +204,7 @@ export function NewSession({
         branch,
         workspace,
         workspacePath,
+        baseRef: sentBase,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -180,19 +218,16 @@ export function NewSession({
     if (!project) return;
     let live = true;
     setLoadingSpaces(true);
+    setWorkspaces([]);
     setChoice({ branch: "", attachPath: "" });
     setChosenKind("");
+    setBaseRef("");
     onListWorkspaces(project.id)
       .then((r) => {
-        if (live) setListing(r);
+        if (live) setWorkspaces(r);
       })
-      .catch((e) => {
-        if (live)
-          setListing({
-            workspaces: [],
-            issues: [],
-            issuesError: e instanceof Error ? e.message : String(e),
-          });
+      .catch(() => {
+        if (live) setWorkspaces([]);
       })
       .finally(() => {
         if (live) setLoadingSpaces(false);
@@ -201,6 +236,29 @@ export function NewSession({
       live = false;
     };
   }, [project?.id, onListWorkspaces]);
+
+  // Issue suggestions are their own request, on their own clock: `gh` may take
+  // seconds to answer and nothing here should wait on it.
+  useEffect(() => {
+    if (!project) return;
+    let live = true;
+    setLoadingIssues(true);
+    setIssues({ issues: [], issuesError: "" });
+    onListIssues(project.id)
+      .then((r) => {
+        if (live) setIssues(r);
+      })
+      .catch((e) => {
+        if (live)
+          setIssues({ issues: [], issuesError: e instanceof Error ? e.message : String(e) });
+      })
+      .finally(() => {
+        if (live) setLoadingIssues(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [project?.id, onListIssues]);
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -305,8 +363,8 @@ export function NewSession({
               <div className="space-y-1.5">
                 <Label htmlFor="new-session-mode">Permissions</Label>
                 {/* Modes all render alike: the description below says what each
-                    one does, and the confirm on create is where a danger mode
-                    earns its extra step. Colouring the control adds nothing. */}
+                    one does. Picking one here is the whole decision — no mode
+                    earns a badge, a colour, or a second opt-in. */}
                 <Select value={displayModeId} onValueChange={setChosenMode}>
                   <SelectTrigger id="new-session-mode" className="w-full">
                     <SelectValue />
@@ -329,69 +387,136 @@ export function NewSession({
               <legend className="text-foreground mb-1.5 text-sm leading-none font-medium">
                 Workspace
               </legend>
-              <div className="grid grid-cols-2 gap-2">
-                {(
-                  [
-                    {
-                      id: "worktree",
-                      label: "Worktree",
-                      hint: "A fresh checkout on its own branch.",
-                      disabled: false,
-                    },
-                    {
-                      id: "main",
-                      label: "Main checkout",
-                      hint: rootBusy
-                        ? `In use by "${root?.busyTitle}"`
-                        : "Works in the project directory itself.",
-                      disabled: rootBusy,
-                    },
-                  ] as const
-                ).map((k) => (
-                  <button
-                    key={k.id}
-                    type="button"
-                    disabled={k.disabled}
-                    onClick={() => setChosenKind(k.id)}
-                    aria-pressed={effectiveKind === k.id}
-                    className={cn(
-                      "focus-visible:ring-ring flex min-h-11 flex-col justify-center gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors outline-none focus-visible:ring-2",
-                      effectiveKind === k.id
-                        ? "border-primary/60 bg-primary/10"
-                        : "hover:bg-accent/50",
-                      k.disabled && "cursor-not-allowed opacity-50",
-                    )}
-                  >
-                    <span className="text-[13px] leading-tight">{k.label}</span>
-                    <span className="text-muted-foreground text-[11px] leading-tight">
-                      {k.hint}
-                    </span>
-                  </button>
-                ))}
+              {/* One list, one choice, and every scenario has a row of its
+                  own. The old two-button toggle left three of them hiding
+                  inside a text field that meant something different depending
+                  on what you did to it. */}
+              <div role="radiogroup" aria-label="Workspace" className="flex flex-col gap-1.5">
+                {WORKSPACE_KINDS.map((k) => {
+                  const picked = kind === k.id;
+                  return (
+                    <button
+                      key={k.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={picked}
+                      onClick={() => {
+                        setChosenKind(k.id);
+                        // Each choice asks its own question, so it starts from
+                        // a blank answer rather than inheriting the last
+                        // one's — a branch name is not a worktree path.
+                        setChoice({ branch: "", attachPath: "" });
+                      }}
+                      className={cn(
+                        "focus-visible:ring-ring flex min-h-11 flex-col justify-center gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors outline-none focus-visible:ring-2",
+                        picked ? "border-primary/60 bg-primary/10" : "hover:bg-accent/50",
+                      )}
+                    >
+                      <span className="text-[13px] leading-tight">{k.label}</span>
+                      <span className="text-muted-foreground truncate text-[11px] leading-tight">
+                        {k.id === "main" ? (project?.root ?? k.hint) : k.hint}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
 
-              {effectiveKind === "worktree" ? (
+              {kind === "main" && (
+                <div className="pt-1">
+                  {/* The one mode where an agent edits the user's own files, so
+                      it says so plainly rather than leaving it to be
+                      inferred. */}
+                  <p className="text-muted-foreground text-[11px]">
+                    The agent works directly in {project?.root} on its current branch. No worktree
+                    is created and nothing is removed when the session ends.
+                  </p>
+                  {loadingSpaces && (
+                    <p className="text-muted-foreground mt-1.5 text-[11px]">
+                      Checking whether another session is already here…
+                    </p>
+                  )}
+                  {rootBusy && (
+                    // Inline, not a modal and not a browser dialog: it is a
+                    // fact about the choice, and the answer is still yes.
+                    <p className="text-attention-foreground mt-1.5 text-[11px]">
+                      “{root?.busyTitle}” is already on the main checkout — agents may step on each
+                      other.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {kind === "branch" && (
                 <div className="space-y-1.5 pt-1">
                   <Label htmlFor="new-session-workspace">Branch</Label>
                   <WorkspacePicker
                     id="new-session-workspace"
+                    mode="create"
                     value={choice}
                     onChange={setChoice}
                     workspaces={attachable}
-                    issues={listing.issues}
-                    issuesError={listing.issuesError}
+                    issues={issues.issues}
+                    issuesError={issues.issuesError}
                     userConfig={userConfig}
-                    loading={loadingSpaces}
+                    loading={loadingIssues}
                     placeholder="issue/482-fix-login"
                   />
                 </div>
-              ) : (
-                // The one mode where an agent edits the user's own files, so it
-                // says so plainly rather than leaving it to be inferred.
+              )}
+
+              {kind === "scratch" && (
                 <p className="text-muted-foreground pt-1 text-[11px]">
-                  The agent works directly in {project?.root} on its current branch. No worktree is
-                  created and nothing is removed when the session ends.
+                  hy names the branch and the directory. Nothing to fill in.
                 </p>
+              )}
+
+              {kind === "attach" && (
+                <div className="space-y-1.5 pt-1">
+                  <Label htmlFor="new-session-attach">Worktree</Label>
+                  <WorkspacePicker
+                    id="new-session-attach"
+                    mode="attach"
+                    value={choice}
+                    onChange={setChoice}
+                    workspaces={attachable}
+                    issues={issues.issues}
+                    issuesError={issues.issuesError}
+                    userConfig={userConfig}
+                    loading={loadingSpaces}
+                    placeholder="Search worktrees"
+                  />
+                </div>
+              )}
+
+              {(kind === "branch" || kind === "scratch") && (
+                <div className="space-y-1.5 pt-2">
+                  <Label htmlFor="new-session-base">Base</Label>
+                  {/* A per-session base is what makes stacking possible: a
+                      worktree branched from another branch that has not landed
+                      yet. Free text, because any ref is a legal answer, with
+                      the branches already on disk offered as the likely
+                      ones. */}
+                  <Input
+                    id="new-session-base"
+                    list="new-session-base-options"
+                    value={baseRef}
+                    onChange={(e) => setBaseRef(e.target.value)}
+                    placeholder={project?.config.defaults.baseBranch || "HEAD"}
+                    className="w-full text-[16px] md:text-[13px]"
+                  />
+                  <datalist id="new-session-base-options">
+                    {baseSuggestions.map((b) => (
+                      <option key={b} value={b} />
+                    ))}
+                  </datalist>
+                  <p className="text-muted-foreground text-[11px]">
+                    The new branch starts here. Leave it empty for the project default
+                    {project?.config.defaults.baseBranch
+                      ? ` (${project.config.defaults.baseBranch})`
+                      : ""}
+                    .
+                  </p>
+                </div>
               )}
             </fieldset>
           </div>

@@ -62,12 +62,15 @@ const label = (w: Workspace) =>
   w.branch || (w.head ? `detached @ ${w.head}` : w.path.split("/").pop() || w.path);
 
 /**
- * One control for both halves of the question. Typing names a worktree to
- * create — the common case, and the default with zero extra clicks. Opening the
- * list attaches to one that already exists.
+ * One combobox, wearing whichever half of the question was asked of it. In
+ * `create` mode typing names a worktree to make and the open issues are
+ * suggestions; in `attach` mode typing filters the checkouts that already
+ * exist. Which of those the user wants is decided a level up, by the workspace
+ * choice they picked, so this control never has to guess between them.
  */
 export function WorkspacePicker({
   id,
+  mode,
   value,
   onChange,
   workspaces,
@@ -78,6 +81,7 @@ export function WorkspacePicker({
   placeholder,
 }: {
   id?: string;
+  mode: "create" | "attach";
   value: WorkspaceChoice;
   onChange: (v: WorkspaceChoice) => void;
   workspaces: Workspace[];
@@ -106,6 +110,18 @@ export function WorkspacePicker({
     const typed = value.attachPath ? "" : value.branch.trim();
     const needle = typed.toLowerCase();
     const out: Row[] = [];
+    if (mode === "attach") {
+      for (const w of workspaces) {
+        if (
+          needle &&
+          !label(w).toLowerCase().includes(needle) &&
+          !w.path.toLowerCase().includes(needle)
+        )
+          continue;
+        out.push({ kind: "existing", workspace: w });
+      }
+      return out;
+    }
     if (typed) out.push({ kind: "create", branch: typed });
     if (userConfig?.suggestIssues !== false) {
       for (const issue of issues) {
@@ -120,19 +136,12 @@ export function WorkspacePicker({
         out.push({ kind: "issue", branch, issue });
       }
     }
-    for (const w of workspaces) {
-      if (
-        needle &&
-        !label(w).toLowerCase().includes(needle) &&
-        !w.path.toLowerCase().includes(needle)
-      )
-        continue;
-      out.push({ kind: "existing", workspace: w });
-    }
     return out;
-  }, [value.branch, value.attachPath, issues, workspaces, formatter, userConfig?.suggestIssues]);
+  }, [mode, value.branch, value.attachPath, issues, workspaces, formatter, userConfig?.suggestIssues]);
 
-  const selectable = (r: Row) => !(r.kind === "existing" && r.workspace.busy);
+  // Every row is selectable. A checkout somebody else is in is a warning the
+  // caller renders, not a door hy locks: nothing about Git stops two sessions
+  // sharing one, only their own edits do.
   useEffect(() => {
     setActive(0);
   }, [rows.length]);
@@ -142,7 +151,6 @@ export function WorkspacePicker({
   }, [open, active, listId]);
 
   const choose = (r: Row) => {
-    if (!selectable(r)) return;
     if (r.kind === "existing") onChange({ branch: "", attachPath: r.workspace.path });
     else onChange({ branch: r.branch, attachPath: "" });
     setOpen(false);
@@ -162,14 +170,9 @@ export function WorkspacePicker({
         setOpen(true);
         return;
       }
+      if (rows.length === 0) return;
       const step = e.key === "ArrowDown" ? 1 : -1;
-      for (let i = 1; i <= rows.length; i++) {
-        const next = (active + step * i + rows.length * i) % rows.length;
-        if (selectable(rows[next])) {
-          setActive(next);
-          return;
-        }
-      }
+      setActive((active + step + rows.length) % rows.length);
       return;
     }
     // Enter picks the highlighted row only while the list is open; otherwise it
@@ -210,13 +213,11 @@ export function WorkspacePicker({
         role="option"
         aria-selected={i === active}
         type="button"
-        disabled={busy}
         onMouseEnter={() => setActive(i)}
         onClick={() => choose(r)}
         className={cn(
           "flex min-h-11 w-full flex-col justify-center gap-0.5 px-3 py-1.5 text-left text-[13px] md:min-h-0",
-          i === active && !busy && "bg-accent text-accent-foreground",
-          busy && "opacity-40",
+          i === active && "bg-accent text-accent-foreground",
         )}
       >
         <span className="flex w-full items-baseline gap-2">
@@ -315,7 +316,9 @@ export function WorkspacePicker({
           )}
           {!loading && rows.length === 0 && (
             <p className="text-muted-foreground px-3 py-2 text-[12px]">
-              Type a branch name to create a worktree.
+              {mode === "attach"
+                ? "No other worktrees in this project yet."
+                : "Type a branch name to create a worktree."}
             </p>
           )}
           {body}
@@ -333,12 +336,19 @@ export function WorkspacePicker({
       </Popover>
 
       <p className="text-muted-foreground mt-1.5 text-[11px]">
-        {attached
-          ? `Attaching to ${attached.path}`
+        {mode === "attach"
+          ? attached
+            ? `Attaching to ${attached.path}`
+            : "Pick a worktree from the list."
           : value.branch.trim()
             ? "Creates a new worktree on this branch."
-            : "Leave empty and hy names the branch for you."}
+            : "Type a branch name, or pick “New scratch worktree” above."}
       </p>
+      {mode === "attach" && attached?.busy && (
+        <p className="text-attention-foreground mt-1.5 text-[11px]">
+          “{attached.busyTitle}” is already in this worktree — agents may step on each other.
+        </p>
+      )}
     </div>
   );
 }

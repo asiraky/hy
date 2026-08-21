@@ -292,7 +292,7 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 			return nil, err
 		}
 		if a.ProjectID != "" {
-			actor, err := c.srv.mgr.CreateProject(ctx, session.CreateProjectOptions{ProjectID: a.ProjectID, Harness: a.Harness, Instance: a.Instance, Model: a.Model, Mode: a.Mode, Branch: a.Branch, Workspace: a.Workspace, WorkspacePath: a.WorkspacePath})
+			actor, err := c.srv.mgr.CreateProject(ctx, session.CreateProjectOptions{ProjectID: a.ProjectID, Harness: a.Harness, Instance: a.Instance, Model: a.Model, Mode: a.Mode, Branch: a.Branch, Workspace: a.Workspace, WorkspacePath: a.WorkspacePath, BaseRef: a.BaseRef})
 			if err != nil {
 				return nil, err
 			}
@@ -442,10 +442,20 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		// Issue lookup is advisory: it seeds branch-name suggestions and must
-		// never be the reason the workspace list fails to render.
+		// Issues are fetched separately. They are advisory — they seed
+		// branch-name suggestions — but `gh` can take twelve seconds to answer,
+		// and the workspace list carries the warning that another session is
+		// already in a checkout. Making that warning wait on a network call is
+		// making it arrive after the decision it exists to inform.
+		return map[string]any{"workspaces": spaces}, nil
+
+	case "list_issues":
+		var a listWorkspacesArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
 		issues, issuesErr := c.srv.mgr.ListIssues(ctx, a.ProjectID)
-		return map[string]any{"workspaces": spaces, "issues": issues, "issuesError": issuesErr}, nil
+		return map[string]any{"issues": issues, "issuesError": issuesErr}, nil
 
 	case "session_changes":
 		var a sessionArgs
@@ -543,11 +553,11 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 		return map[string]any{"status": "cleaning"}, c.srv.mgr.Cleanup(ctx, a.SessionID)
 
 	case "delete_session":
-		var a sessionArgs
+		var a deleteSessionArgs
 		if err := json.Unmarshal(f.Args, &a); err != nil {
 			return nil, err
 		}
-		return map[string]any{"status": "deleting"}, c.srv.mgr.Delete(ctx, a.SessionID)
+		return map[string]any{"status": "deleting"}, c.srv.mgr.Delete(ctx, a.SessionID, a.RemoveWorktree)
 
 	case "force_delete_session":
 		var a sessionArgs
