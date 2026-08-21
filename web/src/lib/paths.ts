@@ -48,7 +48,11 @@ export function detectPath(raw: string): DetectedPath | null {
   }
 
   if (!SHAPE.test(text)) return null;
-  if (text.startsWith("./")) text = text.slice(2);
+  // An explicit relative (`./`) or absolute (`/`) prefix is itself a strong
+  // path signal, independent of any extension.
+  const explicitRel = text.startsWith("./");
+  const absolute = text.startsWith("/");
+  if (explicitRel) text = text.slice(2);
   if (text === "" || text === "." || text === "..") return null;
   // A parent-relative path points outside anything we can open.
   if (text.startsWith("../") || text.includes("/../")) return null;
@@ -77,16 +81,19 @@ export function detectPath(raw: string): DetectedPath | null {
     if (segments.every((s) => /^\d+$/.test(s))) return null;
     // A slash alone is too weak: `system/init`, `turn/interrupt` and `a/b`
     // alternatives (`rawMaxTokens/maxTokens`) are protocol/method names, not
-    // files. Admit only with a corroborating signal — a plausible file
-    // extension on some segment, a `:line` anchor, or an explicit trailing
-    // slash marking a directory (`web/src/`).
-    const hasExt = segments.some((s) => {
-      const d = s.lastIndexOf(".");
-      if (d <= 0) return false;
-      const e = s.slice(d + 1).toLowerCase();
-      return /^[a-z0-9]{1,10}$/.test(e) && !/^\d+$/.test(e);
-    });
-    if (!hasExt && line === undefined && !trailingSlash) return null;
+    // files. Admit only with a corroborating path signal: an extension on the
+    // basename (`foo/bar.ts`), a known bare filename (`docs/README`), a `:line`
+    // anchor, an explicit directory (trailing slash, `web/src/`), or an
+    // explicit relative/absolute prefix (`./scripts/build`, `/usr/bin/dev`).
+    // The extension must sit on the basename, so a dotted hostname segment
+    // (`github.com/asiraky/hy`) does not masquerade as one.
+    const hasExt = ext !== "" && /^[a-z0-9]{1,10}$/.test(ext) && !/^\d+$/.test(ext);
+    const knownBare =
+      BARE_FILES.has(base.toLowerCase()) ||
+      BARE_FILES.has(base.toLowerCase().replace(/\.(md|txt|rst)$/, ""));
+    if (!hasExt && !knownBare && line === undefined && !trailingSlash && !explicitRel && !absolute) {
+      return null;
+    }
     return { path: text, line };
   }
   if (BARE_FILES.has(base.toLowerCase()) || BARE_FILES.has(base.toLowerCase().replace(/\.(md|txt|rst)$/, ""))) {

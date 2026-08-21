@@ -1,9 +1,11 @@
-Found 1 real defect.
+Found 3 concrete defects.
 
-- `web/src/components/NewSession.tsx:55, 480-498` — `BASE_DEFAULT` is `"__default__"`, also a valid Git branch name. If that branch is checked out while the project default differs, the dropdown contains two options with the same value. Selecting the real branch is interpreted as “Project default,” so `baseRef` becomes empty and the worktree starts from the wrong commit.
+- [web/src/lib/paths.ts:89](/Users/aaron/code/hy/.worktrees/issue-71-inline-code-with-a-slash-e-g-system-init/web/src/lib/paths.ts:89) — Explicit extensionless paths are rejected. `detectPath("./scripts/build")` and absolute workspace paths such as `/Users/aaron/code/hy/bin/dev` return `null`. These are unambiguous paths—absolute workspace paths are explicitly supported by `openPath`—but the new rule discards the `./` signal and accepts only extensions, line anchors, or trailing slashes.
 
-The diff otherwise matches the three requirements recorded in the commit: trim Main-checkout copy, fold scratch into a blank branch name, and use a Base dropdown.
+- [web/src/lib/paths.ts:89](/Users/aaron/code/hy/.worktrees/issue-71-inline-code-with-a-slash-e-g-system-init/web/src/lib/paths.ts:89) — Known extensionless filenames stop working inside directories. `docs/README`, `.github/CODEOWNERS`, and `/Users/aaron/code/hy/Makefile` all return `null`. The `BARE_FILES` allowlist at line 92 is never reached for slashed candidates, regressing filenames the detector intentionally supports.
 
-`gh issue view 55 --comments` could not reach GitHub, and the public web fallback returned no issue content, so direct comparison with the issue comments was unavailable. The independent reviewer found the same single defect.
+- [web/src/lib/paths.ts:83](/Users/aaron/code/hy/.worktrees/issue-71-inline-code-with-a-slash-e-g-system-init/web/src/lib/paths.ts:83) — A dot in any segment is incorrectly treated as proof of a file path. `github.com/asiraky/hy`, `api.example.com/system/init`, and `foo.bar/turn/interrupt` still become clickable local-file chips. Thus the false-positive class remains whenever the protocol/method token is prefixed by a dotted namespace or scheme-less hostname.
 
-`git diff --check` passed. Tests and TypeScript compilation could not run because the read-only sandbox prevented creation of Vite and TypeScript temporary files.
+The explicit `system/init`, `turn/interrupt`, and `rawMaxTokens/maxTokens` examples are fixed. I found no concrete defect in the chip-height CSS change.
+
+`gh issue view 71 --comments` was run first but GitHub connectivity was blocked, so I could not independently verify the issue comments. Vitest and TypeScript compilation were also prevented by the read-only sandbox because they create cache/build-info files; I verified the parser scenarios directly with Node instead.
