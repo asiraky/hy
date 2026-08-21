@@ -276,10 +276,12 @@ func (s *session) Prompt(ctx context.Context, in adapter.PromptInput) error {
 		"threadId": s.threadID,
 		"input":    []map[string]any{{"type": "text", "text": in.Text}},
 	}
+	// effort and model are both mutable mid-session (SetEffort/SetModel), so
+	// read them together under the lock.
+	s.mu.Lock()
 	if s.effort != "" {
 		params["effort"] = s.effort
 	}
-	s.mu.Lock()
 	if s.model != "" {
 		params["model"] = s.model
 	}
@@ -356,6 +358,16 @@ func (s *session) SetMode(ctx context.Context, mode string) error {
 func (s *session) SetModel(ctx context.Context, model string) error {
 	s.mu.Lock()
 	s.model = model
+	s.mu.Unlock()
+	return nil
+}
+
+// SetEffort records the reasoning effort for subsequent turns. Like the model,
+// turn/start carries a per-turn effort override, so the change takes effect on
+// the next prompt without restarting the thread.
+func (s *session) SetEffort(ctx context.Context, effort string) error {
+	s.mu.Lock()
+	s.effort = effort
 	s.mu.Unlock()
 	return nil
 }

@@ -109,6 +109,13 @@ describe("resolveModel", () => {
     expect(resolveModel(instance, "claude-opus-5[1m]")?.id).toBe("default");
   });
 
+  it("matches the harness's bare concrete id against a context-tagged resolves", () => {
+    // The harness reports "claude-opus-5" (no tag) even though the row resolves
+    // to "claude-opus-5[1m]"; they are the same model, so it must not fall
+    // through to a raw, unlabelled row.
+    expect(resolveModel(instance, "claude-opus-5")?.id).toBe("default");
+  });
+
   it("keeps naming a model the catalogue no longer lists", () => {
     // The session is running it; swapping the label for something else would
     // say the session is doing something it is not.

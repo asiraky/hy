@@ -449,6 +449,15 @@ export function App() {
     },
     [activeId],
   );
+  const switchEffort = useCallback(
+    (effort: string) => {
+      if (!activeId) return;
+      clientRef.current?.command("set_effort", { sessionId: activeId, effort }).catch((e) => {
+        toast.error("Could not change reasoning effort", { description: e.message });
+      });
+    },
+    [activeId],
+  );
   const pending = state?.pendingPermissions?.[0];
   const elicitation = state?.pendingElicitations?.[0];
   const activeProject = projects.find((p) => p.id === meta?.projectId);
@@ -688,6 +697,7 @@ export function App() {
                 model={state.model}
                 effort={state.effort}
                 onSwitchModel={switchModel}
+                onSwitchEffort={switchEffort}
                 usage={state.usage}
                 loadComposerItems={loadComposerItems}
                 onRunClientAction={runClientComposerAction}

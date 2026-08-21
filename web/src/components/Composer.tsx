@@ -2,6 +2,7 @@ import { ArrowUpIcon, SquareIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ContextMeter } from "~/components/ContextMeter";
+import { EffortPicker, formatContextWindow } from "~/components/EffortPicker";
 import { ModelPicker } from "~/components/ModelPicker";
 import { Button } from "~/components/ui/button";
 import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from "~/components/ui/command";
@@ -13,6 +14,7 @@ import {
   replaceComposerTrigger,
   submittedComposerAction,
 } from "~/lib/composerItems";
+import { pickerInstances, resolveInstance, resolveModel } from "~/lib/models";
 import type { ComposerItem, HarnessMeta, Usage } from "~/protocol";
 import { useIsDesktop } from "~/useMediaQuery";
 
@@ -30,6 +32,7 @@ export function Composer({
   model = "",
   effort = "",
   onSwitchModel,
+  onSwitchEffort,
   usage,
   loadComposerItems,
   onRunClientAction,
@@ -55,6 +58,7 @@ export function Composer({
   model?: string;
   effort?: string;
   onSwitchModel?: (id: string) => void;
+  onSwitchEffort?: (effort: string) => void;
   /** The session's token usage, source of the context meter. */
   usage?: Usage;
   loadComposerItems?: () => Promise<ComposerItem[]>;
@@ -64,6 +68,16 @@ export function Composer({
   const ref = useRef<HTMLTextAreaElement>(null);
   // There is no ⇧↵ worth advertising on a phone, so keep the hint to desktop.
   const isDesktop = useIsDesktop();
+
+  // The running model's own reasoning levels, so the effort control offers what
+  // this model accepts rather than a fixed set. Legacy picks report none, and
+  // the control simply does not appear.
+  const modelEfforts = useMemo(() => {
+    const instances = pickerInstances(harnesses);
+    const inst = resolveInstance(instances, instance, harness);
+    return resolveModel(inst, model)?.efforts ?? [];
+  }, [harnesses, instance, harness, model]);
+  const contextLabel = formatContextWindow(usage?.contextWindow);
   const [providerItems, setProviderItems] = useState<ComposerItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
   const [catalogueReady, setCatalogueReady] = useState(!loadComposerItems);
@@ -394,8 +408,18 @@ export function Composer({
               className="text-muted-foreground hover:text-foreground h-11 w-auto max-w-[45%] min-w-0 border-0 px-2 shadow-none md:h-8 md:min-h-8"
             />
           )}
-          {effort && (
-            <span className="text-muted-foreground shrink-0 text-[12px] capitalize">{effort}</span>
+          {modelEfforts.length > 0 && onSwitchEffort ? (
+            <EffortPicker
+              efforts={modelEfforts}
+              value={effort}
+              contextLabel={contextLabel}
+              disabled={disabled}
+              onChange={onSwitchEffort}
+            />
+          ) : (
+            effort && (
+              <span className="text-muted-foreground shrink-0 text-[12px] capitalize">{effort}</span>
+            )
           )}
 
           {busy ? (

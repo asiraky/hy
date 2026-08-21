@@ -246,6 +246,8 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 		cwd:              o.Cwd,
 		configDir:        claudeConfigDir(o.Cwd, o.Env),
 		harnessSessionID: sessionID,
+		model:            o.Model,
+		effort:           o.Effort,
 		events:           make(chan proto.Emission, 256),
 		streams:          map[string]*stream{},
 		done:             make(chan struct{}),
@@ -301,6 +303,7 @@ type session struct {
 	streams   map[string]*stream
 	sawResult bool
 	model     string
+	effort    string
 
 	// usage carries both cost accounting and window occupancy; it is kept on
 	// the session and re-emitted whole so a result (accounting + fallback
@@ -360,6 +363,20 @@ func (s *session) SetModel(ctx context.Context, model string) error {
 	}
 	s.mu.Lock()
 	s.model = model
+	s.mu.Unlock()
+	return nil
+}
+
+// SetEffort switches reasoning effort mid-session via the SDK's
+// applyFlagSettings, which changes effortLevel on a running streaming session
+// with no restart. Like SetModel it is a request: an effort the harness
+// refuses must surface as an error rather than be recorded as applied.
+func (s *session) SetEffort(ctx context.Context, effort string) error {
+	if err := s.conn.Call(ctx, "setEffort", map[string]any{"effort": effort}, nil); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.effort = effort
 	s.mu.Unlock()
 	return nil
 }

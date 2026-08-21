@@ -200,6 +200,9 @@ func (s *State) Apply(ev proto.Event) {
 		if p.Mode != "" {
 			s.Mode = p.Mode
 		}
+		if p.Effort != "" {
+			s.Effort = p.Effort
+		}
 		if p.Title != "" {
 			s.Title = p.Title
 		}

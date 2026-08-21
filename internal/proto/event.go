@@ -158,9 +158,10 @@ type WorkspaceFailedPayload struct {
 }
 
 type SessionConfigChangedPayload struct {
-	Model string `json:"model,omitempty"`
-	Mode  string `json:"mode,omitempty"`
-	Title string `json:"title,omitempty"`
+	Model  string `json:"model,omitempty"`
+	Mode   string `json:"mode,omitempty"`
+	Effort string `json:"effort,omitempty"`
+	Title  string `json:"title,omitempty"`
 	// HarnessSessionID is the harness's own identifier for this conversation,
 	// which is what a restart needs in order to resume with context intact.
 	HarnessSessionID string `json:"harnessSessionId,omitempty"`

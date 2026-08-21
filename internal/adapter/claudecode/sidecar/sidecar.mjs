@@ -7,8 +7,8 @@
 //
 // Wire format: JSON-RPC 2.0, one object per line, over stdin/stdout.
 //
-//   host -> here (notifications):  prompt, interrupt, setModel
-//   host -> here (request):        setPermissionMode, supportedCommands
+//   host -> here (notifications):  prompt, interrupt
+//   host -> here (request):        setModel, setEffort, setPermissionMode, supportedCommands
 //   here -> host (notifications):  message, models, fatal
 //   here -> host (request):        permission  -> {behavior, updatedInput?, message?}
 
@@ -214,6 +214,19 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       // chosen one while the session keeps running the old model.
       session
         .setModel(frame.params.model || undefined)
+        .then(() => {
+          if (frame.id !== undefined) respond(frame.id, {});
+        })
+        .catch((e) => {
+          if (frame.id !== undefined) respondError(frame.id, e?.message ?? String(e));
+        });
+      break;
+    case "setEffort":
+      // A request, like setModel: mid-session reasoning-effort change via
+      // applyFlagSettings (effortLevel additionally accepts the session-scoped
+      // "max" here). A refused level must reach the human as an error.
+      session
+        .applyFlagSettings({ effortLevel: frame.params.effort || undefined })
         .then(() => {
           if (frame.id !== undefined) respond(frame.id, {});
         })

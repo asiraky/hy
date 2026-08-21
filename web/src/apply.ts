@@ -56,6 +56,7 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
         ...s,
         model: p.model || s.model,
         mode: p.mode || s.mode,
+        effort: p.effort || s.effort,
         title: p.title || s.title,
       };
 

@@ -78,10 +78,22 @@ export function resolveModel(
 ): ModelMeta | undefined {
   if (!instance) return undefined;
   if (!modelId) return defaultModel(instance);
+  const bare = stripContextTag(modelId);
   return (
     instance.models.find((m) => m.id === modelId) ??
-    instance.models.find((m) => m.resolves === modelId) ?? { id: modelId, label: modelId }
+    instance.models.find((m) => m.resolves === modelId) ??
+    // The harness reports the concrete model it is running with the context
+    // tag stripped ("claude-opus-5"), while a row resolves to the tagged form
+    // ("claude-opus-5[1m]"). They are the same model, so match on the bare id
+    // rather than falling through to a raw, unlabelled row.
+    instance.models.find((m) => stripContextTag(m.resolves ?? "") === bare) ??
+    instance.models.find((m) => stripContextTag(m.id) === bare) ?? { id: modelId, label: modelId }
   );
+}
+
+/** Drops a trailing context-window tag like "[1m]" from a model id. */
+function stripContextTag(id: string): string {
+  return id.replace(/\[[^\]]*\]$/, "");
 }
 
 /** Picks the instance a selection refers to, falling back to a usable one. */
