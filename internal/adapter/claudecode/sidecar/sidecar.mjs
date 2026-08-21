@@ -8,7 +8,7 @@
 // Wire format: JSON-RPC 2.0, one object per line, over stdin/stdout.
 //
 //   host -> here (notifications):  prompt, interrupt, setModel
-//   host -> here (request):        setPermissionMode -> {} | error
+//   host -> here (request):        setPermissionMode, supportedCommands
 //   here -> host (notifications):  message, models, fatal
 //   here -> host (request):        permission  -> {behavior, updatedInput?, message?}
 
@@ -218,6 +218,16 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         .setPermissionMode(frame.params.mode)
         .then(() => {
           if (frame.id !== undefined) respond(frame.id, {});
+        })
+        .catch((e) => {
+          if (frame.id !== undefined) respondError(frame.id, e?.message ?? String(e));
+        });
+      break;
+    case "supportedCommands":
+      session
+        .supportedCommands()
+        .then((commands) => {
+          if (frame.id !== undefined) respond(frame.id, { commands });
         })
         .catch((e) => {
           if (frame.id !== undefined) respondError(frame.id, e?.message ?? String(e));

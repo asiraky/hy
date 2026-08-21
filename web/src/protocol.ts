@@ -114,6 +114,21 @@ export interface FileDiff {
   truncated?: boolean;
 }
 
+/** One provider-native composer completion, normalized by the live adapter. */
+export interface ComposerItem {
+  id: string;
+  name: string;
+  description?: string;
+  kind: "command" | "skill";
+  trigger: string;
+  insertText: string;
+  argsHint?: string;
+  origin?: "personal" | "repo" | "project" | "plugin" | "system" | "built-in" | "other";
+  behavior: "prompt" | "client-action" | "adapter-action";
+  action?: string;
+  aliases?: string[];
+}
+
 /**
  * What one turn changed on disk, measured between the snapshots bracketing it.
  * A turn that changed nothing has none: the server does not report an empty
@@ -446,6 +461,7 @@ export interface ServerFrame {
     | "welcome"
     | "sessions"
     | "harnesses"
+    | "composer_items_changed"
     | "snapshot"
     | "event"
     | "synchronized"

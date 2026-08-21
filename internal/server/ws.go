@@ -199,6 +199,8 @@ func (c *conn) attach(f clientFrame) {
 			case <-sub.Resync:
 				c.send(serverFrame{Type: "resync", SessionID: f.SessionID})
 				return
+			case <-sub.ComposerChanged:
+				c.send(serverFrame{Type: "composer_items_changed", SessionID: f.SessionID})
 			case ev, ok := <-sub.Ch:
 				if !ok {
 					return
@@ -380,6 +382,32 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 			return nil, err
 		}
 		return map[string]any{"model": a.Model}, nil
+
+	case "list_composer_items":
+		var a sessionArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		actor, err := c.srv.mgr.Get(ctx, a.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		items, err := actor.ComposerItems(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"items": items}, nil
+
+	case "run_composer_action":
+		var a runComposerActionArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		actor, err := c.srv.mgr.Get(ctx, a.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		return actor.RunComposerAction(ctx, a.Action, a.Args)
 
 	case "resolve_permission":
 		var a resolveArgs

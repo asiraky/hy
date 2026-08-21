@@ -13,6 +13,9 @@ let events: ClientEvents;
 const command = vi.fn(async (_name: string, _args: unknown) => ({}) as any);
 const attach = vi.fn();
 const detach = vi.fn();
+const toast = vi.hoisted(() => ({ error: vi.fn(), info: vi.fn() }));
+
+vi.mock("sonner", () => ({ toast }));
 
 vi.mock("./client", () => ({
   wsURL: () => "ws://test",
@@ -67,9 +70,12 @@ const sidebarShowing = () => document.querySelector("[data-slot=sheet-content]")
 
 beforeEach(() => {
   localStorage.clear();
+  Element.prototype.scrollIntoView = vi.fn();
   command.mockClear();
   attach.mockClear();
   detach.mockClear();
+  toast.error.mockClear();
+  toast.info.mockClear();
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -222,8 +228,8 @@ describe("the empty content column", () => {
 });
 
 describe("composer drafts", () => {
-  const boot = async () => {
-    viewport("desktop");
+  const boot = async (kind: "phone" | "desktop" = "desktop") => {
+    viewport(kind);
     render(<App />);
     await act(async () => {
       events.onProjects([project]);
@@ -239,6 +245,35 @@ describe("composer drafts", () => {
       fireEvent.click(screen.getByText(`Session ${id}`));
       events.onState(id, state(id, "default"));
     });
+  };
+
+  const catalogue = [
+    {
+      id: "skill:alpha",
+      name: "alpha",
+      description: "Run alpha workflow",
+      kind: "skill",
+      trigger: "$",
+      insertText: "$alpha",
+      behavior: "prompt",
+      origin: "project",
+    },
+    {
+      id: "skill:beta",
+      name: "beta",
+      description: "Run beta workflow",
+      kind: "skill",
+      trigger: "$",
+      insertText: "$beta",
+      behavior: "prompt",
+      origin: "user",
+    },
+  ];
+
+  const useCatalogue = () => {
+    command.mockImplementation(async (name: string) =>
+      name === "list_composer_items" ? { items: catalogue } : ({} as any),
+    );
   };
 
   it("keeps a half-typed message when you switch away and come back", async () => {
@@ -276,6 +311,204 @@ describe("composer drafts", () => {
     await open("b");
     await open("a");
     expect(composer().value).toBe("");
+  });
+
+  it("opens the model picker for /model without sending it to the harness", async () => {
+    command.mockImplementation(async () => ({} as any));
+    await boot();
+    await open("a");
+
+    await act(async () => {
+      fireEvent.focus(composer());
+      fireEvent.change(composer(), { target: { value: "/model", selectionStart: 6 } });
+      fireEvent.keyDown(composer(), { key: "Enter" });
+    });
+
+    expect(command).not.toHaveBeenCalledWith("prompt", expect.anything());
+    expect(composer().value).toBe("");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Harness and model").getAttribute("aria-expanded")).toBe("true"),
+    );
+  });
+
+  it("handles Codex status locally and routes native commands without prompting", async () => {
+    const commands = [
+      {
+        id: "command:status",
+        name: "status",
+        kind: "command",
+        trigger: "/",
+        insertText: "/status",
+        behavior: "client-action",
+        action: "status",
+      },
+      {
+        id: "command:compact",
+        name: "compact",
+        kind: "command",
+        trigger: "/",
+        insertText: "/compact",
+        behavior: "adapter-action",
+        action: "compact",
+      },
+      {
+        id: "command:review",
+        name: "review",
+        kind: "command",
+        trigger: "/",
+        insertText: "/review",
+        behavior: "adapter-action",
+        action: "review",
+      },
+    ];
+    command.mockImplementation(async (name: string) =>
+      name === "list_composer_items" ? { items: commands } : ({} as any),
+    );
+    await boot();
+    await open("a");
+    await act(async () =>
+      events.onState("a", {
+        ...state("a", "on-request"),
+        model: "gpt-test",
+        usage: { contextUsed: 12_345 },
+      }),
+    );
+    await waitFor(() =>
+      expect(command).toHaveBeenCalledWith("list_composer_items", { sessionId: "a" }),
+    );
+
+    fireEvent.change(composer(), { target: { value: "/status", selectionStart: 7 } });
+    fireEvent.keyDown(composer(), { key: "Enter" });
+    expect(toast.info).toHaveBeenCalledWith("Session status", {
+      description: "gpt-test · on-request · 12,345 context tokens",
+    });
+
+    fireEvent.focus(composer());
+    fireEvent.change(composer(), { target: { value: "/comp", selectionStart: 5 } });
+    fireEvent.keyDown(composer(), { key: "Enter" });
+    await waitFor(() =>
+      expect(command).toHaveBeenCalledWith("run_composer_action", {
+        sessionId: "a",
+        action: "compact",
+        args: "",
+      }),
+    );
+
+    fireEvent.change(composer(), {
+      target: { value: "/review focus on races", selectionStart: 22 },
+    });
+    fireEvent.keyDown(composer(), { key: "Enter" });
+    await waitFor(() =>
+      expect(command).toHaveBeenCalledWith("run_composer_action", {
+        sessionId: "a",
+        action: "review",
+        args: "focus on races",
+      }),
+    );
+    expect(command).not.toHaveBeenCalledWith("prompt", expect.anything());
+  });
+
+  it("inserts a provider-native skill completion without executing it", async () => {
+    command.mockImplementation(async (name: string) =>
+      name === "list_composer_items"
+        ? {
+            items: [
+              {
+                id: "skill:review",
+                name: "review",
+                kind: "skill",
+                trigger: "$",
+                insertText: "$review",
+                behavior: "prompt",
+                origin: "project",
+              },
+            ],
+          }
+        : ({} as any),
+    );
+    await boot();
+    await open("a");
+    await waitFor(() =>
+      expect(command).toHaveBeenCalledWith("list_composer_items", { sessionId: "a" }),
+    );
+
+    await act(async () => {
+      fireEvent.focus(composer());
+      fireEvent.change(composer(), { target: { value: "$rev", selectionStart: 4 } });
+      fireEvent.keyDown(composer(), { key: "Enter" });
+    });
+
+    expect(composer().value).toBe("$review ");
+    expect(command).not.toHaveBeenCalledWith("prompt", expect.anything());
+  });
+
+  it("refreshes the provider catalogue when the attached adapter invalidates it", async () => {
+    useCatalogue();
+    await boot();
+    await open("a");
+    await waitFor(() =>
+      expect(command).toHaveBeenCalledWith("list_composer_items", { sessionId: "a" }),
+    );
+    const loadsBefore = command.mock.calls.filter(([name]) => name === "list_composer_items").length;
+
+    await act(async () => events.onComposerItemsChanged("a"));
+
+    await waitFor(() =>
+      expect(command.mock.calls.filter(([name]) => name === "list_composer_items").length).toBeGreaterThan(
+        loadsBefore,
+      ),
+    );
+  });
+
+  it("supports arrow selection and Tab completion without sending", async () => {
+    useCatalogue();
+    await boot();
+    await open("a");
+    await waitFor(() =>
+      expect(command).toHaveBeenCalledWith("list_composer_items", { sessionId: "a" }),
+    );
+
+    fireEvent.focus(composer());
+    fireEvent.change(composer(), { target: { value: "$", selectionStart: 1 } });
+    fireEvent.keyDown(composer(), { key: "ArrowDown" });
+    fireEvent.keyDown(composer(), { key: "Enter" });
+    expect(composer().value).toBe("$beta ");
+
+    fireEvent.change(composer(), { target: { value: "$al", selectionStart: 3 } });
+    fireEvent.keyDown(composer(), { key: "Tab" });
+    expect(composer().value).toBe("$alpha ");
+    expect(command).not.toHaveBeenCalledWith("prompt", expect.anything());
+  });
+
+  it("does not send on Enter when completion has no matches or input is composing", async () => {
+    useCatalogue();
+    await boot();
+    await open("a");
+
+    fireEvent.focus(composer());
+    fireEvent.change(composer(), { target: { value: "$zzz", selectionStart: 4 } });
+    fireEvent.keyDown(composer(), { key: "Enter" });
+    expect(composer().value).toBe("$zzz");
+
+    fireEvent.change(composer(), { target: { value: "$al", selectionStart: 3 } });
+    fireEvent.keyDown(composer(), { key: "Enter", keyCode: 229 });
+    expect(composer().value).toBe("$al");
+    expect(command).not.toHaveBeenCalledWith("prompt", expect.anything());
+  });
+
+  it("dismisses completion with Escape and shows it as a bottom sheet on a phone", async () => {
+    useCatalogue();
+    await boot("phone");
+    await open("a");
+
+    fireEvent.focus(composer());
+    fireEvent.change(composer(), { target: { value: "$al", selectionStart: 3 } });
+    expect(await screen.findByText("Commands")).toBeTruthy();
+    expect(screen.getByText("Run alpha workflow")).toBeTruthy();
+
+    fireEvent.keyDown(composer(), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByText("Run alpha workflow")).toBeNull());
+    expect(composer().value).toBe("$al");
   });
 
   it("keeps a new session's draft while the list has not caught up with it", async () => {

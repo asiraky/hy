@@ -53,6 +53,8 @@ export function ModelPicker({
   disabled = false,
   id,
   className,
+  open: controlledOpen,
+  onOpenChange,
 }: {
   harnesses: HarnessMeta[];
   value: ModelSelection;
@@ -65,8 +67,16 @@ export function ModelPicker({
   disabled?: boolean;
   id?: string;
   className?: string;
+  /** Optional controlled state, used by composer actions such as /model. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = (next: boolean) => {
+    if (controlledOpen === undefined) setInternalOpen(next);
+    onOpenChange?.(next);
+  };
   const isDesktop = useIsDesktop();
 
   const instances = useMemo(() => pickerInstances(harnesses), [harnesses]);

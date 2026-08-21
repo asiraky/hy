@@ -222,6 +222,42 @@ type ModelSwitcher interface {
 	SetModel(ctx context.Context, model string) error
 }
 
+// ComposerItem is one provider-native token the composer can discover. The
+// core deliberately does not interpret Trigger, InsertText, or Action: they
+// are the adapter's normalized presentation and routing contract.
+type ComposerItem struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Kind        string   `json:"kind"`    // command | skill
+	Trigger     string   `json:"trigger"` // /, $, or another provider-native token
+	InsertText  string   `json:"insertText"`
+	ArgsHint    string   `json:"argsHint,omitempty"`
+	Origin      string   `json:"origin,omitempty"`
+	Behavior    string   `json:"behavior"` // prompt | client-action | adapter-action
+	Action      string   `json:"action,omitempty"`
+	Aliases     []string `json:"aliases,omitempty"`
+}
+
+const (
+	ComposerPrompt        = "prompt"
+	ComposerClientAction  = "client-action"
+	ComposerAdapterAction = "adapter-action"
+)
+
+// ComposerCataloguer is an optional live-session capability. Discovery lives
+// here, beside the provider process whose cwd, credentials, and installed
+// version determine the real answer.
+type ComposerCataloguer interface {
+	ComposerItems(ctx context.Context) ([]ComposerItem, error)
+}
+
+// ComposerActionRunner handles catalogue entries that map to a provider RPC
+// rather than prompt text. Action is opaque outside the adapter.
+type ComposerActionRunner interface {
+	RunComposerAction(ctx context.Context, action, args string) (any, error)
+}
+
 // PermissionRequest is what an adapter asks a human, via the host.
 type PermissionRequest struct {
 	TurnID     string
@@ -261,4 +297,11 @@ type HostServices interface {
 	RequestPermission(ctx context.Context, req PermissionRequest) (PermissionOutcome, error)
 	Elicit(ctx context.Context, req ElicitationRequest) (ElicitationResult, error)
 	Logf(format string, args ...any)
+}
+
+// ComposerCatalogueInvalidator is an optional host service used by adapters
+// whose native runtime watches skills or commands. It is ephemeral UI state,
+// not a canonical transcript event.
+type ComposerCatalogueInvalidator interface {
+	ComposerCatalogueChanged()
 }
