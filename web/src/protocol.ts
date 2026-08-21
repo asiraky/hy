@@ -244,7 +244,7 @@ export interface Workspace {
   /** Short commit, for a detached worktree that has no branch. */
   head?: string;
   isRoot?: boolean;
-  /** A live session already holds this checkout, so it is shown but not selectable. */
+  /** A live session already holds this checkout. Selectable anyway; the picker warns. */
   busy?: boolean;
   busySessionId?: string;
   busyTitle?: string;
@@ -328,8 +328,6 @@ export interface PermissionModeMeta {
   id: string;
   label: string;
   description?: string;
-  /** Render with a warning treatment and confirm before entering. */
-  danger?: boolean;
   /** Selected when the user has expressed no preference. */
   default?: boolean;
 }

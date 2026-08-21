@@ -330,7 +330,7 @@ func TestClawdCompatibilityHookGetsBranchAndNeedsNoResultFile(t *testing.T) {
 	if s.Cwd == root || !strings.Contains(s.Workspace.Output, "compatibility-branch:feature/hy-") {
 		t.Fatalf("compatibility result not synthesized: cwd=%q output=%q", s.Cwd, s.Workspace.Output)
 	}
-	if err := mgr.Delete(context.Background(), a.ID); err != nil {
+	if err := mgr.Delete(context.Background(), a.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
