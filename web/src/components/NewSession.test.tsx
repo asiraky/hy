@@ -210,7 +210,7 @@ describe("NewSession", () => {
     expect(screen.queryByRole("radio", { name: /New scratch worktree/ })).toBeNull();
   });
 
-  it("still offers the main checkout when another session is on it, with an inline warning", async () => {
+  it("still offers the main checkout when another session is on it", async () => {
     const root = {
       path: "/tmp/repo",
       isRoot: true,
@@ -229,8 +229,8 @@ describe("NewSession", () => {
     expect(choice.getAttribute("disabled")).toBeNull();
     fireEvent.click(choice);
 
-    // A line of text under the choice, not a modal and not a browser dialog.
-    expect(screen.getByText(/already on the main checkout/)).toBeTruthy();
+    // No warning copy is shown for a busy main checkout — it was removed.
+    expect(screen.queryByText(/already on the main checkout/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Start" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalled());
     expect(confirm).not.toHaveBeenCalled();
@@ -286,7 +286,7 @@ describe("NewSession", () => {
     });
   });
 
-  it("attaches to a worktree another session is already in, having said so", async () => {
+  it("attaches to a worktree another session is already in", async () => {
     const side = {
       path: "/tmp/repo/.worktrees/side",
       branch: "issue/1-side",
@@ -307,7 +307,8 @@ describe("NewSession", () => {
     expect(row.hasAttribute("disabled")).toBe(false);
     fireEvent.click(row);
 
-    expect(screen.getByText(/already in this worktree/)).toBeTruthy();
+    // No warning copy is shown for a busy worktree — it was removed.
+    expect(screen.queryByText(/already in this worktree/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Start" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalled());
     expect(onCreate.mock.calls[0][0]).toMatchObject({
