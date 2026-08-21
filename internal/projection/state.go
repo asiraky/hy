@@ -24,6 +24,10 @@ type Item struct {
 	ID     string `json:"id"`
 	Kind   string `json:"kind"`
 	TurnID string `json:"turnId,omitempty"`
+	// ParentID links work done inside a subagent to the Task/Agent tool call
+	// that spawned it. The transcript folds such items away; the subagents
+	// surface groups by it.
+	ParentID string `json:"parentId,omitempty"`
 	// ReceivedAt is when the item's first event landed, in millis. It is
 	// display metadata: the timeline's order is the log's order regardless.
 	ReceivedAt int64 `json:"receivedAt,omitempty"`
@@ -333,6 +337,9 @@ func (s *State) Apply(ev proto.Event) {
 			it.Role = p.Role
 			it.ContentKind = p.Kind
 			it.TurnID = p.TurnID
+			if p.ParentToolCallID != "" {
+				it.ParentID = p.ParentToolCallID
+			}
 			it.Text += p.Delta
 		})
 
@@ -353,6 +360,9 @@ func (s *State) Apply(ev proto.Event) {
 			it.Title = p.Title
 			it.Status = p.Status
 			it.Input = p.RawInput
+			if p.ParentToolCallID != "" {
+				it.ParentID = p.ParentToolCallID
+			}
 		})
 
 	case proto.ToolCallUpdated:
@@ -368,6 +378,9 @@ func (s *State) Apply(ev proto.Event) {
 			}
 			if p.Title != "" {
 				it.Title = p.Title
+			}
+			if p.ParentToolCallID != "" {
+				it.ParentID = p.ParentToolCallID
 			}
 			if len(p.RawInput) > 0 {
 				it.Input = p.RawInput

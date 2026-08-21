@@ -41,6 +41,8 @@ export interface Item {
   id: string;
   kind: "message" | "tool" | "notice";
   turnId?: string;
+  /** The Task/Agent tool call this item's work happened inside, for subagents. */
+  parentId?: string;
   /** When the item's first event landed, in millis. Display metadata only. */
   receivedAt?: number;
   role?: "user" | "agent";

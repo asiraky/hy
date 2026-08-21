@@ -632,6 +632,9 @@ func (s *session) handleStreamEvent(msg map[string]json.RawMessage) {
 	}
 	remarshal(msg, &wrapper)
 	ev := wrapper.Event
+	// Non-empty when this stream belongs to a subagent: the id of the Task
+	// call that spawned it, carried on every SDK message the subagent emits.
+	parent := str(msg["parent_tool_use_id"])
 
 	switch ev.Type {
 	case "message_start":
@@ -658,11 +661,12 @@ func (s *session) handleStreamEvent(msg map[string]json.RawMessage) {
 
 		if ev.ContentBlock.Type == "tool_use" {
 			s.emit(proto.Emit(proto.ToolCallStarted, proto.ToolCallStartedPayload{
-				TurnID:     turn,
-				ToolCallID: ev.ContentBlock.ID,
-				Kind:       toolKind(ev.ContentBlock.Name),
-				Title:      ev.ContentBlock.Name,
-				Status:     proto.StatusPending,
+				TurnID:           turn,
+				ToolCallID:       ev.ContentBlock.ID,
+				Kind:             toolKind(ev.ContentBlock.Name),
+				Title:            ev.ContentBlock.Name,
+				Status:           proto.StatusPending,
+				ParentToolCallID: parent,
 			}))
 		}
 
@@ -678,10 +682,12 @@ func (s *session) handleStreamEvent(msg map[string]json.RawMessage) {
 		case "text_delta":
 			s.emit(proto.Emit(proto.MessageChunk, proto.MessageChunkPayload{
 				TurnID: turn, Role: "agent", Kind: "text", BlockID: b.blockID, Delta: ev.Delta.Text,
+				ParentToolCallID: parent,
 			}))
 		case "thinking_delta":
 			s.emit(proto.Emit(proto.MessageChunk, proto.MessageChunkPayload{
 				TurnID: turn, Role: "agent", Kind: "thought", BlockID: b.blockID, Delta: ev.Delta.Thinking,
+				ParentToolCallID: parent,
 			}))
 		}
 	}
@@ -715,15 +721,17 @@ func (s *session) handleAssistant(msg map[string]json.RawMessage) {
 		s.mu.Unlock()
 	}
 
+	parent := str(msg["parent_tool_use_id"])
 	for _, c := range m.Message.Content {
 		if c.Type != "tool_use" {
 			continue
 		}
 		s.emit(proto.Emit(proto.ToolCallUpdated, proto.ToolCallUpdatedPayload{
-			ToolCallID: c.ID,
-			Status:     proto.StatusInProgress,
-			Title:      toolTitle(c.Name, c.Input),
-			RawInput:   c.Input,
+			ToolCallID:       c.ID,
+			Status:           proto.StatusInProgress,
+			Title:            toolTitle(c.Name, c.Input),
+			RawInput:         c.Input,
+			ParentToolCallID: parent,
 		}))
 	}
 }
@@ -755,6 +763,7 @@ func (s *session) handleUser(msg map[string]json.RawMessage) {
 		}
 		s.emit(proto.Emit(proto.ToolCallUpdated, proto.ToolCallUpdatedPayload{
 			ToolCallID: c.ToolUseID, Status: status, Content: content,
+			ParentToolCallID: str(msg["parent_tool_use_id"]),
 		}))
 	}
 }
