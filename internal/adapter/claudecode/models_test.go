@@ -6,12 +6,16 @@ import (
 	"github.com/asiraky/hy/internal/adapter"
 )
 
-// The SDK's own rows, as observed from claude CLI 2.1.237. The mapping has to
-// survive them verbatim: this is the shape hy actually receives.
+// The SDK's own rows, as observed from claude CLI 2.1.238. The mapping has to
+// survive them verbatim: this is the shape hy actually receives — including the
+// twin Opus aliases (a generic "default" and a named "opus[1m]") that resolve
+// to the same model, and a Haiku row.
 func liveRows() []modelInfo {
 	return []modelInfo{
 		{Value: "default", ResolvedModel: "claude-opus-5[1m]", DisplayName: "Default (recommended)", Description: "Opus 5 with 1M context · Best for everyday, complex tasks", SupportedEffortLevels: []string{"low", "medium", "high", "xhigh", "max"}},
-		{Value: "claude-fable-5[1m]", ResolvedModel: "claude-fable-5", DisplayName: "Fable", Description: "Fable 5 · Most capable for your hardest and longest-running tasks"},
+		{Value: "opus[1m]", ResolvedModel: "claude-opus-5[1m]", DisplayName: "Opus (1M context)", Description: "Opus 5 with 1M context · Best for everyday, complex tasks", SupportedEffortLevels: []string{"low", "medium", "high", "xhigh", "max"}},
+		{Value: "fable", ResolvedModel: "claude-fable-5", DisplayName: "Fable", Description: "Fable 5 · Most capable for your hardest and longest-running tasks", SupportedEffortLevels: []string{"low", "medium", "high", "xhigh", "max"}},
+		{Value: "sonnet", ResolvedModel: "claude-sonnet-5", DisplayName: "Sonnet", Description: "Sonnet 5 · Efficient for routine tasks", SupportedEffortLevels: []string{"low", "medium", "high", "xhigh", "max"}},
 		{Value: "haiku", ResolvedModel: "claude-haiku-4-5-20251001", DisplayName: "Haiku", Description: "Haiku 4.5 · Fastest for quick answers"},
 	}
 }
@@ -19,7 +23,7 @@ func liveRows() []modelInfo {
 func TestMapClaudeModelsSplitsVersionFromDescription(t *testing.T) {
 	got := mapClaudeModels(liveRows())
 
-	fable := findModel(t, got, "claude-fable-5[1m]")
+	fable := findModel(t, got, "fable")
 	if fable.Label != "Fable" {
 		t.Errorf("label = %q, want Fable", fable.Label)
 	}
@@ -34,42 +38,77 @@ func TestMapClaudeModelsSplitsVersionFromDescription(t *testing.T) {
 	}
 }
 
-// The picker preselects whatever the harness calls its default, so exactly one
-// row must carry the flag — and it must be the harness's row, not one hy
-// invented.
-func TestMapClaudeModelsMarksOneDefault(t *testing.T) {
+// Haiku is a quick-answer model, not a coding one, so it is dropped however the
+// harness names it.
+func TestMapClaudeModelsDropsHaiku(t *testing.T) {
+	for _, m := range mapClaudeModels(liveRows()) {
+		if m.ID == "haiku" {
+			t.Fatalf("haiku was offered: %+v", m)
+		}
+	}
+}
+
+// The two Opus aliases resolve to the same model, so the picker shows one row —
+// the named one — and it carries the recommended flag the generic "default"
+// alias had. Exactly one row is the default.
+func TestMapClaudeModelsMergesTwinOpusRows(t *testing.T) {
 	got := mapClaudeModels(liveRows())
 
+	var opus []adapter.ModelMeta
 	var defaults []string
 	for _, m := range got {
+		if m.Resolves == "claude-opus-5[1m]" {
+			opus = append(opus, m)
+		}
 		if m.Default {
 			defaults = append(defaults, m.ID)
 		}
 	}
-	if len(defaults) != 1 || defaults[0] != "default" {
-		t.Fatalf("default rows = %v, want exactly [default]", defaults)
+	if len(opus) != 1 {
+		t.Fatalf("rows resolving to Opus 5 = %d, want 1 merged row", len(opus))
 	}
-	if got[0].ID != "default" {
-		t.Errorf("first row = %q, want the default first", got[0].ID)
+	if opus[0].ID != "opus[1m]" {
+		t.Errorf("kept row = %q, want the named opus[1m] alias, not the generic default", opus[0].ID)
 	}
-	if got[0].Version != "Opus 5 with 1M context" {
-		t.Errorf("the default row must name what it resolves to; version = %q", got[0].Version)
+	if len(defaults) != 1 || defaults[0] != "opus[1m]" {
+		t.Fatalf("default rows = %v, want exactly [opus[1m]]", defaults)
 	}
 }
 
-// hy offers only what the harness serves: no hardcoded legacy group is
-// appended, because the installed Claude Code no longer serves those older ids
-// and offering a model it will not run is what let the picker and the context
-// meter disagree.
-func TestMapClaudeModelsOffersOnlyLiveRows(t *testing.T) {
+// Current models are ordered by strength — Fable, Opus, Sonnet — and the
+// curated legacy group is appended, folded away.
+func TestMapClaudeModelsOrdersByStrengthThenLegacy(t *testing.T) {
 	got := mapClaudeModels(liveRows())
 
-	if len(got) != len(liveRows()) {
-		t.Fatalf("len = %d, want exactly the live rows", len(got))
-	}
+	var currentIDs []string
 	for _, m := range got {
-		if m.Group != "" {
-			t.Errorf("%s group = %q, want current — nothing is folded away", m.ID, m.Group)
+		if m.Group == "" {
+			currentIDs = append(currentIDs, m.ID)
+		}
+	}
+	want := []string{"fable", "opus[1m]", "sonnet"}
+	if len(currentIDs) != len(want) {
+		t.Fatalf("current ids = %v, want %v", currentIDs, want)
+	}
+	for i := range want {
+		if currentIDs[i] != want[i] {
+			t.Fatalf("current order = %v, want %v", currentIDs, want)
+		}
+	}
+	// The curated legacy group is appended after every current row.
+	firstLegacy := len(currentIDs)
+	if len(got) != firstLegacy+len(legacyModels) {
+		t.Fatalf("len = %d, want %d current + %d legacy", len(got), firstLegacy, len(legacyModels))
+	}
+	for _, want := range legacyModels {
+		m := findModel(t, got, want.ID)
+		if m.Group != adapter.GroupLegacy {
+			t.Errorf("%s group = %q, want legacy", m.ID, m.Group)
+		}
+		// A legacy row must not repeat its label as a version — that double
+		// render is the bug that started this.
+		if m.Version == m.Label && m.Version != "" {
+			t.Errorf("%s renders its name twice (label==version)", m.ID)
 		}
 	}
 }
@@ -78,9 +117,9 @@ func TestMapClaudeModelsIgnoresEmptyAndUnlisted(t *testing.T) {
 	if got := mapClaudeModels(nil); got != nil {
 		t.Errorf("no live rows should map to nothing, got %v", got)
 	}
-	got := mapClaudeModels([]modelInfo{{Value: ""}, {Value: "sonnet", DisplayName: "Sonnet", Description: "Sonnet 5"}})
-	if len(got) != 1 {
-		t.Fatalf("len = %d, want the one real row", len(got))
+	got := mapClaudeModels([]modelInfo{{Value: ""}, {Value: "sonnet", ResolvedModel: "claude-sonnet-5", DisplayName: "Sonnet", Description: "Sonnet 5"}})
+	if len(got) != 1+len(legacyModels) {
+		t.Fatalf("len = %d, want the one real row plus legacy", len(got))
 	}
 	sonnet := findModel(t, got, "sonnet")
 	// A description with no separator is all version, not half a sentence.

@@ -246,6 +246,8 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 		cwd:              o.Cwd,
 		configDir:        claudeConfigDir(o.Cwd, o.Env),
 		harnessSessionID: sessionID,
+		model:            o.Model,
+		effort:           o.Effort,
 		events:           make(chan proto.Emission, 256),
 		streams:          map[string]*stream{},
 		done:             make(chan struct{}),
@@ -301,6 +303,7 @@ type session struct {
 	streams   map[string]*stream
 	sawResult bool
 	model     string
+	effort    string
 
 	// usage carries both cost accounting and window occupancy; it is kept on
 	// the session and re-emitted whole so a result (accounting + fallback
@@ -360,6 +363,26 @@ func (s *session) SetModel(ctx context.Context, model string) error {
 	}
 	s.mu.Lock()
 	s.model = model
+	// The cached window belonged to the old model. Clearing it stops a stale
+	// value (a 1M Opus window shown for a 200k Sonnet) from persisting: the
+	// next result recomputes from the new model, and the next context_usage
+	// report replaces it with the harness's authoritative figure.
+	s.usage.ContextWindow = 0
+	s.usage.ContextLimit = 0
+	s.mu.Unlock()
+	return nil
+}
+
+// SetEffort switches reasoning effort mid-session via the SDK's
+// applyFlagSettings, which changes effortLevel on a running streaming session
+// with no restart. Like SetModel it is a request: an effort the harness
+// refuses must surface as an error rather than be recorded as applied.
+func (s *session) SetEffort(ctx context.Context, effort string) error {
+	if err := s.conn.Call(ctx, "setEffort", map[string]any{"effort": effort}, nil); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.effort = effort
 	s.mu.Unlock()
 	return nil
 }
@@ -647,10 +670,13 @@ func (s *session) handleSDKMessage(msg map[string]json.RawMessage) {
 
 // contextWindowFor is the fallback window used only when the harness cannot
 // report context usage directly (an older CLI without the control method): the
-// standard 200k unless the model id opts into the 1M beta. When
-// getContextUsage is available it supplies the real window and this is unused.
+// standard 200k unless the model is one of the 1M ones. The Opus 5 generation
+// is 1M whether or not its id carries the "[1m]" tag (the harness reports the
+// bare "claude-opus-5" mid-session), and older Opus ids run at 1M too, so the
+// family name is recognised as well as the tag. When getContextUsage is
+// available it supplies the real window and this is unused.
 func contextWindowFor(model string) int64 {
-	if strings.Contains(model, "[1m]") {
+	if strings.Contains(model, "[1m]") || strings.Contains(model, "opus") {
 		return 1_000_000
 	}
 	return 200_000

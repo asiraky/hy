@@ -140,6 +140,11 @@ type setModelArgs struct {
 	Model     string `json:"model"`
 }
 
+type setEffortArgs struct {
+	SessionID string `json:"sessionId"`
+	Effort    string `json:"effort"`
+}
+
 type runComposerActionArgs struct {
 	SessionID  string `json:"sessionId"`
 	Action     string `json:"action"`
