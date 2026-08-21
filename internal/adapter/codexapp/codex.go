@@ -255,6 +255,7 @@ type session struct {
 	// the same value as turnID.
 	turnID       string
 	serverTurnID string
+	interrupting bool            // an interrupt for serverTurnID is already in flight
 	streamed     map[string]bool // item ids that arrived as deltas
 }
 
@@ -289,8 +290,14 @@ func (s *session) Prompt(ctx context.Context, in adapter.PromptInput) error {
 	if err := s.conn.Call(ctx, "turn/start", params, &startRes); err != nil {
 		return err
 	}
+	// Only record the id if this turn is still the active one. turn/completed is
+	// handled on the read-loop goroutine and may have already cleared the turn
+	// (a very fast turn) between the response arriving and this line running;
+	// the guard keeps a completed turn's id from being resurrected as active.
 	s.mu.Lock()
-	s.serverTurnID = startRes.Turn.ID
+	if s.turnID == in.TurnID {
+		s.serverTurnID = startRes.Turn.ID
+	}
 	s.mu.Unlock()
 	return nil
 }
@@ -298,11 +305,20 @@ func (s *session) Prompt(ctx context.Context, in adapter.PromptInput) error {
 // Cancel interrupts the in-flight turn. codex's turn/interrupt requires both the
 // thread id and the specific turn id; omitting the turn id makes it a no-op,
 // which is why the stop button silently did nothing before.
+//
+// A second interrupt for a turn that is already being interrupted is coalesced:
+// codex leaves repeated interrupts of the same turn pending indefinitely, and
+// this call runs on the session actor goroutine, so a hung Call would wedge the
+// whole session (a double-clicked stop button).
 func (s *session) Cancel(ctx context.Context) error {
 	s.mu.Lock()
 	turnID := s.serverTurnID
+	inFlight := s.interrupting
+	if turnID != "" {
+		s.interrupting = true
+	}
 	s.mu.Unlock()
-	if turnID == "" {
+	if turnID == "" || inFlight {
 		return nil
 	}
 	return s.conn.Call(ctx, "turn/interrupt", map[string]any{
@@ -355,6 +371,7 @@ func (s *session) watchExit() {
 	turn := s.turnID
 	s.turnID = ""
 	s.serverTurnID = ""
+	s.interrupting = false
 	s.mu.Unlock()
 	if turn != "" {
 		s.emit(proto.Emit(proto.TurnFinished, proto.TurnFinishedPayload{
@@ -680,6 +697,7 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 		done := s.turnID
 		s.turnID = ""
 		s.serverTurnID = ""
+		s.interrupting = false
 		s.mu.Unlock()
 
 		s.emit(proto.Emit(proto.TurnFinished, proto.TurnFinishedPayload{

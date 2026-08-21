@@ -17,6 +17,7 @@ type recorder struct {
 	mu     sync.Mutex
 	method string
 	params json.RawMessage
+	counts map[string]int
 }
 
 func (r *recorder) last() (string, json.RawMessage) {
@@ -25,9 +26,15 @@ func (r *recorder) last() (string, json.RawMessage) {
 	return r.method, r.params
 }
 
+func (r *recorder) count(method string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.counts[method]
+}
+
 func pairedConn(t *testing.T, reply map[string]any) (*jsonrpc.Conn, *recorder) {
 	t.Helper()
-	rec := &recorder{}
+	rec := &recorder{counts: map[string]int{}}
 	// client writes -> server reads; server writes -> client reads.
 	sr, cw := io.Pipe()
 	cr, sw := io.Pipe()
@@ -35,6 +42,7 @@ func pairedConn(t *testing.T, reply map[string]any) (*jsonrpc.Conn, *recorder) {
 		rec.mu.Lock()
 		rec.method = method
 		rec.params = params
+		rec.counts[method]++
 		rec.mu.Unlock()
 		if r, ok := reply[method]; ok {
 			return r, nil
@@ -92,6 +100,22 @@ func TestCancelWithoutActiveTurnIsNoop(t *testing.T) {
 	}
 	if method, _ := rec.last(); method != "" {
 		t.Fatalf("Cancel sent %q with no active turn, want nothing", method)
+	}
+}
+
+// TestDoubleCancelIsCoalesced guards against a double-clicked stop button:
+// codex leaves a repeated interrupt of the same turn pending forever, and Cancel
+// runs on the session actor goroutine, so a second interrupt must not be sent.
+func TestDoubleCancelIsCoalesced(t *testing.T) {
+	conn, rec := pairedConn(t, nil)
+	s := &session{conn: conn, threadID: "thread-1", serverTurnID: "codex-turn-42"}
+	for i := 0; i < 3; i++ {
+		if err := s.Cancel(context.Background()); err != nil {
+			t.Fatalf("Cancel #%d: %v", i, err)
+		}
+	}
+	if n := rec.count("turn/interrupt"); n != 1 {
+		t.Fatalf("turn/interrupt sent %d times, want 1", n)
 	}
 }
 
