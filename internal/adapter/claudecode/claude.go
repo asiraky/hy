@@ -348,14 +348,20 @@ func (s *session) SetMode(ctx context.Context, mode string) error {
 	return s.conn.Call(ctx, "setPermissionMode", map[string]any{"mode": mode}, nil)
 }
 
-// SetModel switches the model mid-session via the SDK's setModel. The sidecar
-// treats it as a notification; the change is confirmed by the next system/init
-// or simply applies to the next request.
+// SetModel switches the model mid-session via the SDK's setModel. It is a
+// request, not a notification, for the same reason as SetMode: a model the
+// harness refuses — an id gone stale in the catalogue, or one a client made up
+// — must come back as an error rather than be recorded as the running model
+// while the session keeps using the old one. Local state is updated only once
+// the harness has acknowledged the switch.
 func (s *session) SetModel(ctx context.Context, model string) error {
+	if err := s.conn.Call(ctx, "setModel", map[string]any{"model": model}, nil); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	s.model = model
 	s.mu.Unlock()
-	return s.conn.Notify("setModel", map[string]any{"model": model})
+	return nil
 }
 
 // Close tears down the bridge. Closing stdin is the primary signal: the

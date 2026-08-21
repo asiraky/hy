@@ -209,7 +209,17 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       session.interrupt().catch((e) => notify("fatal", { message: `interrupt failed: ${e?.message ?? e}` }));
       break;
     case "setModel":
-      session.setModel(frame.params.model || undefined).catch(() => {});
+      // A request, not a notification: a model the harness will not accept
+      // must reach the human as an error, not be silently recorded as the
+      // chosen one while the session keeps running the old model.
+      session
+        .setModel(frame.params.model || undefined)
+        .then(() => {
+          if (frame.id !== undefined) respond(frame.id, {});
+        })
+        .catch((e) => {
+          if (frame.id !== undefined) respondError(frame.id, e?.message ?? String(e));
+        });
       break;
     case "setPermissionMode":
       // A request, not a notification: a refused mode (managed settings can
