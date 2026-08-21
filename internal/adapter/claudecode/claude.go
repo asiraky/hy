@@ -243,6 +243,8 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 		host:             host,
 		cmd:              cmd,
 		stdin:            stdin,
+		cwd:              o.Cwd,
+		configDir:        claudeConfigDir(o.Cwd, o.Env),
 		harnessSessionID: sessionID,
 		events:           make(chan proto.Emission, 256),
 		streams:          map[string]*stream{},
@@ -282,6 +284,11 @@ type session struct {
 	cmd   *exec.Cmd
 	conn  *jsonrpc.Conn
 	stdin io.WriteCloser
+	cwd   string
+	// configDir is resolved from the same per-instance environment the child
+	// received, so origin enrichment cannot accidentally inspect another
+	// Claude account's skills.
+	configDir string
 
 	harnessSessionID string
 
@@ -645,6 +652,10 @@ func contextWindowFor(model string) int64 {
 
 func (s *session) handleSystem(msg map[string]json.RawMessage) {
 	switch str(msg["subtype"]) {
+	case "commands_changed":
+		if host, ok := s.host.(adapter.ComposerCatalogueInvalidator); ok {
+			host.ComposerCatalogueChanged()
+		}
 	case "init":
 		var init struct {
 			Model          string `json:"model"`

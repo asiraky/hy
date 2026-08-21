@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Client, wsURL, type ConnectionStatus } from "./client";
 import { useIsDesktop } from "./useMediaQuery";
-import type { Access, FileContent, FileDiff, FileTree, HarnessMeta, Project, ProjectConfig, SessionChanges, SessionMeta, SessionState, UserConfig, Workspace } from "./protocol";
+import type { Access, ComposerItem, FileContent, FileDiff, FileTree, HarnessMeta, Project, ProjectConfig, SessionChanges, SessionMeta, SessionState, UserConfig, Workspace } from "./protocol";
 import { AccessPanel } from "./components/Access";
 import { Panel, type PanelRequest } from "./components/panel/Panel";
 import { liveAgentCount } from "./components/panel/AgentsSurface";
@@ -63,6 +63,7 @@ export function App() {
   // still be there when you come back. Session scope only: no persistence, and
   // the map is pruned as sessions go away (see below).
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [composerRevision, setComposerRevision] = useState(0);
   const setDraft = useCallback(
     (id: string, text: string) =>
       setDrafts((d) => (d[id] === text ? d : { ...d, [id]: text })),
@@ -164,6 +165,9 @@ export function App() {
         // A harness-only push carries no cwd; keep the one the welcome frame
         // established rather than blanking it.
         if (cwd) setDefaultCwd(cwd);
+      },
+      onComposerItemsChanged: (id) => {
+        if (id === activeRef.current) setComposerRevision((revision) => revision + 1);
       },
       onProjects: setProjects,
       // State only lands for the session currently attached; the client
@@ -293,6 +297,54 @@ export function App() {
       });
     },
     [activeId],
+  );
+
+  const loadComposerItems = useCallback(async (): Promise<ComposerItem[]> => {
+    if (!activeId) return [];
+    const result = await clientRef.current!.command("list_composer_items", { sessionId: activeId });
+    return result.items ?? [];
+  }, [activeId, composerRevision]);
+
+  const runComposerAction = useCallback(
+    async (action: string, args: string, invocation: string) => {
+      if (!activeId) return;
+      try {
+        await clientRef.current!.command("run_composer_action", {
+          sessionId: activeId,
+          action,
+          args,
+          invocation,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        toast.error("Could not run that command", { description: message });
+        throw error;
+      }
+    },
+    [activeId],
+  );
+
+  const runClientComposerAction = useCallback(
+    (action: string) => {
+      if (action === "diff") {
+        setShowChanges(true);
+        setPanelRequest((current) => ({
+          kind: "diff",
+          nonce: (current?.nonce ?? 0) + 1,
+        }));
+        return;
+      }
+      if (action === "status" && state) {
+        const used = state.usage?.contextUsed;
+        const parts = [
+          state.model || "Default model",
+          state.mode || "Default approvals",
+          used !== undefined ? `${used.toLocaleString()} context tokens` : "Token usage unavailable",
+        ];
+        toast.info("Session status", { description: parts.join(" · ") });
+      }
+    },
+    [state],
   );
 
   const cancel = useCallback(() => {
@@ -622,6 +674,7 @@ export function App() {
               )}
 
               <Composer
+                key={activeId}
                 draft={activeId ? (drafts[activeId] ?? "") : ""}
                 onDraftChange={(text) => activeId && setDraft(activeId, text)}
                 disabled={state.closed || workspaceBusy || workspaceFailed}
@@ -636,6 +689,9 @@ export function App() {
                 effort={state.effort}
                 onSwitchModel={switchModel}
                 usage={state.usage}
+                loadComposerItems={loadComposerItems}
+                onRunClientAction={runClientComposerAction}
+                onRunComposerAction={runComposerAction}
               />
             </div>
           </div>

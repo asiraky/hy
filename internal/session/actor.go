@@ -28,9 +28,10 @@ const (
 // Subscriber receives live events for one session. Ch is closed when the
 // subscription ends. Resync is closed if the server dropped the queue.
 type Subscriber struct {
-	ID     string
-	Ch     chan proto.Event
-	Resync chan struct{}
+	ID              string
+	Ch              chan proto.Event
+	Resync          chan struct{}
+	ComposerChanged chan struct{}
 
 	dropped bool
 }
@@ -130,6 +131,8 @@ const (
 	cmdActivate      = "activate"
 	cmdSetMode       = "set_mode"
 	cmdSetModel      = "set_model"
+	cmdListComposer  = "list_composer_items"
+	cmdRunComposer   = "run_composer_action"
 	cmdHarnessEvent  = "harness_event"
 	cmdHarnessExit   = "harness_exit"
 	cmdContinue      = "continue"
@@ -372,9 +375,10 @@ func (a *Actor) State(ctx context.Context) (*projection.State, error) {
 // where an event lands between the read and the subscription.
 func (a *Actor) Subscribe() *Subscriber {
 	sub := &Subscriber{
-		ID:     uuid.NewString(),
-		Ch:     make(chan proto.Event, SubscriberQueue),
-		Resync: make(chan struct{}),
+		ID:              uuid.NewString(),
+		Ch:              make(chan proto.Event, SubscriberQueue),
+		Resync:          make(chan struct{}),
+		ComposerChanged: make(chan struct{}, 1),
 	}
 	a.mu.Lock()
 	a.subs[sub.ID] = sub
@@ -449,6 +453,21 @@ func (a *Actor) SetMode(ctx context.Context, mode string) error {
 func (a *Actor) SetModel(ctx context.Context, model string) error {
 	_, err := a.call(ctx, command{kind: cmdSetModel, model: model})
 	return err
+}
+
+// ComposerItems asks the live adapter what this exact session can invoke.
+func (a *Actor) ComposerItems(ctx context.Context) ([]adapter.ComposerItem, error) {
+	v, err := a.call(ctx, command{kind: cmdListComposer})
+	if err != nil {
+		return nil, err
+	}
+	return v.([]adapter.ComposerItem), nil
+}
+
+// RunComposerAction routes an opaque provider action as a canonical turn. The
+// invocation is presentation only; the adapter still interprets action.
+func (a *Actor) RunComposerAction(ctx context.Context, action, args, invocation string) (any, error) {
+	return a.call(ctx, command{kind: cmdRunComposer, prompt: args, mode: action, model: invocation})
 }
 
 // Cancel interrupts the running turn. It is a command on the inbox, never a
@@ -640,6 +659,60 @@ func (a *Actor) handle(c command) (stop bool) {
 		}
 		a.append(proto.Emit(proto.SessionConfigChanged, proto.SessionConfigChangedPayload{Model: c.model}))
 		c.reply <- cmdResult{}
+
+	case cmdListComposer:
+		if a.state.Closed {
+			c.reply <- cmdResult{value: []adapter.ComposerItem{}}
+			return false
+		}
+		if a.sess == nil {
+			c.reply <- cmdResult{err: ErrNotReady}
+			return false
+		}
+		catalogue, ok := a.sess.(adapter.ComposerCataloguer)
+		if !ok {
+			c.reply <- cmdResult{value: []adapter.ComposerItem{}}
+			return false
+		}
+		listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		items, err := catalogue.ComposerItems(listCtx)
+		cancel()
+		c.reply <- cmdResult{value: items, err: err}
+
+	case cmdRunComposer:
+		if a.state.Closed {
+			c.reply <- cmdResult{err: ErrClosed}
+			return false
+		}
+		if a.turnActive != "" {
+			c.reply <- cmdResult{err: ErrBusy}
+			return false
+		}
+		if a.sess == nil {
+			c.reply <- cmdResult{err: ErrNotReady}
+			return false
+		}
+		runner, ok := a.sess.(adapter.ComposerActionRunner)
+		if !ok {
+			c.reply <- cmdResult{err: errors.New("this harness cannot run composer actions")}
+			return false
+		}
+		turnID := uuid.NewString()
+		a.turnActive = turnID
+		a.append(proto.Emit(proto.TurnStarted, proto.TurnStartedPayload{TurnID: turnID, Prompt: c.model}))
+		actionCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		value, err := runner.RunComposerAction(actionCtx, adapter.ComposerActionInput{
+			TurnID: turnID,
+			Action: c.mode,
+			Args:   c.prompt,
+		})
+		cancel()
+		if err != nil {
+			a.append(proto.Emit(proto.TurnFinished, proto.TurnFinishedPayload{
+				TurnID: turnID, StopReason: proto.StopError, Error: err.Error(),
+			}))
+		}
+		c.reply <- cmdResult{value: value, err: err}
 
 	case cmdPrompt:
 		if a.state.Closed {
@@ -971,6 +1044,17 @@ func (h hostServices) Elicit(ctx context.Context, req adapter.ElicitationRequest
 }
 
 func (h hostServices) Logf(format string, args ...any) { h.a.logf(format, args...) }
+
+func (h hostServices) ComposerCatalogueChanged() {
+	h.a.mu.Lock()
+	defer h.a.mu.Unlock()
+	for _, sub := range h.a.subs {
+		select {
+		case sub.ComposerChanged <- struct{}{}:
+		default: // one invalidation already means "replace the whole catalogue"
+		}
+	}
+}
 
 // ---- attach ----
 
