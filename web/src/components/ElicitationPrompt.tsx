@@ -38,7 +38,7 @@ export function ElicitationPrompt({ request, onResolve }: Props) {
     <form
       onSubmit={submit}
       aria-label="Input requested"
-      className="attention-in border-attention/50 bg-attention-surface/60 shrink-0 border-t-2 px-4 py-3.5 md:px-5"
+      className="attention-in border-attention bg-attention-surface shrink-0 border-t-2 px-4 py-3.5 md:px-5"
     >
       <div className="mx-auto max-w-3xl">
         <p className="mb-3 text-[13px]">{request.prompt || "Input requested"}</p>
