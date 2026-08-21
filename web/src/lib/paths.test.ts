@@ -105,12 +105,22 @@ describe("detectPath", () => {
     expect(detectPath("/code-review")).toBeNull();
     expect(detectPath("/loop")).toBeNull();
     expect(detectPath("/simplify")).toBeNull();
-    // Still a path once there is a directory above the name.
+    // A bare filename at the root is likelier a skill than a file.
+    expect(detectPath("/readme")).toBeNull();
+    expect(detectPath("/license")).toBeNull();
+    // Still a path once there is a directory above the name, an extension, a
+    // trailing slash, a line anchor, or a leading dot.
     expect(detectPath("/usr/bin/dev")).toEqual({
       path: "/usr/bin/dev",
       line: undefined,
     });
     expect(detectPath("/tmp/")).toEqual({ path: "/tmp", line: undefined });
+    expect(detectPath("/main.go")).toEqual({
+      path: "/main.go",
+      line: undefined,
+    });
+    expect(detectPath("/loop:12")).toEqual({ path: "/loop", line: 12 });
+    expect(detectPath("/.env")).toEqual({ path: "/.env", line: undefined });
   });
 
   it("keeps known bare filenames inside a directory", () => {

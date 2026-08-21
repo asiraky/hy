@@ -101,11 +101,15 @@ export function detectPath(raw: string): DetectedPath | null {
   const dot = base.lastIndexOf(".");
   const ext = dot > 0 ? base.slice(dot + 1).toLowerCase() : "";
 
-  // A slash command or skill (`/code-review`, `/loop`): one leading slash, one
-  // segment, no extension and no line anchor. Real absolute paths worth
-  // opening have a directory above the file (`/etc/hosts`, `/Users/...`), so
-  // requiring a second segment costs nothing and stops every `/skill` mention
-  // from rendering as a file chip.
+  // A slash command or skill (`/code-review`, `/loop`, `/init`): one leading
+  // slash, one segment, no extension and no line anchor. Real absolute paths
+  // worth opening have a directory above the file (`/etc/hosts`,
+  // `/Users/...`), so requiring a second segment costs nothing and stops every
+  // `/skill` mention from rendering as a file chip. A dotfile basename
+  // (`/.env`) is exempt — no slash command starts with a dot. A bare filename
+  // is deliberately NOT exempt here: `/readme` is far likelier to be a skill
+  // than a file at the filesystem root.
+  const dotfile = base.startsWith(".") && base.length > 1;
   const bareName =
     BARE_FILES.has(base.toLowerCase()) ||
     BARE_FILES.has(base.toLowerCase().replace(/\.(md|txt|rst)$/, ""));
@@ -115,7 +119,7 @@ export function detectPath(raw: string): DetectedPath | null {
     ext === "" &&
     line === undefined &&
     !trailingSlash &&
-    !bareName
+    !dotfile
   ) {
     return null;
   }
