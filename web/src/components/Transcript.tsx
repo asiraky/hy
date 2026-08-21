@@ -37,6 +37,13 @@ import { buildRows, foldLabel, rowTurnID, summarise } from "~/rows";
 import { useAutoScroll } from "~/useAutoScroll";
 import { useSmoothText } from "~/useSmoothText";
 
+// Room reserved beneath the transcript's tail: the overlay's measured height
+// (`--composer-h`, published by App from a ResizeObserver) plus a headroom band
+// so the last message rests clear of the composer with air above it rather than
+// pinned to its top edge. The 9rem fallback matches the collapsed composer for
+// the first frame, before the measurement lands.
+const TAIL_RESERVE = "calc(var(--composer-h, 9rem) + 6rem)";
+
 // One icon per tool kind the protocol defines. Anything new falls through to
 // the neutral dot rather than rendering nothing.
 const TOOL_ICON: Record<string, ComponentType<{ className?: string }>> = {
@@ -641,12 +648,18 @@ export function Transcript({
       <div
         ref={scrollerRef}
         className="scroll-thin min-h-0 flex-1 overflow-y-auto overscroll-contain"
+        // So a programmatic scrollIntoView lands the target above the floating
+        // composer rather than behind it, matching the padding below.
+        style={{ scrollPaddingBottom: TAIL_RESERVE }}
       >
-        {/* The floating composer overlays the tail, so the content ends with
-            enough room that the last message can scroll clear of it. */}
+        {/* The floating composer overlays the tail, so the content reserves
+            real room below it — its measured height plus headroom — and grows
+            that room as the composer does, so the tail can always scroll clear
+            and rests with breathing space rather than jammed against the input. */}
         <div
           ref={contentRef}
-          className="mx-auto flex max-w-3xl flex-col gap-3.5 px-4 pt-6 pb-36 md:px-5"
+          className="mx-auto flex max-w-3xl flex-col gap-3.5 px-4 pt-6 md:px-5"
+          style={{ paddingBottom: TAIL_RESERVE }}
         >
           <WorkspaceCard
             state={state}
@@ -707,13 +720,16 @@ export function Transcript({
       </div>
 
       {/* Anchored to the scroller rather than to the content, so it sits in
-          the same place wherever the transcript happens to be scrolled. The
-          offset clears the floating composer, matching the room the content
-          above already reserves for it. The wrapper is inert to the pointer:
-          only the button itself may take a click, or a strip of dead space
-          would run across the transcript. */}
+          the same place wherever the transcript happens to be scrolled. It
+          rides just above the composer, tracking its measured height so the two
+          never overlap however tall the composer grows. The wrapper is inert to
+          the pointer: only the button itself may take a click, or a strip of
+          dead space would run across the transcript. */}
       {!pinned && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-36 flex justify-center">
+        <div
+          className="pointer-events-none absolute inset-x-0 flex justify-center"
+          style={{ bottom: "calc(var(--composer-h, 9rem) + 0.75rem)" }}
+        >
           <IconButton
             label="Scroll to bottom"
             variant="outline"

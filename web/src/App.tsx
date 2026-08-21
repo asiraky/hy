@@ -107,6 +107,12 @@ export function App() {
 
   const clientRef = useRef<Client | null>(null);
   const forcePromptedRef = useRef<string | null>(null);
+  // The floating overlay (composer plus any permission/elicitation prompt
+  // stacked above it) and the column it floats over. We measure the first and
+  // publish its height on the second, so the transcript can reserve exactly
+  // that much room beneath its content.
+  const chatLayoutRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     activeRef.current = activeId;
@@ -378,6 +384,35 @@ export function App() {
     if (!isDesktop) setSidebarOpen(true);
   }, [sessions, activeId, isDesktop]);
 
+  // Nothing measures the composer on its own, so a fixed padding could only
+  // ever guess at its height — and it grows (a tall draft, a permission prompt
+  // appearing above it) well past any guess. A ResizeObserver on the whole
+  // overlay keeps `--composer-h` exactly right, and the transcript reserves
+  // `that + headroom` below its tail. Grow the overlay and the content above it
+  // visibly rises: it reads as the composer pushing the transcript up, even
+  // though it is floating.
+  const hasSession = state != null;
+  useEffect(() => {
+    if (!hasSession || typeof ResizeObserver === "undefined") return;
+    const overlay = overlayRef.current;
+    const layout = chatLayoutRef.current;
+    if (!overlay || !layout) return;
+    const apply = () =>
+      layout.style.setProperty(
+        "--composer-h",
+        `${Math.ceil(overlay.getBoundingClientRect().height)}px`,
+      );
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(overlay);
+    return () => {
+      ro.disconnect();
+      layout.style.removeProperty("--composer-h");
+    };
+    // themePreview toggles the whole main tree in and out below, so the
+    // measured elements are remounted under it: re-run to observe the new ones.
+  }, [hasSession, themePreview]);
+
   if (themePreview) return <ThemePreview />;
 
   return (
@@ -469,17 +504,26 @@ export function App() {
         </header>
 
         {state ? (
-          <div className="relative flex min-h-0 flex-1 flex-col">
+          <div ref={chatLayoutRef} className="relative flex min-h-0 flex-1 flex-col">
             {/* Content scrolling up dissolves into the header rather than
                 being cut by a border. */}
             <div className="from-background pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-gradient-to-b to-transparent" />
 
             <Transcript state={state} onContinue={()=>activeId&&clientRef.current?.command("continue_session",{sessionId:activeId})} onRetryProvision={()=>activeId&&clientRef.current?.command("retry_provision",{sessionId:activeId})} onCleanup={()=>activeId&&clientRef.current?.command("cleanup_session",{sessionId:activeId})} onForceDelete={()=>activeId&&forceDelete(activeId)} onOpenDiff={openDiff} />
 
+            {/* The mirror of the header fade: content dissolves into the
+                composer instead of sliding under a hard edge, and it hides the
+                seam where text scrolls past the composer's transparent gutters.
+                It sits just above the overlay, tracking its measured height. */}
+            <div
+              className="from-background pointer-events-none absolute inset-x-0 z-10 h-8 bg-gradient-to-t to-transparent"
+              style={{ bottom: "var(--composer-h, 9rem)" }}
+            />
+
             {/* The input floats over the transcript's tail instead of sitting
                 in a full-width tray. Anything that blocks the turn — a
                 permission or elicitation — stacks above it. */}
-            <div className="absolute inset-x-0 bottom-0 z-10">
+            <div ref={overlayRef} className="absolute inset-x-0 bottom-0 z-10">
               {pending && (
                 <PermissionPrompt
                   request={pending}
