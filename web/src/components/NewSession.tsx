@@ -13,7 +13,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
-import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import {
   Select,
@@ -42,12 +41,20 @@ export interface NewSessionInput {
 }
 
 /**
- * The five scenarios, as five things to click. They were all reachable before
- * — two of them only by knowing that an empty field meant something, or that a
- * dropdown on a "Branch" label also attached — which is not the same as being
- * offered.
+ * The scenarios, as things to click. They were all reachable before — some of
+ * them only by knowing that an empty field meant something, or that a dropdown
+ * on a "Branch" label also attached — which is not the same as being offered.
+ * The scratch case has since folded into "branch": leaving its name blank is
+ * the same as naming nothing at all, so it no longer earns a tile of its own.
  */
-type WorkspaceKind = "main" | "branch" | "scratch" | "attach";
+type WorkspaceKind = "main" | "branch" | "attach";
+
+// The Base dropdown's "use the project default" option. A Radix Select item
+// cannot carry an empty value, so this stands in for the empty baseRef that
+// defers to the project's own base branch. The space makes it an impossible
+// Git branch name, so it can never collide with a real branch listed beside
+// it and be mistaken for the default.
+const BASE_DEFAULT = "project default";
 
 const WORKSPACE_KINDS: { id: WorkspaceKind; label: string; hint: string }[] = [
   { id: "main", label: "Main checkout", hint: "Works in the project directory itself." },
@@ -56,7 +63,6 @@ const WORKSPACE_KINDS: { id: WorkspaceKind; label: string; hint: string }[] = [
     label: "New worktree from issue or branch name",
     hint: "A fresh checkout on a branch you name.",
   },
-  { id: "scratch", label: "New scratch worktree", hint: "No name needed — hy picks one." },
   {
     id: "attach",
     label: "Attach to existing worktree",
@@ -167,19 +173,17 @@ export function NewSession({
   const workspace = kind === "main" ? "local" : kind === "attach" ? "" : "managed";
   const workspacePath = kind === "attach" ? choice.attachPath : "";
   // A base only means anything where hy is the one creating the branch.
-  const sentBase = kind === "branch" || kind === "scratch" ? baseRef.trim() : "";
+  const sentBase = kind === "branch" ? baseRef.trim() : "";
   // Branches already on disk are the useful bases — stacking on another
-  // worktree's work is exactly what this field exists for.
-  const baseSuggestions = Array.from(
-    new Set(
-      [project?.config.defaults.baseBranch, ...workspaces.map((w) => w.branch)].filter(
-        (b): b is string => !!b,
-      ),
-    ),
-  );
-  // A choice that names nothing yet cannot start: "scratch" is the option for
-  // people who do not want to name anything.
-  const canStart = kind === "branch" ? !!branch : kind === "attach" ? !!choice.attachPath : true;
+  // worktree's work is exactly what this field exists for. The project default
+  // is its own always-present option in the dropdown, so it is filtered out
+  // here to avoid listing it twice.
+  const baseChoices = Array.from(
+    new Set(workspaces.map((w) => w.branch).filter((b): b is string => !!b)),
+  ).filter((b) => b !== project?.config.defaults.baseBranch);
+  // "branch" can start with an empty name: that is the scratch case, and hy
+  // makes the name up. Only attach needs a concrete answer before it can go.
+  const canStart = kind === "attach" ? !!choice.attachPath : true;
   const ready =
     status === "online" &&
     !!project &&
@@ -421,29 +425,15 @@ export function NewSession({
                 })}
               </div>
 
-              {kind === "main" && (
-                <div className="pt-1">
-                  {/* The one mode where an agent edits the user's own files, so
-                      it says so plainly rather than leaving it to be
-                      inferred. */}
-                  <p className="text-muted-foreground text-[11px]">
-                    The agent works directly in {project?.root} on its current branch. No worktree
-                    is created and nothing is removed when the session ends.
-                  </p>
-                  {loadingSpaces && (
-                    <p className="text-muted-foreground mt-1.5 text-[11px]">
-                      Checking whether another session is already here…
-                    </p>
-                  )}
-                  {rootBusy && (
-                    // Inline, not a modal and not a browser dialog: it is a
-                    // fact about the choice, and the answer is still yes.
-                    <p className="text-attention-foreground mt-1.5 text-[11px]">
-                      “{root?.busyTitle}” is already on the main checkout — agents may step on each
-                      other.
-                    </p>
-                  )}
-                </div>
+              {/* No descriptive copy here: the tile's own hint already names
+                  the directory. Only the real conflict warning stays — inline,
+                  not a modal, a fact about the choice and the answer is still
+                  yes. */}
+              {kind === "main" && rootBusy && (
+                <p className="text-attention-foreground pt-1 text-[11px]">
+                  “{root?.busyTitle}” is already on the main checkout — agents may step on each
+                  other.
+                </p>
               )}
 
               {kind === "branch" && (
@@ -464,12 +454,6 @@ export function NewSession({
                 </div>
               )}
 
-              {kind === "scratch" && (
-                <p className="text-muted-foreground pt-1 text-[11px]">
-                  hy names the branch and the directory. Nothing to fill in.
-                </p>
-              )}
-
               {kind === "attach" && (
                 <div className="space-y-1.5 pt-1">
                   <Label htmlFor="new-session-attach">Worktree</Label>
@@ -488,34 +472,34 @@ export function NewSession({
                 </div>
               )}
 
-              {(kind === "branch" || kind === "scratch") && (
+              {kind === "branch" && (
                 <div className="space-y-1.5 pt-2">
                   <Label htmlFor="new-session-base">Base</Label>
                   {/* A per-session base is what makes stacking possible: a
                       worktree branched from another branch that has not landed
-                      yet. Free text, because any ref is a legal answer, with
-                      the branches already on disk offered as the likely
-                      ones. */}
-                  <Input
-                    id="new-session-base"
-                    list="new-session-base-options"
-                    value={baseRef}
-                    onChange={(e) => setBaseRef(e.target.value)}
-                    placeholder={project?.config.defaults.baseBranch || "HEAD"}
-                    className="w-full text-[16px] md:text-[13px]"
-                  />
-                  <datalist id="new-session-base-options">
-                    {baseSuggestions.map((b) => (
-                      <option key={b} value={b} />
-                    ))}
-                  </datalist>
-                  <p className="text-muted-foreground text-[11px]">
-                    The new branch starts here. Leave it empty for the project default
-                    {project?.config.defaults.baseBranch
-                      ? ` (${project.config.defaults.baseBranch})`
-                      : ""}
-                    .
-                  </p>
+                      yet. A dropdown of the branches already on disk, with the
+                      project default as the first, always-present option. */}
+                  <Select
+                    value={baseRef || BASE_DEFAULT}
+                    onValueChange={(v) => setBaseRef(v === BASE_DEFAULT ? "" : v)}
+                  >
+                    <SelectTrigger id="new-session-base" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={BASE_DEFAULT}>
+                        Project default
+                        {project?.config.defaults.baseBranch
+                          ? ` (${project.config.defaults.baseBranch})`
+                          : ""}
+                      </SelectItem>
+                      {baseChoices.map((b) => (
+                        <SelectItem key={b} value={b}>
+                          {b}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               )}
             </fieldset>

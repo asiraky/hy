@@ -342,7 +342,7 @@ export function WorkspacePicker({
             : "Pick a worktree from the list."
           : value.branch.trim()
             ? "Creates a new worktree on this branch."
-            : "Type a branch name, or pick “New scratch worktree” above."}
+            : "Leave blank — we'll make one up."}
       </p>
       {mode === "attach" && attached?.busy && (
         <p className="text-attention-foreground mt-1.5 text-[11px]">
