@@ -145,60 +145,58 @@ func (a *Adapter) ListModels(ctx context.Context, env map[string]string) ([]adap
 	}
 }
 
-// mapClaudeModels turns the SDK's rows into hy's, curated for the picker. The
-// SDK packs generation and purpose into one description ("Opus 5 with 1M
-// context · Best for everyday, complex tasks"); splitting on its own separator
-// lets a row show which Opus it is next to what the model is for.
+// mapClaudeModels turns the SDK's rows into hy's, curated for the picker.
 //
-// Three presentation calls are made here, all of them things the harness list
-// does not do itself:
+// The presentation calls made here, none of which the harness list does itself:
 //   - Haiku is dropped — it is a quick-answer model, not a coding one.
-//   - The generic "default" alias is merged into the named row it resolves to
-//     (both point at the same Opus 5), so the picker shows one Opus, marked
-//     recommended, rather than two identical rows.
-//   - Rows are ordered by strength — Fable, then Opus, then Sonnet — and the
-//     curated legacy group is appended, folded away.
+//   - Every alias that resolves to one concrete model collapses into a single
+//     row (the "default" and "opus[1m]" aliases both name Opus 5), labelled by
+//     its generation ("Opus 5", "Fable 5", "Sonnet 5") rather than repeating
+//     the name twice.
+//   - The row's id is the bare concrete model — no "[1m]" tag — so a session
+//     defaults to the 200k window; the 1M variant is chosen separately (the
+//     adapter turns the tag into the context-window env at start). The bare id
+//     is also exactly what the harness reports back, so the running model
+//     resolves to its row instead of a raw label.
+//   - Rows are ordered by strength (Fable, Opus, Sonnet) and the curated legacy
+//     group is appended, folded away.
 func mapClaudeModels(in []modelInfo) []adapter.ModelMeta {
 	if len(in) == 0 {
 		return nil
 	}
 	current := make([]adapter.ModelMeta, 0, len(in))
-	byResolved := map[string]int{}
+	byModel := map[string]int{}
 	for _, m := range in {
 		if m.Value == "" || isHaiku(m) {
 			continue
 		}
+		bare := stripContextTag(m.ResolvedModel)
+		if bare == "" {
+			bare = m.Value
+		}
 		version, description := splitDescription(m.Description)
 		row := adapter.ModelMeta{
-			ID:          m.Value,
-			Label:       m.DisplayName,
-			Version:     version,
+			ID:          bare,
+			Label:       generationLabel(version, m.DisplayName),
 			Description: description,
-			Resolves:    m.ResolvedModel,
+			Resolves:    bare,
 			// The SDK has no isDefault flag; the row it *calls* "default" is
 			// the one Claude Code itself would pick.
 			Default: m.Value == "default",
 			Efforts: m.SupportedEffortLevels,
 		}
-		// Two aliases can name the same concrete model (the recommended
-		// "default" and a "opus[1m]" both resolve to Opus 5). Keep one row:
-		// the named alias for its label, carrying the recommended flag across.
-		// The key drops the "[1m]" context tag so a tagged and a bare form of
-		// the same model still collapse together.
-		if key := stripContextTag(m.ResolvedModel); key != "" {
-			if i, seen := byResolved[key]; seen {
-				kept := current[i]
-				if kept.ID == "default" && row.ID != "default" {
-					row.Default = kept.Default || row.Default
-					current[i] = row
-				} else {
-					kept.Default = kept.Default || row.Default
-					current[i] = kept
-				}
-				continue
+		if i, seen := byModel[bare]; seen {
+			// Same concrete model under another alias: keep one row, preserving
+			// the recommended flag and a real (non-"default") label.
+			kept := current[i]
+			kept.Default = kept.Default || row.Default
+			if kept.Label == "" || strings.EqualFold(kept.Label, "default") {
+				kept.Label = row.Label
 			}
-			byResolved[key] = len(current)
+			current[i] = kept
+			continue
 		}
+		byModel[bare] = len(current)
 		current = append(current, row)
 	}
 	sortByStrength(current)
@@ -207,6 +205,20 @@ func mapClaudeModels(in []modelInfo) []adapter.ModelMeta {
 	out = append(out, current...)
 	out = append(out, legacyModels...)
 	return out
+}
+
+// generationLabel is the clean one-line name for a current model: the
+// generation the harness names in its description ("Opus 5 with 1M context" ->
+// "Opus 5", "Fable 5" -> "Fable 5"), falling back to the display name when the
+// description carries no generation.
+func generationLabel(version, display string) string {
+	if version == "" {
+		return display
+	}
+	if before, _, found := strings.Cut(version, " with "); found {
+		return strings.TrimSpace(before)
+	}
+	return version
 }
 
 // isHaiku spots the quick-answer model by either alias or resolved id, so it is
