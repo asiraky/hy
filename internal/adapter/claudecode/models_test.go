@@ -57,29 +57,19 @@ func TestMapClaudeModelsMarksOneDefault(t *testing.T) {
 	}
 }
 
-func TestMapClaudeModelsAppendsLegacyGroup(t *testing.T) {
+// hy offers only what the harness serves: no hardcoded legacy group is
+// appended, because the installed Claude Code no longer serves those older ids
+// and offering a model it will not run is what let the picker and the context
+// meter disagree.
+func TestMapClaudeModelsOffersOnlyLiveRows(t *testing.T) {
 	got := mapClaudeModels(liveRows())
 
-	if len(got) != len(liveRows())+len(legacyModels) {
-		t.Fatalf("len = %d, want live rows plus the curated legacy list", len(got))
+	if len(got) != len(liveRows()) {
+		t.Fatalf("len = %d, want exactly the live rows", len(got))
 	}
-	for _, want := range legacyModels {
-		m := findModel(t, got, want.ID)
-		if m.Group != adapter.GroupLegacy {
-			t.Errorf("%s group = %q, want legacy", m.ID, m.Group)
-		}
-	}
-	// Live rows are current; only the curated ones are folded away.
-	for _, id := range []string{"default", "haiku"} {
-		if m := findModel(t, got, id); m.Group != "" {
-			t.Errorf("%s group = %q, want current", id, m.Group)
-		}
-	}
-	// The curated entries must not leak the group flag back into the package
-	// variable: mapping twice would otherwise be the only way to notice.
-	for _, m := range legacyModels {
+	for _, m := range got {
 		if m.Group != "" {
-			t.Errorf("legacyModels was mutated: %s carries group %q", m.ID, m.Group)
+			t.Errorf("%s group = %q, want current — nothing is folded away", m.ID, m.Group)
 		}
 	}
 }
@@ -89,8 +79,8 @@ func TestMapClaudeModelsIgnoresEmptyAndUnlisted(t *testing.T) {
 		t.Errorf("no live rows should map to nothing, got %v", got)
 	}
 	got := mapClaudeModels([]modelInfo{{Value: ""}, {Value: "sonnet", DisplayName: "Sonnet", Description: "Sonnet 5"}})
-	if len(got) != 1+len(legacyModels) {
-		t.Fatalf("len = %d, want the one real row plus legacy", len(got))
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want the one real row", len(got))
 	}
 	sonnet := findModel(t, got, "sonnet")
 	// A description with no separator is all version, not half a sentence.

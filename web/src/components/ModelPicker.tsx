@@ -182,7 +182,7 @@ export function ModelPicker({
       {selectedInstance && <ProviderLogo provider={selectedInstance.driver} />}
       <span className="min-w-0 flex-1 truncate text-left text-[13px]">
         {selectedModel?.label ?? "No model"}
-        {selectedModel?.version && (
+        {selectedModel?.version && selectedModel.version !== selectedModel.label && (
           <span className="text-muted-foreground ml-1.5 text-[11px]">{selectedModel.version}</span>
         )}
       </span>
@@ -413,7 +413,7 @@ function ModelRowItem({
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-2">
           <span className="truncate text-[13px]">{model.label}</span>
-          {model.version && (
+          {model.version && model.version !== model.label && (
             <span className="text-muted-foreground ml-auto shrink-0 text-[11px]">
               {model.version}
             </span>
