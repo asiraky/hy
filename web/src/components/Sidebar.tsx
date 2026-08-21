@@ -85,7 +85,12 @@ function SessionList({
         (s) => s.id !== confirming.id && s.phase !== "closed" && s.cwd === confirming.cwd,
       )
     : [];
-  const removable = !!confirming && mode !== "local" && sharers.length === 0;
+  // Only these two modes have a directory hy could remove. A local session is
+  // the user's own checkout, and a session with no project has no lease at all
+  // — offering a checkbox for either would be offering an action the server
+  // will not perform.
+  const hasWorktree = mode === "managed" || mode === "borrowed";
+  const removable = hasWorktree && sharers.length === 0;
 
   if (sessions.length === 0) {
     return (
@@ -206,7 +211,7 @@ function SessionList({
             </DialogDescription>
           </DialogHeader>
 
-          {confirming && mode !== "local" && (
+          {confirming && hasWorktree && (
             <div className="space-y-2 text-[12px]">
               {removable ? (
                 <>
