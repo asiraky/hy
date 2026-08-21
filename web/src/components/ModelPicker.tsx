@@ -1,6 +1,7 @@
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
+import { ContextNote, EffortMenu } from "~/components/EffortMenu";
 import { PROVIDER_LOGOS, ProviderLogo } from "~/components/ProviderLogo";
 import { Button } from "~/components/ui/button";
 import { Collapsible, CollapsibleContent } from "~/components/ui/collapsible";
@@ -22,6 +23,7 @@ import {
   resolveModel,
   type PickerInstance,
 } from "~/lib/models";
+import { formatEffort } from "~/lib/efforts";
 import { rankModels, type ModelRow } from "~/lib/modelSearch";
 import { cn } from "~/lib/utils";
 import { useIsDesktop } from "~/useMediaQuery";
@@ -44,6 +46,12 @@ export interface ModelSelection {
  * Every row says what the model is and what it is for, because the old
  * single-line list could not distinguish two Opuses — or say what "Default"
  * resolved to.
+ *
+ * Reasoning effort joins it on the same terms. It is a second axis, not a
+ * second control: passing the effort props adds a row at the foot of this menu
+ * that opens the levels as a submenu, and the trigger then names the model and
+ * the level together. A composer that had two dropdowns elbowing the send
+ * button has one.
  */
 export function ModelPicker({
   harnesses,
@@ -51,6 +59,11 @@ export function ModelPicker({
   onChange,
   lockInstance = false,
   disabled = false,
+  efforts = [],
+  effort = "",
+  projectDefaultEffort = "",
+  contextLabel = "",
+  onEffortChange,
   id,
   className,
   open: controlledOpen,
@@ -65,6 +78,19 @@ export function ModelPicker({
    */
   lockInstance?: boolean;
   disabled?: boolean;
+  /**
+   * The running model's reasoning levels, most modest first. Empty — a legacy
+   * model that accepts none, or a caller with no business offering them — and
+   * the effort row simply does not appear.
+   */
+  efforts?: string[];
+  /** The active effort, or "" for no level named. */
+  effort?: string;
+  /** The project's default level, badged in the effort list as such. */
+  projectDefaultEffort?: string;
+  /** The running model's context window, already formatted ("1M"), or "". */
+  contextLabel?: string;
+  onEffortChange?: (effort: string) => void;
   id?: string;
   className?: string;
   /** Optional controlled state, used by composer actions such as /model. */
@@ -106,6 +132,8 @@ export function ModelPicker({
     const pool = lockInstance && shown ? [shown] : instances;
     return rankModels(rowsOf(pool), search);
   }, [searching, search, instances, lockInstance, shown]);
+
+  const showEffort = efforts.length > 0 && !!onEffortChange;
 
   const choose = (instance: PickerInstance, model: ModelMeta) => {
     setOpen(false);
@@ -163,6 +191,24 @@ export function ModelPicker({
           )}
         </CommandList>
       </div>
+      {(showEffort || contextLabel) && (
+        <div className="border-t">
+          {showEffort && (
+            <div className="p-1">
+              <EffortMenu
+                efforts={efforts}
+                value={effort}
+                projectDefault={projectDefaultEffort}
+                onChange={(next) => {
+                  setOpen(false);
+                  onEffortChange?.(next);
+                }}
+              />
+            </div>
+          )}
+          {contextLabel && <ContextNote label={contextLabel} />}
+        </div>
+      )}
     </Command>
   );
 
@@ -182,10 +228,21 @@ export function ModelPicker({
       {selectedInstance && <ProviderLogo provider={selectedInstance.driver} />}
       <span className="min-w-0 flex-1 truncate text-left text-[13px]">
         {selectedModel?.label ?? "No model"}
-        {selectedModel?.version && selectedModel.version !== selectedModel.label && (
+        {/* The generation and the effort compete for one line, and only one of
+            them is a knob: when effort is on show, the generation stays in the
+            list, where the row that names it also explains it. */}
+        {!showEffort && selectedModel?.version && selectedModel.version !== selectedModel.label && (
           <span className="text-muted-foreground ml-1.5 text-[11px]">{selectedModel.version}</span>
         )}
       </span>
+      {showEffort && (
+        <span className="text-muted-foreground shrink-0 text-[12px]">
+          <span aria-hidden className="mr-1.5 opacity-60">
+            ·
+          </span>
+          {formatEffort(effort)}
+        </span>
+      )}
       <ChevronDownIcon className="text-muted-foreground size-4 shrink-0" />
     </Button>
   );
