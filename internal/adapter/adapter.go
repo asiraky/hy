@@ -126,9 +126,6 @@ type PermissionModeMeta struct {
 	ID          string `json:"id"`
 	Label       string `json:"label"`
 	Description string `json:"description,omitempty"`
-	// Danger marks a mode a UI should render with a warning treatment and
-	// confirm before entering.
-	Danger bool `json:"danger,omitempty"`
 	// Default marks the mode selected when the user has expressed no
 	// preference. It matches what an empty CreateOptions.Mode does.
 	Default bool `json:"default,omitempty"`

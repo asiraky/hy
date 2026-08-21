@@ -75,7 +75,7 @@ func (a *Adapter) PermissionModes() []adapter.PermissionModeMeta {
 		{ID: "acceptEdits", Label: "Accept edits", Description: "Auto-accept file edits; still ask for commands"},
 		{ID: "auto", Label: "Auto", Description: "A classifier approves routine actions; ask on risk"},
 		{ID: "dontAsk", Label: "Pre-approved only", Description: "Never prompt; deny anything not already allowed"},
-		{ID: "bypassPermissions", Label: "Bypass", Description: "Skip all permission checks", Danger: true},
+		{ID: "bypassPermissions", Label: "Bypass", Description: "Skip all permission checks"},
 	}
 }
 
@@ -195,8 +195,9 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 		// Always allowed as an *option* (the CLI's
 		// --allow-dangerously-skip-permissions semantics), never enabled by it:
 		// the SDK rejects bypassPermissions — at start or via a mid-session
-		// setPermissionMode — unless this was set at launch. hy's own gate is
-		// the confirmation the UI requires before any danger mode.
+		// setPermissionMode — unless this was set at launch. Bypass is a mode
+		// like any other here: picking it is the whole decision, so hy adds no
+		// gate of its own on top of the SDK's own refusals.
 		AllowDangerouslySkipPermissions: true,
 		Effort:                          o.Effort,
 		ClaudePath:                      r.claudePath,

@@ -192,15 +192,6 @@ export function NewSession({
 
   const create = async () => {
     if (!project) return;
-    // A danger mode needs a deliberate second step before anything starts.
-    if (
-      modeMeta?.danger &&
-      !window.confirm(
-        `Start this session in "${modeMeta.label}"?\n\n${modeMeta.description ?? ""}\n\nThe agent will act without asking you first.`,
-      )
-    ) {
-      return;
-    }
     setBusy(true);
     setError(null);
     try {
@@ -372,8 +363,8 @@ export function NewSession({
               <div className="space-y-1.5">
                 <Label htmlFor="new-session-mode">Permissions</Label>
                 {/* Modes all render alike: the description below says what each
-                    one does, and the confirm on create is where a danger mode
-                    earns its extra step. Colouring the control adds nothing. */}
+                    one does. Picking one here is the whole decision — no mode
+                    earns a badge, a colour, or a second opt-in. */}
                 <Select value={displayModeId} onValueChange={setChosenMode}>
                   <SelectTrigger id="new-session-mode" className="w-full">
                     <SelectValue />

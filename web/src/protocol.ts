@@ -312,8 +312,6 @@ export interface PermissionModeMeta {
   id: string;
   label: string;
   description?: string;
-  /** Render with a warning treatment and confirm before entering. */
-  danger?: boolean;
   /** Selected when the user has expressed no preference. */
   default?: boolean;
 }
