@@ -174,19 +174,32 @@ type sidecarConfig struct {
 	ClaudePath string `json:"claudePath,omitempty"`
 }
 
+// conversationID resolves which Claude conversation a CreateSession call names
+// or resumes. hy names the conversation at start — the same id starts a
+// session and later resumes it, so a server restart continues the conversation
+// rather than starting blank. But the name is not immutable: Claude Code
+// rotates its conversation id in place (/clear starts a new conversation under
+// a new id inside the same process), and the rotated id — reported back
+// through session.config_changed and replayed into the projection — is the
+// conversation this session actually is now. Resuming the original id after a
+// rotation would resurrect a cleared conversation and strand the live one.
+func conversationID(o adapter.CreateOptions) string {
+	if o.Resume && o.HarnessSessionID != "" {
+		return o.HarnessSessionID
+	}
+	if o.SessionID != "" {
+		return o.SessionID
+	}
+	return uuid.NewString()
+}
+
 func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, o adapter.CreateOptions) (adapter.Session, error) {
 	r, avail := a.resolve(ctx)
 	if !avail.OK() {
 		return nil, fmt.Errorf("claude is unavailable: %s", avail.Reason)
 	}
 
-	// We own session identity: the same id starts a session and later resumes
-	// it, so a server restart continues the conversation rather than starting
-	// blank.
-	sessionID := o.SessionID
-	if sessionID == "" {
-		sessionID = uuid.NewString()
-	}
+	sessionID := conversationID(o)
 
 	cfg := sidecarConfig{
 		Cwd:            o.Cwd,
@@ -202,9 +215,7 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 		Effort:                          o.Effort,
 		ClaudePath:                      r.claudePath,
 	}
-	// We own session identity: the same id names the conversation on create
-	// and resumes it later, so a server restart continues rather than starting
-	// blank. The SDK rejects both fields together.
+	// One field or the other, never both — the SDK rejects the pair.
 	if o.Resume {
 		cfg.Resume = sessionID
 	} else {
@@ -661,6 +672,7 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 // handleSDKMessage maps one Agent SDK message onto canonical events. This is
 // the only mapping in the system, and it is the reason the sidecar stays dumb.
 func (s *session) handleSDKMessage(msg map[string]json.RawMessage) {
+	s.trackSessionID(msg)
 	switch str(msg["type"]) {
 	case "system":
 		s.handleSystem(msg)
@@ -674,6 +686,39 @@ func (s *session) handleSDKMessage(msg map[string]json.RawMessage) {
 		s.handleResult(msg)
 	case "context_usage":
 		s.handleContextUsage(msg)
+	}
+}
+
+// trackSessionID follows the harness's own conversation id, which hy names at
+// start but does not control afterwards: Claude Code rotates it in place when
+// the user runs /clear, silently starting a new conversation under a new id in
+// the same process. Every SDK message carries the id of the conversation it
+// belongs to, so a rotation shows up on the first message after it. It is
+// re-emitted as session.config_changed, which the projection folds into
+// HarnessSessionID — the id the next resume passes back. Missing this is how a
+// /clear'd session used to resurrect its cleared conversation after a server
+// restart, answering from history the user had discarded and knowing nothing
+// of the turns since the clear.
+func (s *session) trackSessionID(msg map[string]json.RawMessage) {
+	// Subagent traffic carries the parent Task's id, not the conversation's
+	// identity; only top-level messages speak for the session.
+	if str(msg["parent_tool_use_id"]) != "" {
+		return
+	}
+	id := str(msg["session_id"])
+	if id == "" {
+		return
+	}
+	s.mu.Lock()
+	changed := id != s.harnessSessionID
+	if changed {
+		s.harnessSessionID = id
+	}
+	s.mu.Unlock()
+	if changed {
+		s.emit(proto.Emit(proto.SessionConfigChanged, proto.SessionConfigChangedPayload{
+			HarnessSessionID: id,
+		}))
 	}
 }
 
@@ -705,9 +750,10 @@ func (s *session) handleSystem(msg map[string]json.RawMessage) {
 		remarshal(msg, &init)
 		s.mu.Lock()
 		s.model = init.Model
+		harnessID := s.harnessSessionID
 		s.mu.Unlock()
 		s.emit(proto.Emit(proto.SessionConfigChanged, proto.SessionConfigChangedPayload{
-			Model: init.Model, Mode: init.PermissionMode, HarnessSessionID: s.harnessSessionID,
+			Model: init.Model, Mode: init.PermissionMode, HarnessSessionID: harnessID,
 		}))
 	case "compact_boundary":
 		var b struct {

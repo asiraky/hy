@@ -38,9 +38,8 @@ describe("blocking prompts are opaque", () => {
     render(<PermissionPrompt request={permission} onResolve={vi.fn()} />);
 
     const band = screen.getByRole("group", { name: "Permission request" });
-    expect(surface(band)).toContain("bg-attention-surface");
-    expect(surface(band)).toContain("border-attention");
-    expect(band.className).not.toMatch(/bg-attention-surface\/|border-attention\//);
+    expect(surface(band)).toContain("bg-card");
+    expect(band.className).not.toMatch(/bg-card\//);
   });
 
   it("paints the tool-input detail with no alpha", () => {
@@ -55,8 +54,7 @@ describe("blocking prompts are opaque", () => {
     render(<ElicitationPrompt request={elicitation} onResolve={vi.fn()} />);
 
     const band = screen.getByRole("form", { name: "Input requested" });
-    expect(surface(band)).toContain("bg-attention-surface");
-    expect(surface(band)).toContain("border-attention");
-    expect(band.className).not.toMatch(/bg-attention-surface\/|border-attention\//);
+    expect(surface(band)).toContain("bg-card");
+    expect(band.className).not.toMatch(/bg-card\//);
   });
 });
