@@ -159,10 +159,7 @@ export function NewSession({
   const displayModeId = mode || (modes.find((m) => m.default)?.id ?? modes[0]?.id ?? "");
   const modeMeta = modes.find((m) => m.id === displayModeId);
   // The project root is its own choice in the list, so listing it again inside
-  // the attach picker would be a second door to the same room. Its busy flag
-  // still matters — it is what the warning under the choice is made of.
-  const root = workspaces.find((w) => w.isRoot);
-  const rootBusy = !!root?.busy;
+  // the attach picker would be a second door to the same room.
   const attachable = workspaces.filter((w) => !w.isRoot);
   const kind: WorkspaceKind =
     chosenKind || (project?.config.defaults.workspace === "managed" ? "branch" : "main");
@@ -426,15 +423,7 @@ export function NewSession({
               </div>
 
               {/* No descriptive copy here: the tile's own hint already names
-                  the directory. Only the real conflict warning stays — inline,
-                  not a modal, a fact about the choice and the answer is still
-                  yes. */}
-              {kind === "main" && rootBusy && (
-                <p className="text-attention-foreground pt-1 text-[11px]">
-                  “{root?.busyTitle}” is already on the main checkout — agents may step on each
-                  other.
-                </p>
-              )}
+                  the directory. */}
 
               {kind === "branch" && (
                 <div className="space-y-1.5 pt-1">

@@ -344,11 +344,6 @@ export function WorkspacePicker({
             ? "Creates a new worktree on this branch."
             : "Leave blank — we'll make one up."}
       </p>
-      {mode === "attach" && attached?.busy && (
-        <p className="text-attention-foreground mt-1.5 text-[11px]">
-          “{attached.busyTitle}” is already in this worktree — agents may step on each other.
-        </p>
-      )}
     </div>
   );
 }
