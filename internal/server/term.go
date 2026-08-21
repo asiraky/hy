@@ -10,6 +10,8 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/creack/pty"
+
+	"github.com/asiraky/hy/internal/auth"
 )
 
 // The terminal surface: one WebSocket per open terminal tab, carrying a pty
@@ -44,6 +46,11 @@ func (s *Server) serveTerm(w http.ResponseWriter, r *http.Request) {
 	opts := &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled}
 	if s.allowAny {
 		opts.InsecureSkipVerify = true
+	}
+	// A browser refuses the connection unless the server selects one of the
+	// subprotocols it offered — same as /ws.
+	if proto, ok := auth.TokenSubprotocol(r); ok {
+		opts.Subprotocols = []string{proto}
 	}
 	ws, err := websocket.Accept(w, r, opts)
 	if err != nil {
