@@ -55,8 +55,10 @@ export function detectPath(raw: string): DetectedPath | null {
   // Flag-looking spans (`--no-color`) and lone dotfiles of punctuation.
   if (text.startsWith("-")) return null;
 
-  // A single trailing slash (`web/`) is a directory reference — allowed.
-  if (text.endsWith("/")) text = text.slice(0, -1);
+  // A single trailing slash (`web/`, `web/src/`) is an explicit directory
+  // reference — a strong path signal even without an extension.
+  const trailingSlash = text.endsWith("/");
+  if (trailingSlash) text = text.slice(0, -1);
   if (text === "") return null;
   const hasSlash = text.includes("/");
   const base = hasSlash ? text.slice(text.lastIndexOf("/") + 1) : text;
@@ -73,6 +75,18 @@ export function detectPath(raw: string): DetectedPath | null {
     // All-numeric segments are a date or a fraction (`1/2/2024`), not a path.
     const segments = text.split("/").filter(Boolean);
     if (segments.every((s) => /^\d+$/.test(s))) return null;
+    // A slash alone is too weak: `system/init`, `turn/interrupt` and `a/b`
+    // alternatives (`rawMaxTokens/maxTokens`) are protocol/method names, not
+    // files. Admit only with a corroborating signal — a plausible file
+    // extension on some segment, a `:line` anchor, or an explicit trailing
+    // slash marking a directory (`web/src/`).
+    const hasExt = segments.some((s) => {
+      const d = s.lastIndexOf(".");
+      if (d <= 0) return false;
+      const e = s.slice(d + 1).toLowerCase();
+      return /^[a-z0-9]{1,10}$/.test(e) && !/^\d+$/.test(e);
+    });
+    if (!hasExt && line === undefined && !trailingSlash) return null;
     return { path: text, line };
   }
   if (BARE_FILES.has(base.toLowerCase()) || BARE_FILES.has(base.toLowerCase().replace(/\.(md|txt|rst)$/, ""))) {
