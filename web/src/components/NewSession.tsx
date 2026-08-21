@@ -106,6 +106,10 @@ export function NewSession({
   // under, so there is nothing to keep in step.
   const [chosen, setChosen] = useState<ModelSelection | null>(null);
   const [chosenMode, setChosenMode] = useState("");
+  // The 1M context window is a start-time choice (the harness fixes it when the
+  // process boots), so it belongs here rather than in the running session.
+  // Off by default: 1M is expensive and rarely needed.
+  const [want1m, setWant1m] = useState(false);
   const [choice, setChoice] = useState<WorkspaceChoice>({ branch: "", attachPath: "" });
   // "" defers to the project default; picking one pins it for this session
   // only.
@@ -145,6 +149,11 @@ export function NewSession({
     instance: instance?.id ?? "",
     model,
   };
+  // Only Opus 5 offers the 1M window here, and only Claude Code takes the
+  // "[1m]" tag. When 1M is wanted, that tag on the model id is what the adapter
+  // turns into the context-window setting at start.
+  const supports1m = harnessId === "claude" && model.includes("opus");
+  const effectiveModel = supports1m && want1m ? `${model}[1m]` : model;
   // Modes are the selected harness's own presets, repopulated when the harness
   // changes — the same shape as the model picker. Only an expressed preference
   // (picked here, or a project default) is sent; otherwise the mode stays ""
@@ -200,7 +209,7 @@ export function NewSession({
         projectId: project.id,
         harness: harnessId,
         instance: instance?.id ?? "",
-        model,
+        model: effectiveModel,
         mode,
         branch,
         workspace,
@@ -346,6 +355,36 @@ export function NewSession({
                 value={selection}
                 onChange={setChosen}
               />
+              {supports1m && (
+                <div className="flex items-center gap-1 pt-1">
+                  <span className="text-muted-foreground mr-1 text-[12px]">Context</span>
+                  <div className="bg-muted inline-flex rounded-md p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setWant1m(false)}
+                      className={cn(
+                        "rounded px-2 py-1 text-[12px] transition-colors",
+                        !want1m ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      200k
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setWant1m(true)}
+                      className={cn(
+                        "rounded px-2 py-1 text-[12px] transition-colors",
+                        want1m ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      1M
+                    </button>
+                  </div>
+                  <span className="text-muted-foreground ml-1 text-[11px]">
+                    {want1m ? "Larger window, higher cost" : "Standard window"}
+                  </span>
+                </div>
+              )}
             </div>
 
             {instance && instance.availability?.state !== "ready" && (
