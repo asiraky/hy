@@ -228,7 +228,7 @@ export interface Workspace {
   /** Short commit, for a detached worktree that has no branch. */
   head?: string;
   isRoot?: boolean;
-  /** A live session already holds this checkout, so it is shown but not selectable. */
+  /** A live session already holds this checkout. Selectable anyway; the picker warns. */
   busy?: boolean;
   busySessionId?: string;
   busyTitle?: string;

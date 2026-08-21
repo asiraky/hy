@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Client, wsURL, type ConnectionStatus } from "./client";
 import { useIsDesktop } from "./useMediaQuery";
-import type { Access, FileDiff, HarnessMeta, Project, ProjectConfig, SessionChanges, SessionMeta, SessionState, UserConfig } from "./protocol";
+import type { Access, FileDiff, HarnessMeta, Project, ProjectConfig, SessionChanges, SessionMeta, SessionState, UserConfig, Workspace } from "./protocol";
 import { AccessPanel } from "./components/Access";
 import { Changes } from "./components/Changes";
 import { Composer } from "./components/Composer";
@@ -199,7 +199,13 @@ export function App() {
 
   const listWorkspaces = useCallback(async (projectId: string) => {
     const res = await clientRef.current!.command("list_workspaces", { projectId });
-    return { workspaces: res.workspaces ?? [], issues: res.issues ?? [], issuesError: res.issuesError ?? "" };
+    return (res.workspaces ?? []) as Workspace[];
+  }, []);
+  // Its own request: `gh` can take seconds, and nothing that shapes a choice
+  // should be waiting behind it.
+  const listIssues = useCallback(async (projectId: string) => {
+    const res = await clientRef.current!.command("list_issues", { projectId });
+    return { issues: res.issues ?? [], issuesError: res.issuesError ?? "" };
   }, []);
   const saveUserConfig = useCallback(async (cfg: UserConfig) => { const res=await clientRef.current!.command("save_user_config",{config:cfg}); setUserConfig(res.userConfig); },[]);
 
@@ -264,9 +270,9 @@ export function App() {
   );
 
   const remove = useCallback(
-    (id: string) => {
+    (id: string, removeWorktree: boolean) => {
       if (id !== activeRef.current) select(id);
-      clientRef.current?.command("delete_session", { sessionId: id }).catch((e) => {
+      clientRef.current?.command("delete_session", { sessionId: id, removeWorktree }).catch((e) => {
         toast.error("Could not delete that session", { description: e.message });
       });
     },
@@ -274,10 +280,18 @@ export function App() {
   );
 
   const forceDelete = useCallback((id: string) => {
-    const accepted = window.confirm("Tear down failed. Would you like to force delete?\n\nThis skips the teardown script, removes the recorded Git worktree, and permanently deletes the session.");
+    // Only a worktree hy provisioned is hy's to destroy, so only that case may
+    // promise it. The old copy promised it to every session and kept the
+    // promise for one of them.
+    const removes = sessions.find((s) => s.id === id)?.workspaceMode === "managed";
+    const accepted = window.confirm(
+      removes
+        ? "Tear down failed. Would you like to force delete?\n\nThis skips the teardown script, removes the recorded Git worktree, and permanently deletes the session."
+        : "Tear down failed. Would you like to force delete?\n\nThis skips the teardown script and permanently deletes the session. The checkout is left on disk — hy did not create it.",
+    );
     if (!accepted) return;
     clientRef.current?.command("force_delete_session", { sessionId: id }).catch((e) => toast.error("Force delete failed", { description: e.message }));
-  }, []);
+  }, [sessions]);
 
   // Ask the server to re-probe, for when the user has just installed something.
   const recheck = useCallback(() => {
@@ -388,6 +402,7 @@ export function App() {
         onShowAccess={() => setShowAccess(true)}
         accentOf={accentOf}
         projectName={(id)=>projects.find(p=>p.id===id)?.config.name}
+        projectRoot={(id)=>projects.find(p=>p.id===id)?.root}
       />
 
       <main
@@ -552,6 +567,7 @@ export function App() {
           userConfig={userConfig}
           onCreate={create}
           onListWorkspaces={listWorkspaces}
+          onListIssues={listIssues}
           onAddProject={()=>setProjectSettings("add")}
           onSettings={setProjectSettings}
           onRecheck={recheck}
