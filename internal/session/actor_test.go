@@ -77,7 +77,10 @@ func (f *fakeAdapter) Probe(ctx context.Context, env map[string]string) adapter.
 }
 
 func (f *fakeAdapter) CreateSession(ctx context.Context, host adapter.HostServices, o adapter.CreateOptions) (adapter.Session, error) {
-	s := &fakeSession{host: host, events: make(chan proto.Emission, 4096), prompts: make(chan adapter.PromptInput, 16)}
+	s := &fakeSession{
+		host: host, events: make(chan proto.Emission, 4096),
+		prompts: make(chan adapter.PromptInput, 16), actions: make(chan adapter.ComposerActionInput, 16),
+	}
 	f.mu.Lock()
 	f.last = s
 	f.mu.Unlock()
@@ -94,6 +97,7 @@ type fakeSession struct {
 	host         adapter.HostServices
 	events       chan proto.Emission
 	prompts      chan adapter.PromptInput
+	actions      chan adapter.ComposerActionInput
 	closeOnce    sync.Once
 	closeStarted chan struct{}
 	closeRelease <-chan struct{}
@@ -107,6 +111,10 @@ func (s *fakeSession) Prompt(ctx context.Context, in adapter.PromptInput) error 
 	return nil
 }
 func (s *fakeSession) Cancel(ctx context.Context) error { return nil }
+func (s *fakeSession) RunComposerAction(ctx context.Context, in adapter.ComposerActionInput) (any, error) {
+	s.actions <- in
+	return map[string]any{}, nil
+}
 func (s *fakeSession) SetMode(ctx context.Context, mode string) error {
 	if mode == "rejected" {
 		return errors.New("the harness refused this mode")
@@ -154,6 +162,35 @@ func newTestActor(t *testing.T) (*Actor, *fakeAdapter, *store.Store) {
 
 	waitFor(t, func() bool { return actor.Head() >= 1 }) // session.created landed
 	return actor, fa, st
+}
+
+func TestComposerActionReservesTheTurnBeforeCallingHarness(t *testing.T) {
+	actor, fa, _ := newTestActor(t)
+	ctx := context.Background()
+
+	if _, err := actor.RunComposerAction(ctx, "review", "focus on races", "/review focus on races"); err != nil {
+		t.Fatal(err)
+	}
+	in := <-fa.session().actions
+	if in.Action != "review" || in.Args != "focus on races" || in.TurnID == "" {
+		t.Fatalf("action input = %+v", in)
+	}
+	state, err := actor.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Phase != "turn" || len(state.Turns) == 0 || state.Turns[len(state.Turns)-1].Prompt != "/review focus on races" {
+		t.Fatalf("action did not become a canonical turn: %+v", state)
+	}
+	if _, err := actor.Prompt(ctx, "must wait"); !errors.Is(err, ErrBusy) {
+		t.Fatalf("concurrent prompt error = %v, want ErrBusy", err)
+	}
+
+	fa.session().emit(proto.Emit(proto.TurnFinished, proto.TurnFinishedPayload{TurnID: in.TurnID, StopReason: proto.StopEndTurn}))
+	waitFor(t, func() bool {
+		next, _ := actor.State(ctx)
+		return next.Phase == "idle"
+	})
 }
 
 // TestSetModeSwitchesHarnessAndRecordsEvent covers the mid-session switch: the

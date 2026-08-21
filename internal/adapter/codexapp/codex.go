@@ -163,6 +163,7 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 	s := &session{
 		host:     host,
 		cmd:      cmd,
+		cwd:      o.Cwd,
 		events:   make(chan proto.Emission, 256),
 		streamed: map[string]bool{},
 		done:     make(chan struct{}),
@@ -240,6 +241,7 @@ type session struct {
 	host adapter.HostServices
 	cmd  *exec.Cmd
 	conn *jsonrpc.Conn
+	cwd  string
 
 	threadID string
 	effort   string
@@ -252,6 +254,10 @@ type session struct {
 	mu       sync.Mutex
 	turnID   string
 	streamed map[string]bool // item ids that arrived as deltas
+	// Set while a /compact RPC is awaiting its contextCompaction item, so the
+	// canonical notice can distinguish a human request from auto-compaction.
+	manualCompact  bool
+	lastCompaction string
 }
 
 func (s *session) Events() <-chan proto.Emission { return s.events }
@@ -550,6 +556,18 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 	turn := s.currentTurn()
 
 	switch method {
+	case "skills/changed":
+		if host, ok := s.host.(adapter.ComposerCatalogueInvalidator); ok {
+			host.ComposerCatalogueChanged()
+		}
+
+	case "thread/compacted":
+		var p struct {
+			TurnID string `json:"turnId"`
+		}
+		_ = json.Unmarshal(params, &p)
+		s.emitContextCompacted(p.TurnID)
+
 	case "item/started", "item/completed":
 		s.handleItem(method == "item/completed", turn, params)
 
@@ -713,6 +731,12 @@ func (s *session) handleItem(completed bool, turn string, params json.RawMessage
 	}
 
 	switch it.Type {
+	case "contextCompaction":
+		if !completed {
+			return
+		}
+		s.emitContextCompacted(p.TurnID)
+
 	case "userMessage":
 		// Already in the log via turn.started.
 
@@ -805,6 +829,25 @@ func (s *session) handleItem(completed bool, turn string, params json.RawMessage
 			ToolCallID: it.ID, Status: proto.StatusCompleted,
 		}))
 	}
+}
+
+// New app-servers emit a contextCompaction item; older ones emit the
+// thread/compacted notification, and transitional versions may emit both.
+func (s *session) emitContextCompacted(turnID string) {
+	s.mu.Lock()
+	if turnID != "" && turnID == s.lastCompaction {
+		s.mu.Unlock()
+		return
+	}
+	manual := s.manualCompact
+	s.manualCompact = false
+	s.lastCompaction = turnID
+	s.mu.Unlock()
+	trigger := "auto"
+	if manual {
+		trigger = "manual"
+	}
+	s.emit(proto.Emit(proto.ContextCompacted, proto.ContextCompactedPayload{Trigger: trigger}))
 }
 
 func (s *session) handlePlan(params json.RawMessage) {

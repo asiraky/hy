@@ -20,6 +20,7 @@ export interface ClientEvents {
   onStatus(status: ConnectionStatus): void;
   onSessions(sessions: SessionMeta[]): void;
   onHarnesses(harnesses: HarnessMeta[], defaultCwd: string): void;
+  onComposerItemsChanged(sessionId: string): void;
   onProjects(projects: Project[]): void;
   onState(sessionId: string, state: SessionState): void;
   onAccess(access: Access): void;
@@ -151,6 +152,10 @@ export class Client {
       // this the picker would show the fallback list until a reconnect.
       case "harnesses":
         this.events.onHarnesses(f.harnesses ?? [], f.cwd ?? "");
+        break;
+
+      case "composer_items_changed":
+        if (f.sessionId === this.sessionId) this.events.onComposerItemsChanged(f.sessionId);
         break;
 
       case "snapshot":
