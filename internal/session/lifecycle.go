@@ -379,6 +379,15 @@ func (m *Manager) cleanup(meta store.SessionMeta, p project.Project, a *Actor, p
 	// script; running that script would be running a worktree-teardown hook
 	// over the directory the user works in.
 	var err error
+	// The caller checked this before starting; teardown runs outside its lock,
+	// so it is checked again here, as late as it can be. A session that moved
+	// in while this one was shutting down keeps its files.
+	if removeWorktree && meta.WorkspaceMode != "local" {
+		if holder, shared := m.otherSessionIn(ctx, meta.ID, meta.Cwd); shared {
+			m.logf("keeping %s: %q is still there", meta.Cwd, holder)
+			removeWorktree = false
+		}
+	}
 	if removeWorktree && meta.WorkspaceMode != "local" {
 		if meta.DeprovisionScript != "" {
 			err = m.runDeprovisionHook(ctx, meta, p, a)

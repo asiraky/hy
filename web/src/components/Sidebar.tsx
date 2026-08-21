@@ -55,6 +55,8 @@ interface SidebarProps {
   // Supplied by the server via the adapter; the sidebar knows no harness names.
   accentOf: (harness: string) => string | undefined;
   projectName: (id?: string) => string | undefined;
+  /** The project's own checkout, which is never a worktree hy may remove. */
+  projectRoot: (id?: string) => string | undefined;
 }
 
 function SessionList({
@@ -64,7 +66,11 @@ function SessionList({
   onDelete,
   accentOf,
   projectName,
-}: Pick<SidebarProps, "sessions" | "activeId" | "onSelect" | "onDelete" | "accentOf" | "projectName">) {
+  projectRoot,
+}: Pick<
+  SidebarProps,
+  "sessions" | "activeId" | "onSelect" | "onDelete" | "accentOf" | "projectName" | "projectRoot"
+>) {
   // Deleting a session can take a checkout on disk with it, so a stray click
   // on the X must not be enough on its own — the row's X only opens this
   // confirmation, and the checkout only goes if it is asked for there.
@@ -79,17 +85,21 @@ function SessionList({
 
   const mode = confirming?.workspaceMode ?? "";
   // "The last session hy knows of" is a question the sidebar can already
-  // answer: it holds every session's cwd.
+  // answer: it holds every session's cwd. A closed session counts — it still
+  // names that path, and hy still knows of it.
   const sharers = confirming
-    ? sessions.filter(
-        (s) => s.id !== confirming.id && s.phase !== "closed" && s.cwd === confirming.cwd,
-      )
+    ? sessions.filter((s) => s.id !== confirming.id && s.cwd === confirming.cwd)
     : [];
   // Only these two modes have a directory hy could remove. A local session is
   // the user's own checkout, and a session with no project has no lease at all
   // — offering a checkbox for either would be offering an action the server
-  // will not perform.
-  const hasWorktree = mode === "managed" || mode === "borrowed";
+  // will not perform. Nor does a managed session whose provisioning failed
+  // before it got a directory: its cwd is still the project root, and the
+  // server refuses to remove that whatever the dialog asked for.
+  const hasWorktree =
+    (mode === "managed" || mode === "borrowed") &&
+    !!confirming?.cwd &&
+    confirming.cwd !== projectRoot(confirming.projectId);
   const removable = hasWorktree && sharers.length === 0;
 
   if (sessions.length === 0) {

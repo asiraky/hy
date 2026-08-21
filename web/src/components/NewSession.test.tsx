@@ -32,7 +32,8 @@ function open(over: Partial<React.ComponentProps<typeof NewSession>> = {}) {
       userConfig={null}
       status="online"
       onCreate={vi.fn()}
-      onListWorkspaces={vi.fn(async () => ({ workspaces: [], issues: [], issuesError: "" }))}
+      onListWorkspaces={vi.fn(async () => [] as Workspace[])}
+      onListIssues={vi.fn(async () => ({ issues: [], issuesError: "" }))}
       onAddProject={vi.fn()}
       onSettings={vi.fn()}
       onRecheck={vi.fn()}
@@ -130,7 +131,7 @@ describe("NewSession", () => {
     const onCreate = vi.fn(async (_input: NewSessionInput) => {});
     open({
       onCreate,
-      onListWorkspaces: vi.fn(async () => ({ workspaces: [root], issues: [], issuesError: "" })),
+      onListWorkspaces: vi.fn(async () => [root]),
     });
 
     const choice = await waitFor(() => screen.getByRole("radio", { name: /Main checkout/ }));
@@ -193,7 +194,7 @@ describe("NewSession", () => {
     const onCreate = vi.fn(async (_input: NewSessionInput) => {});
     open({
       onCreate,
-      onListWorkspaces: vi.fn(async () => ({ workspaces: [side], issues: [], issuesError: "" })),
+      onListWorkspaces: vi.fn(async () => [side]),
     });
 
     fireEvent.click(
@@ -211,5 +212,22 @@ describe("NewSession", () => {
       workspace: "",
       workspacePath: side.path,
     });
+  });
+
+  it("will not start before the busy check has come back", async () => {
+    let release: (w: Workspace[]) => void = () => {};
+    const pending = new Promise<Workspace[]>((r) => {
+      release = r;
+    });
+    open({ onListWorkspaces: vi.fn(() => pending) });
+
+    fireEvent.click(await waitFor(() => screen.getByRole("radio", { name: /New scratch worktree/ })));
+    // Nothing to fill in, so only the outstanding check is holding it.
+    expect(screen.getByRole("button", { name: "Start" }).hasAttribute("disabled")).toBe(true);
+
+    release([]);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Start" }).hasAttribute("disabled")).toBe(false),
+    );
   });
 });

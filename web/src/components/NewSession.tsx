@@ -64,8 +64,7 @@ const WORKSPACE_KINDS: { id: WorkspaceKind; label: string; hint: string }[] = [
   },
 ];
 
-export interface WorkspaceListing {
-  workspaces: Workspace[];
+export interface IssueListing {
   issues: Issue[];
   issuesError: string;
 }
@@ -76,6 +75,7 @@ export function NewSession({
   userConfig,
   onCreate,
   onListWorkspaces,
+  onListIssues,
   onAddProject,
   onSettings,
   onRecheck,
@@ -86,7 +86,9 @@ export function NewSession({
   harnesses: HarnessMeta[];
   userConfig: UserConfig | null;
   onCreate: (input: NewSessionInput) => Promise<void>;
-  onListWorkspaces: (projectId: string) => Promise<WorkspaceListing>;
+  onListWorkspaces: (projectId: string) => Promise<Workspace[]>;
+  /** Separate from the workspaces so `gh` being slow cannot delay the busy warning. */
+  onListIssues: (projectId: string) => Promise<IssueListing>;
   onAddProject: () => void;
   onSettings: (project: Project) => void;
   onRecheck: () => void;
@@ -105,12 +107,10 @@ export function NewSession({
   // "" defers to the project's base branch, which is what the placeholder in
   // the field says it will do.
   const [baseRef, setBaseRef] = useState("");
-  const [listing, setListing] = useState<WorkspaceListing>({
-    workspaces: [],
-    issues: [],
-    issuesError: "",
-  });
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [issues, setIssues] = useState<IssueListing>({ issues: [], issuesError: "" });
   const [loadingSpaces, setLoadingSpaces] = useState(false);
+  const [loadingIssues, setLoadingIssues] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -155,9 +155,9 @@ export function NewSession({
   // The project root is its own choice in the list, so listing it again inside
   // the attach picker would be a second door to the same room. Its busy flag
   // still matters — it is what the warning under the choice is made of.
-  const root = listing.workspaces.find((w) => w.isRoot);
+  const root = workspaces.find((w) => w.isRoot);
   const rootBusy = !!root?.busy;
-  const attachable = listing.workspaces.filter((w) => !w.isRoot);
+  const attachable = workspaces.filter((w) => !w.isRoot);
   const kind: WorkspaceKind =
     chosenKind || (project?.config.defaults.workspace === "managed" ? "branch" : "main");
 
@@ -172,7 +172,7 @@ export function NewSession({
   // worktree's work is exactly what this field exists for.
   const baseSuggestions = Array.from(
     new Set(
-      [project?.config.defaults.baseBranch, ...listing.workspaces.map((w) => w.branch)].filter(
+      [project?.config.defaults.baseBranch, ...workspaces.map((w) => w.branch)].filter(
         (b): b is string => !!b,
       ),
     ),
@@ -181,7 +181,14 @@ export function NewSession({
   // people who do not want to name anything.
   const canStart = kind === "branch" ? !!branch : kind === "attach" ? !!choice.attachPath : true;
   const ready =
-    status === "online" && !!project && instance?.availability?.state === "ready" && canStart;
+    status === "online" &&
+    !!project &&
+    instance?.availability?.state === "ready" &&
+    canStart &&
+    // The busy warning is made of this list. Starting before it arrives is
+    // starting without having been told, which is the thing the warning
+    // replaced the old hard block with.
+    !loadingSpaces;
 
   const create = async () => {
     if (!project) return;
@@ -220,20 +227,16 @@ export function NewSession({
     if (!project) return;
     let live = true;
     setLoadingSpaces(true);
+    setWorkspaces([]);
     setChoice({ branch: "", attachPath: "" });
     setChosenKind("");
     setBaseRef("");
     onListWorkspaces(project.id)
       .then((r) => {
-        if (live) setListing(r);
+        if (live) setWorkspaces(r);
       })
-      .catch((e) => {
-        if (live)
-          setListing({
-            workspaces: [],
-            issues: [],
-            issuesError: e instanceof Error ? e.message : String(e),
-          });
+      .catch(() => {
+        if (live) setWorkspaces([]);
       })
       .finally(() => {
         if (live) setLoadingSpaces(false);
@@ -242,6 +245,29 @@ export function NewSession({
       live = false;
     };
   }, [project?.id, onListWorkspaces]);
+
+  // Issue suggestions are their own request, on their own clock: `gh` may take
+  // seconds to answer and nothing here should wait on it.
+  useEffect(() => {
+    if (!project) return;
+    let live = true;
+    setLoadingIssues(true);
+    setIssues({ issues: [], issuesError: "" });
+    onListIssues(project.id)
+      .then((r) => {
+        if (live) setIssues(r);
+      })
+      .catch((e) => {
+        if (live)
+          setIssues({ issues: [], issuesError: e instanceof Error ? e.message : String(e) });
+      })
+      .finally(() => {
+        if (live) setLoadingIssues(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [project?.id, onListIssues]);
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -413,6 +439,11 @@ export function NewSession({
                     The agent works directly in {project?.root} on its current branch. No worktree
                     is created and nothing is removed when the session ends.
                   </p>
+                  {loadingSpaces && (
+                    <p className="text-muted-foreground mt-1.5 text-[11px]">
+                      Checking whether another session is already here…
+                    </p>
+                  )}
                   {rootBusy && (
                     // Inline, not a modal and not a browser dialog: it is a
                     // fact about the choice, and the answer is still yes.
@@ -433,10 +464,10 @@ export function NewSession({
                     value={choice}
                     onChange={setChoice}
                     workspaces={attachable}
-                    issues={listing.issues}
-                    issuesError={listing.issuesError}
+                    issues={issues.issues}
+                    issuesError={issues.issuesError}
                     userConfig={userConfig}
-                    loading={loadingSpaces}
+                    loading={loadingIssues}
                     placeholder="issue/482-fix-login"
                   />
                 </div>
@@ -457,8 +488,8 @@ export function NewSession({
                     value={choice}
                     onChange={setChoice}
                     workspaces={attachable}
-                    issues={listing.issues}
-                    issuesError={listing.issuesError}
+                    issues={issues.issues}
+                    issuesError={issues.issuesError}
                     userConfig={userConfig}
                     loading={loadingSpaces}
                     placeholder="Search worktrees"

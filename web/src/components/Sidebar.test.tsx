@@ -36,6 +36,7 @@ function renderSidebar(over: Partial<React.ComponentProps<typeof Sidebar>> = {})
     onShowAccess: vi.fn(),
     accentOf: () => undefined,
     projectName: () => "repo",
+    projectRoot: () => "/tmp/repo",
     ...over,
   };
   render(<Sidebar {...props} />);
@@ -169,6 +170,36 @@ describe("Sidebar", () => {
     confirmDelete("a");
     expect(checkbox()).toBeNull();
     expect(screen.getByText(/checkout is left untouched/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(props.onDelete).toHaveBeenCalledWith("a", false);
+  });
+
+  it("offers no removal for a managed session that never got a worktree", () => {
+    // Provisioning failed before `git worktree add` ran, so cwd is still the
+    // project root — which the server refuses to remove.
+    const props = renderSidebar({
+      sessions: [session("a", { workspaceMode: "managed", phase: "provision_failed" })],
+      activeId: "a",
+    });
+
+    confirmDelete("a");
+    expect(checkbox()).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(props.onDelete).toHaveBeenCalledWith("a", false);
+  });
+
+  it("counts a closed session as still referencing the worktree", () => {
+    const shared = { workspaceMode: "managed", cwd: "/tmp/repo/.worktrees/a" };
+    const props = renderSidebar({
+      sessions: [session("a", shared), session("b", { ...shared, phase: "closed" })],
+      activeId: "a",
+    });
+
+    confirmDelete("a");
+    // hy still knows of b and b still names that path.
+    expect(checkbox()).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(props.onDelete).toHaveBeenCalledWith("a", false);

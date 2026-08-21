@@ -598,6 +598,12 @@ func (m *Manager) CreateProject(ctx context.Context, o CreateProjectOptions) (*A
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
+		// Sharing a checkout is fine; moving into one that is being deleted is
+		// not. Teardown runs outside this lock, so without this a session
+		// could attach to a directory that is seconds from being removed.
+		if holder, ok := m.cleaningSessionIn(ctx, w.Path); ok {
+			return nil, fmt.Errorf("%s is being cleaned up by %q", filepath.Base(w.Path), holder)
+		}
 		// hy did not create this checkout, so it must never destroy it: the
 		// borrowed mode skips both hooks and the managed worktree teardown.
 		cwd, o.Workspace = w.Path, "borrowed"
@@ -976,6 +982,19 @@ func (m *Manager) Delete(ctx context.Context, id string, removeWorktree bool) er
 		}
 	}
 	if meta.Phase == "closed" {
+		// A closed session has no harness and no actor to narrate teardown,
+		// but its checkout is still on disk and the user may still have asked
+		// for it to go. Removing it here rather than falling through keeps the
+		// checkbox meaning the same thing whatever phase the row is in.
+		if removeWorktree && meta.WorkspaceMode != "local" {
+			p, projectErr := m.store.Project(ctx, meta.ProjectID)
+			if projectErr != nil {
+				return projectErr
+			}
+			if err := m.removeGitWorktree(ctx, meta, p, nil, true); err != nil {
+				return err
+			}
+		}
 		if err := m.store.DeleteSession(ctx, id); err != nil {
 			return err
 		}
@@ -1019,8 +1038,11 @@ func (m *Manager) Delete(ctx context.Context, id string, removeWorktree bool) er
 }
 
 // otherSessionIn reports a session other than id whose checkout is the same
-// directory, and which has not been closed. It is the "somebody else is still
-// in here" test that guards worktree removal now that sharing is allowed.
+// directory. It is the "somebody else is still in here" test that guards
+// worktree removal now that sharing is allowed. A closed session counts: it
+// still names that path, its transcript still refers to it, and it can be
+// resumed — "the last session hy knows of" is the question, not "the last one
+// still running".
 func (m *Manager) otherSessionIn(ctx context.Context, id, cwd string) (string, bool) {
 	if strings.TrimSpace(cwd) == "" {
 		return "", false
@@ -1032,10 +1054,29 @@ func (m *Manager) otherSessionIn(ctx context.Context, id, cwd string) (string, b
 		return "another session", true
 	}
 	for _, s := range sessions {
-		if s.ID == id || s.Phase == "closed" || s.Cwd == "" {
+		if s.ID == id || s.Cwd == "" {
 			continue
 		}
 		if canonicalPath(s.Cwd) != target {
+			continue
+		}
+		if s.Title == "" {
+			return "untitled session", true
+		}
+		return s.Title, true
+	}
+	return "", false
+}
+
+// cleaningSessionIn reports a session that is tearing down the given checkout.
+func (m *Manager) cleaningSessionIn(ctx context.Context, cwd string) (string, bool) {
+	target := canonicalPath(cwd)
+	sessions, err := m.store.ListSessions(ctx)
+	if err != nil {
+		return "", false
+	}
+	for _, s := range sessions {
+		if s.Phase != "cleaning" || s.Cwd == "" || canonicalPath(s.Cwd) != target {
 			continue
 		}
 		if s.Title == "" {

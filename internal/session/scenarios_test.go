@@ -203,3 +203,91 @@ func TestDeleteNeverRemovesTheMainCheckout(t *testing.T) {
 		t.Fatalf("the user's checkout was touched: %v", err)
 	}
 }
+
+// A closed session still has a checkout on disk, and the checkbox has to mean
+// the same thing whatever phase the row is in.
+func TestDeletingAClosedSessionStillHonoursTheCheckbox(t *testing.T) {
+	root, _, _ := gitRepo(t)
+	st, p := testProject(t, root)
+	mgr := NewManager(st, func(string, ...any) {}, &fakeAdapter{})
+	defer mgr.Shutdown()
+
+	a, err := mgr.CreateProject(context.Background(), CreateProjectOptions{
+		ProjectID: p.ID, Workspace: "managed", Branch: "issue/4-closed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := ready(t, st, a.ID)
+	// Stop the harness without releasing the checkout.
+	if err := mgr.Close(context.Background(), a.ID, "done for now"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		m, e := st.Session(context.Background(), a.ID)
+		return e == nil && m.Phase == "closed"
+	})
+
+	if err := mgr.Delete(context.Background(), a.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(meta.Cwd); !os.IsNotExist(statErr) {
+		t.Fatalf("a closed session's worktree survived a ticked delete: %v", statErr)
+	}
+}
+
+// A closed sibling is still a session hy knows of, and it still names the
+// directory somebody is about to delete.
+func TestAClosedSiblingStillProtectsTheWorktree(t *testing.T) {
+	root, worktree, _ := gitRepo(t)
+	st, p := testProject(t, root)
+	mgr := NewManager(st, func(string, ...any) {}, &fakeAdapter{})
+	defer mgr.Shutdown()
+
+	first, err := mgr.CreateProject(context.Background(), CreateProjectOptions{ProjectID: p.ID, WorkspacePath: worktree})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready(t, st, first.ID)
+	second, err := mgr.CreateProject(context.Background(), CreateProjectOptions{ProjectID: p.ID, WorkspacePath: worktree})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready(t, st, second.ID)
+	if err := mgr.Close(context.Background(), second.ID, "done for now"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		m, e := st.Session(context.Background(), second.ID)
+		return e == nil && m.Phase == "closed"
+	})
+
+	if err := mgr.Delete(context.Background(), first.ID, true); err == nil {
+		t.Fatal("a worktree a closed session still names should not be removable")
+	}
+	if _, err := os.Stat(worktree); err != nil {
+		t.Fatalf("the worktree was removed anyway: %v", err)
+	}
+}
+
+// Attaching is allowed while somebody else is working; it is not allowed while
+// somebody else is tearing the directory down.
+func TestAttachingToACheckoutBeingCleanedUpIsRefused(t *testing.T) {
+	root, worktree, _ := gitRepo(t)
+	st, p := testProject(t, root)
+	mgr := NewManager(st, func(string, ...any) {}, &fakeAdapter{})
+	defer mgr.Shutdown()
+
+	a, err := mgr.CreateProject(context.Background(), CreateProjectOptions{ProjectID: p.ID, WorkspacePath: worktree})
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := ready(t, st, a.ID)
+	if err := st.SetPhase(context.Background(), meta.ID, "cleaning"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := mgr.CreateProject(context.Background(), CreateProjectOptions{ProjectID: p.ID, WorkspacePath: worktree}); err == nil {
+		t.Fatal("attaching to a checkout being cleaned up should be refused")
+	}
+}

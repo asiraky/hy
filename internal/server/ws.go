@@ -442,10 +442,20 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		// Issue lookup is advisory: it seeds branch-name suggestions and must
-		// never be the reason the workspace list fails to render.
+		// Issues are fetched separately. They are advisory — they seed
+		// branch-name suggestions — but `gh` can take twelve seconds to answer,
+		// and the workspace list carries the warning that another session is
+		// already in a checkout. Making that warning wait on a network call is
+		// making it arrive after the decision it exists to inform.
+		return map[string]any{"workspaces": spaces}, nil
+
+	case "list_issues":
+		var a listWorkspacesArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
 		issues, issuesErr := c.srv.mgr.ListIssues(ctx, a.ProjectID)
-		return map[string]any{"workspaces": spaces, "issues": issues, "issuesError": issuesErr}, nil
+		return map[string]any{"issues": issues, "issuesError": issuesErr}, nil
 
 	case "session_changes":
 		var a sessionArgs
