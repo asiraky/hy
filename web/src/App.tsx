@@ -737,7 +737,6 @@ export function App() {
                 instance={meta?.providerInstance ?? ""}
                 model={state.model}
                 effort={state.effort}
-                projectDefaultEffort={activeProject?.config.defaults.effort ?? ""}
                 onSwitchModel={switchModel}
                 onSwitchEffort={switchEffort}
                 usage={state.usage}

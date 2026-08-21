@@ -293,20 +293,35 @@ describe("ModelPicker effort", () => {
     expect(menu.getByText("Medium")).toBeTruthy();
   });
 
-  it("badges the level a session gets when none is chosen", () => {
-    openEfforts({ effort: "low", projectDefaultEffort: "high" });
-
-    const badge = document.querySelector("[data-slot='badge']") as HTMLElement;
-    expect(badge.textContent).toBe("Default");
-    // On the project's level, not on some level of this component's choosing.
-    expect(badge.closest("[data-slot='command-item']")!.textContent).toContain("High");
-  });
-
-  it("badges Auto when the project names no level of its own", () => {
+  it("badges the row a session gets when no level is chosen", () => {
     openEfforts({ effort: "low" });
 
-    const badge = document.querySelector("[data-slot='badge']") as HTMLElement;
-    expect(badge.closest("[data-slot='command-item']")!.textContent).toContain("Auto");
+    const badges = document.querySelectorAll("[data-slot='badge']");
+    // Exactly one: no harness reports a default level, so the only honest
+    // claim is about the row that defers to it.
+    expect(badges.length).toBe(1);
+    expect(badges[0].textContent).toBe("Default");
+    expect(badges[0].closest("[data-slot='command-item']")!.textContent).toContain("Auto");
+  });
+
+  it("names a level the model can no longer switch, rather than dropping it", () => {
+    // A legacy model reports no levels; the session still ran at one, and the
+    // trigger is where it is said — not in a second control beside it.
+    render(
+      <ModelPicker
+        harnesses={[claude]}
+        value={{ harness: "claude", instance: "claude", model: "claude-opus-4-7" }}
+        onChange={() => {}}
+        onEffortChange={() => {}}
+        efforts={[]}
+        effort="high"
+        lockInstance
+      />,
+    );
+
+    expect(screen.getByLabelText("Harness and model").textContent).toContain("High");
+    fireEvent.click(screen.getByLabelText("Harness and model"));
+    expect(screen.queryByLabelText("Reasoning effort")).toBeNull();
   });
 
   it("hands back the harness's own id, not the label shown for it", () => {

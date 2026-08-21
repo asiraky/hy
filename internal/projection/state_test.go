@@ -97,3 +97,30 @@ func TestStreamingDoesNotReopenClosedSession(t *testing.T) {
 		t.Fatalf("phase = %q, want closed", s.Phase)
 	}
 }
+
+// Effort is the one config field whose empty value is a choice rather than an
+// absence: clearing it hands the level back to the harness. A payload that
+// says so must be able to say so, or the composer keeps showing — and a
+// restart keeps resuming — a level the session no longer runs at. Mirrored by
+// web/src/apply.test.ts.
+func TestClearingEffortSticks(t *testing.T) {
+	s := New("s1")
+	high, cleared := "high", ""
+
+	s.Apply(event(t, 1, proto.SessionConfigChanged, proto.SessionConfigChangedPayload{Effort: &high}))
+	if s.Effort != "high" {
+		t.Fatalf("effort = %q, want high", s.Effort)
+	}
+
+	s.Apply(event(t, 2, proto.SessionConfigChanged, proto.SessionConfigChangedPayload{Effort: &cleared}))
+	if s.Effort != "" {
+		t.Fatalf("effort = %q after clearing, want empty", s.Effort)
+	}
+
+	// An event about something else still leaves effort alone.
+	s.Apply(event(t, 3, proto.SessionConfigChanged, proto.SessionConfigChangedPayload{Effort: &high}))
+	s.Apply(event(t, 4, proto.SessionConfigChanged, proto.SessionConfigChangedPayload{Model: "sonnet"}))
+	if s.Effort != "high" {
+		t.Fatalf("effort = %q after an unrelated change, want high", s.Effort)
+	}
+}

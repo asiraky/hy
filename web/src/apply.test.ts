@@ -90,3 +90,24 @@ describe("applyEvent turn lifecycle", () => {
     expect(s.usage.contextUsed).toBe(212000);
   });
 });
+
+// Mirrors internal/projection/state_test.go: "" is a level the user can
+// choose — the harness's own default — so an event carrying it must win.
+describe("applyEvent config changes", () => {
+  it("lets a cleared effort clear the effort", () => {
+    let s = emptyState("s1");
+    s = applyEvent(s, ev(1, "session.config_changed", { effort: "high" }));
+    expect(s.effort).toBe("high");
+
+    s = applyEvent(s, ev(2, "session.config_changed", { effort: "" }));
+    expect(s.effort).toBe("");
+  });
+
+  it("leaves effort alone when the event is about something else", () => {
+    let s = emptyState("s1");
+    s = applyEvent(s, ev(1, "session.config_changed", { effort: "high" }));
+    s = applyEvent(s, ev(2, "session.config_changed", { model: "sonnet" }));
+    expect(s.effort).toBe("high");
+    expect(s.model).toBe("sonnet");
+  });
+});

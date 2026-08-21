@@ -1,5 +1,5 @@
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { Badge } from "~/components/ui/badge";
 import { Command, CommandGroup, CommandItem, CommandList } from "~/components/ui/command";
@@ -8,6 +8,9 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "~/co
 import { formatEffort } from "~/lib/efforts";
 import { cn } from "~/lib/utils";
 import { useIsDesktop } from "~/useMediaQuery";
+
+/** cmdk keys a row by value, and "" is not one it can hold. */
+const AUTO_ROW = "__auto__";
 
 /**
  * The reasoning-effort control, as one row at the foot of the model dropdown.
@@ -21,32 +24,29 @@ import { useIsDesktop } from "~/useMediaQuery";
 export function EffortMenu({
   efforts,
   value,
-  projectDefault = "",
   onChange,
 }: {
   /** Levels the running model accepts, most modest first. */
   efforts: string[];
   /** The active effort, or "" for no level named. */
   value: string;
-  /**
-   * The project's default level, if it sets one. It is the level a session
-   * starts at when nothing is chosen, which is what the "Default" badge marks.
-   */
-  projectDefault?: string;
   onChange: (effort: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const isDesktop = useIsDesktop();
+  // cmdk listens for arrows and Enter on its own root, and a popover opens
+  // with focus on its container — a parent, whose key events never reach that
+  // root. Focusing the list itself is what makes the submenu keyboard-usable.
+  const listRef = useRef<HTMLDivElement>(null);
+  const takeFocus = (event: Event) => {
+    event.preventDefault();
+    listRef.current?.focus();
+  };
 
   const choose = (effort: string) => {
     setOpen(false);
     if (effort !== value) onChange(effort);
   };
-
-  // Which row is the one you get by not choosing. A project default only
-  // counts if this model actually accepts it; otherwise nothing is promised
-  // beyond "the harness decides", and the auto row is that promise.
-  const badged = projectDefault && efforts.includes(projectDefault) ? projectDefault : "";
 
   const trigger = (
     <button
@@ -63,18 +63,26 @@ export function EffortMenu({
   );
 
   const body = (
-    <Command shouldFilter={false} className="bg-transparent">
+    <Command
+      ref={listRef}
+      // Arrow keys start from where you are rather than from the top of the
+      // list, and the row they land on is the one already in effect.
+      defaultValue={value || AUTO_ROW}
+      shouldFilter={false}
+      tabIndex={-1}
+      className="bg-transparent outline-none"
+    >
       <CommandList>
         <CommandGroup heading="Reasoning effort">
+          {/* The way back to the harness default, which nothing offered
+              before: once a level was set, it was set for good. It is also
+              the level you get by not choosing, so it carries the badge —
+              no harness reports a default level of its own to badge instead. */}
           <EffortRow
             effort=""
-            hint={
-              badged
-                ? `Uses ${formatEffort(badged)}, this project's default`
-                : "Whatever the harness picks"
-            }
+            hint="Whatever the harness picks"
             selected={value === ""}
-            isDefault={!badged}
+            isDefault
             onChoose={choose}
           />
           {efforts.map((effort) => (
@@ -82,7 +90,7 @@ export function EffortMenu({
               key={effort}
               effort={effort}
               selected={effort === value}
-              isDefault={effort === badged}
+              isDefault={false}
               onChoose={choose}
             />
           ))}
@@ -95,7 +103,11 @@ export function EffortMenu({
     return (
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetTrigger asChild>{trigger}</SheetTrigger>
-        <SheetContent side="bottom" className="p-0 pb-[env(safe-area-inset-bottom)]">
+        <SheetContent
+          side="bottom"
+          onOpenAutoFocus={takeFocus}
+          className="p-0 pb-[env(safe-area-inset-bottom)]"
+        >
           <SheetHeader className="pb-0">
             <SheetTitle>Reasoning effort</SheetTitle>
           </SheetHeader>
@@ -110,7 +122,13 @@ export function EffortMenu({
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       {/* Beside the model menu rather than under it, which is what makes it
           read as a submenu of the row that opened it. */}
-      <PopoverContent side="right" align="end" sideOffset={8} className="w-60 p-0">
+      <PopoverContent
+        side="right"
+        align="end"
+        sideOffset={8}
+        onOpenAutoFocus={takeFocus}
+        className="w-60 p-0"
+      >
         {body}
       </PopoverContent>
     </Popover>
@@ -133,7 +151,7 @@ function EffortRow({
 }) {
   return (
     <CommandItem
-      value={effort || "__auto__"}
+      value={effort || AUTO_ROW}
       onSelect={() => onChoose(effort)}
       className="min-h-11 items-start gap-2 py-2 md:min-h-0"
     >

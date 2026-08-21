@@ -13,7 +13,6 @@ import {
   replaceComposerTrigger,
   submittedComposerAction,
 } from "~/lib/composerItems";
-import { formatEffort } from "~/lib/efforts";
 import { formatContextWindow, pickerInstances, resolveInstance, resolveModel } from "~/lib/models";
 import type { ComposerItem, HarnessMeta, Usage } from "~/protocol";
 import { useIsDesktop } from "~/useMediaQuery";
@@ -31,7 +30,6 @@ export function Composer({
   instance = "",
   model = "",
   effort = "",
-  projectDefaultEffort = "",
   onSwitchModel,
   onSwitchEffort,
   usage,
@@ -58,8 +56,6 @@ export function Composer({
   instance?: string;
   model?: string;
   effort?: string;
-  /** The project's default effort, which the effort list badges as such. */
-  projectDefaultEffort?: string;
   onSwitchModel?: (id: string) => void;
   onSwitchEffort?: (effort: string) => void;
   /** The session's token usage, source of the context meter. */
@@ -407,7 +403,6 @@ export function Composer({
               disabled={disabled}
               efforts={onSwitchEffort ? modelEfforts : []}
               effort={effort}
-              projectDefaultEffort={projectDefaultEffort}
               contextLabel={contextLabel}
               onEffortChange={onSwitchEffort}
               value={{ harness, instance, model }}
@@ -429,13 +424,6 @@ export function Composer({
               onOpenChange={setModelPickerOpen}
               className="text-muted-foreground hover:text-foreground h-11 w-auto max-w-[55%] min-w-0 border-0 px-2 shadow-none md:h-8 md:min-h-8"
             />
-          )}
-          {/* A model that offers no levels still ran at one, so the session's
-              effort is stated even where it cannot be changed. */}
-          {modelEfforts.length === 0 && effort && (
-            <span className="text-muted-foreground shrink-0 text-[12px]">
-              {formatEffort(effort)}
-            </span>
           )}
 
           {busy ? (

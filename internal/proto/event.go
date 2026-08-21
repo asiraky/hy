@@ -158,10 +158,15 @@ type WorkspaceFailedPayload struct {
 }
 
 type SessionConfigChangedPayload struct {
-	Model  string `json:"model,omitempty"`
-	Mode   string `json:"mode,omitempty"`
-	Effort string `json:"effort,omitempty"`
-	Title  string `json:"title,omitempty"`
+	Model string `json:"model,omitempty"`
+	Mode  string `json:"mode,omitempty"`
+	// Effort is a pointer because "" is a value it can be set to, not just
+	// the absence of one: an empty effort hands the choice back to the
+	// harness, and a plain string with omitempty cannot say that — the field
+	// vanishes and a projection reads it as "this event did not touch
+	// effort", leaving the old level in place forever.
+	Effort *string `json:"effort,omitempty"`
+	Title  string  `json:"title,omitempty"`
 	// HarnessSessionID is the harness's own identifier for this conversation,
 	// which is what a restart needs in order to resume with context intact.
 	HarnessSessionID string `json:"harnessSessionId,omitempty"`

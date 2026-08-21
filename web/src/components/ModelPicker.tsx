@@ -61,7 +61,6 @@ export function ModelPicker({
   disabled = false,
   efforts = [],
   effort = "",
-  projectDefaultEffort = "",
   contextLabel = "",
   onEffortChange,
   id,
@@ -86,8 +85,6 @@ export function ModelPicker({
   efforts?: string[];
   /** The active effort, or "" for no level named. */
   effort?: string;
-  /** The project's default level, badged in the effort list as such. */
-  projectDefaultEffort?: string;
   /** The running model's context window, already formatted ("1M"), or "". */
   contextLabel?: string;
   onEffortChange?: (effort: string) => void;
@@ -134,6 +131,10 @@ export function ModelPicker({
   }, [searching, search, instances, lockInstance, shown]);
 
   const showEffort = efforts.length > 0 && !!onEffortChange;
+  // A model that offers no levels still ran at one, and that is still half of
+  // what this control is naming — so the trigger says it, and only the row
+  // that switches it goes away.
+  const namesEffort = showEffort || !!effort;
 
   const choose = (instance: PickerInstance, model: ModelMeta) => {
     setOpen(false);
@@ -191,25 +192,28 @@ export function ModelPicker({
           )}
         </CommandList>
       </div>
-      {(showEffort || contextLabel) && (
-        <div className="border-t">
-          {showEffort && (
-            <div className="p-1">
-              <EffortMenu
-                efforts={efforts}
-                value={effort}
-                projectDefault={projectDefaultEffort}
-                onChange={(next) => {
-                  setOpen(false);
-                  onEffortChange?.(next);
-                }}
-              />
-            </div>
-          )}
-          {contextLabel && <ContextNote label={contextLabel} />}
+    </Command>
+  );
+
+  // Deliberately outside the Command above. cmdk claims arrows and Enter for
+  // the whole of its root, so a button nested in it cannot be operated from
+  // the keyboard: Enter would select the highlighted model instead.
+  const footer = (showEffort || contextLabel) && (
+    <div className="border-t">
+      {showEffort && (
+        <div className="p-1">
+          <EffortMenu
+            efforts={efforts}
+            value={effort}
+            onChange={(next) => {
+              setOpen(false);
+              onEffortChange?.(next);
+            }}
+          />
         </div>
       )}
-    </Command>
+      {contextLabel && <ContextNote label={contextLabel} />}
+    </div>
   );
 
   const trigger = (
@@ -231,11 +235,11 @@ export function ModelPicker({
         {/* The generation and the effort compete for one line, and only one of
             them is a knob: when effort is on show, the generation stays in the
             list, where the row that names it also explains it. */}
-        {!showEffort && selectedModel?.version && selectedModel.version !== selectedModel.label && (
+        {!namesEffort && selectedModel?.version && selectedModel.version !== selectedModel.label && (
           <span className="text-muted-foreground ml-1.5 text-[11px]">{selectedModel.version}</span>
         )}
       </span>
-      {showEffort && (
+      {namesEffort && (
         <span className="text-muted-foreground shrink-0 text-[12px]">
           <span aria-hidden className="mr-1.5 opacity-60">
             ·
@@ -253,11 +257,12 @@ export function ModelPicker({
     return (
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetTrigger asChild>{trigger}</SheetTrigger>
-        <SheetContent side="bottom" className="h-[85dvh] p-0 pb-[env(safe-area-inset-bottom)]">
+        <SheetContent side="bottom" className="flex h-[85dvh] flex-col p-0 pb-[env(safe-area-inset-bottom)]">
           <SheetHeader className="pb-0">
             <SheetTitle>Model</SheetTitle>
           </SheetHeader>
           {body}
+          {footer}
         </SheetContent>
       </Sheet>
     );
@@ -268,6 +273,7 @@ export function ModelPicker({
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent align="start" className="w-[min(34rem,calc(100vw-2rem))] p-0">
         {body}
+        {footer}
       </PopoverContent>
     </Popover>
   );
