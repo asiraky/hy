@@ -251,9 +251,14 @@ type session struct {
 	done   chan struct{}
 	closed sync.Once
 
-	mu       sync.Mutex
-	turnID   string
-	streamed map[string]bool // item ids that arrived as deltas
+	mu sync.Mutex
+	// turnID is hy's own turn id, echoed onto emitted events. serverTurnID is
+	// codex's id for the in-flight turn — turn/interrupt needs it, and it is not
+	// the same value as turnID.
+	turnID       string
+	serverTurnID string
+	interrupting bool            // an interrupt for serverTurnID is already in flight
+	streamed     map[string]bool // item ids that arrived as deltas
 	// Set while a /compact RPC is awaiting its contextCompaction item, so the
 	// canonical notice can distinguish a human request from auto-compaction.
 	manualCompact  bool
@@ -279,11 +284,53 @@ func (s *session) Prompt(ctx context.Context, in adapter.PromptInput) error {
 		params["model"] = s.model
 	}
 	s.mu.Unlock()
-	return s.conn.Call(ctx, "turn/start", params, nil)
+
+	// turn/start returns immediately with the in-progress turn's id (it does not
+	// block until the turn finishes). Capture that id so Cancel can address the
+	// right turn — turn/interrupt requires it.
+	var startRes struct {
+		Turn struct {
+			ID string `json:"id"`
+		} `json:"turn"`
+	}
+	if err := s.conn.Call(ctx, "turn/start", params, &startRes); err != nil {
+		return err
+	}
+	// Only record the id if this turn is still the active one. turn/completed is
+	// handled on the read-loop goroutine and may have already cleared the turn
+	// (a very fast turn) between the response arriving and this line running;
+	// the guard keeps a completed turn's id from being resurrected as active.
+	s.mu.Lock()
+	if s.turnID == in.TurnID {
+		s.serverTurnID = startRes.Turn.ID
+	}
+	s.mu.Unlock()
+	return nil
 }
 
+// Cancel interrupts the in-flight turn. codex's turn/interrupt requires both the
+// thread id and the specific turn id; omitting the turn id makes it a no-op,
+// which is why the stop button silently did nothing before.
+//
+// A second interrupt for a turn that is already being interrupted is coalesced:
+// codex leaves repeated interrupts of the same turn pending indefinitely, and
+// this call runs on the session actor goroutine, so a hung Call would wedge the
+// whole session (a double-clicked stop button).
 func (s *session) Cancel(ctx context.Context) error {
-	return s.conn.Call(ctx, "turn/interrupt", map[string]any{"threadId": s.threadID}, nil)
+	s.mu.Lock()
+	turnID := s.serverTurnID
+	inFlight := s.interrupting
+	if turnID != "" {
+		s.interrupting = true
+	}
+	s.mu.Unlock()
+	if turnID == "" || inFlight {
+		return nil
+	}
+	return s.conn.Call(ctx, "turn/interrupt", map[string]any{
+		"threadId": s.threadID,
+		"turnId":   turnID,
+	}, nil)
 }
 
 // SetMode switches the permission preset mid-thread. thread/settings/update
@@ -329,6 +376,8 @@ func (s *session) watchExit() {
 	s.mu.Lock()
 	turn := s.turnID
 	s.turnID = ""
+	s.serverTurnID = ""
+	s.interrupting = false
 	s.mu.Unlock()
 	if turn != "" {
 		s.emit(proto.Emit(proto.TurnFinished, proto.TurnFinishedPayload{
@@ -665,6 +714,8 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 		s.mu.Lock()
 		done := s.turnID
 		s.turnID = ""
+		s.serverTurnID = ""
+		s.interrupting = false
 		s.mu.Unlock()
 
 		s.emit(proto.Emit(proto.TurnFinished, proto.TurnFinishedPayload{

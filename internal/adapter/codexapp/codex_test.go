@@ -3,10 +3,121 @@ package codexapp
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"sync"
 	"testing"
 
 	"github.com/asiraky/hy/internal/adapter"
+	"github.com/asiraky/hy/internal/jsonrpc"
 )
+
+// serverConn pairs a client jsonrpc.Conn with an in-memory server whose handler
+// records the last request it saw and replies with the given result.
+type recorder struct {
+	mu     sync.Mutex
+	method string
+	params json.RawMessage
+	counts map[string]int
+}
+
+func (r *recorder) last() (string, json.RawMessage) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.method, r.params
+}
+
+func (r *recorder) count(method string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.counts[method]
+}
+
+func pairedConn(t *testing.T, reply map[string]any) (*jsonrpc.Conn, *recorder) {
+	t.Helper()
+	rec := &recorder{counts: map[string]int{}}
+	// client writes -> server reads; server writes -> client reads.
+	sr, cw := io.Pipe()
+	cr, sw := io.Pipe()
+	handler := func(_ context.Context, method string, params json.RawMessage) (any, error) {
+		rec.mu.Lock()
+		rec.method = method
+		rec.params = params
+		rec.counts[method]++
+		rec.mu.Unlock()
+		if r, ok := reply[method]; ok {
+			return r, nil
+		}
+		return map[string]any{}, nil
+	}
+	_ = jsonrpc.NewConn(sr, sw, handler, nil)
+	client := jsonrpc.NewConn(cr, cw, nil, nil)
+	t.Cleanup(func() { _ = cw.Close(); _ = sw.Close() })
+	return client, rec
+}
+
+// TestPromptCapturesServerTurnIDForCancel guards the fix for the ChatGPT stop
+// button: turn/start returns codex's turn id, and turn/interrupt must carry both
+// threadId and that turnId or it is a silent no-op.
+func TestPromptCapturesServerTurnIDForCancel(t *testing.T) {
+	conn, rec := pairedConn(t, map[string]any{
+		"turn/start": map[string]any{"turn": map[string]any{"id": "codex-turn-42"}},
+	})
+	s := &session{conn: conn, threadID: "thread-1"}
+
+	if err := s.Prompt(context.Background(), adapter.PromptInput{TurnID: "hy-turn", Text: "hi"}); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if s.serverTurnID != "codex-turn-42" {
+		t.Fatalf("serverTurnID not captured: %q", s.serverTurnID)
+	}
+
+	if err := s.Cancel(context.Background()); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	method, params := rec.last()
+	if method != "turn/interrupt" {
+		t.Fatalf("Cancel sent %q, want turn/interrupt", method)
+	}
+	var got struct {
+		ThreadID string `json:"threadId"`
+		TurnID   string `json:"turnId"`
+	}
+	if err := json.Unmarshal(params, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ThreadID != "thread-1" || got.TurnID != "codex-turn-42" {
+		t.Fatalf("turn/interrupt params = %+v, want thread-1 / codex-turn-42", got)
+	}
+}
+
+// TestCancelWithoutActiveTurnIsNoop avoids sending an interrupt with an empty
+// turn id, which codex rejects as invalid params.
+func TestCancelWithoutActiveTurnIsNoop(t *testing.T) {
+	conn, rec := pairedConn(t, nil)
+	s := &session{conn: conn, threadID: "thread-1"}
+	if err := s.Cancel(context.Background()); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if method, _ := rec.last(); method != "" {
+		t.Fatalf("Cancel sent %q with no active turn, want nothing", method)
+	}
+}
+
+// TestDoubleCancelIsCoalesced guards against a double-clicked stop button:
+// codex leaves a repeated interrupt of the same turn pending forever, and Cancel
+// runs on the session actor goroutine, so a second interrupt must not be sent.
+func TestDoubleCancelIsCoalesced(t *testing.T) {
+	conn, rec := pairedConn(t, nil)
+	s := &session{conn: conn, threadID: "thread-1", serverTurnID: "codex-turn-42"}
+	for i := 0; i < 3; i++ {
+		if err := s.Cancel(context.Background()); err != nil {
+			t.Fatalf("Cancel #%d: %v", i, err)
+		}
+	}
+	if n := rec.count("turn/interrupt"); n != 1 {
+		t.Fatalf("turn/interrupt sent %d times, want 1", n)
+	}
+}
 
 type elicitHost struct {
 	request adapter.ElicitationRequest
