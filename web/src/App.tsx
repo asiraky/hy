@@ -501,9 +501,7 @@ export function App() {
                 model={state.model}
                 effort={state.effort}
                 onSwitchModel={switchModel}
-                contextPct={state.usage.contextPct}
-                contextUsed={state.usage.contextUsed}
-                contextWindow={state.usage.contextWindow}
+                usage={state.usage}
               />
             </div>
           </div>

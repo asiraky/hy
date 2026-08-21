@@ -1,65 +1,11 @@
 import { ArrowUpIcon, SquareIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { ContextMeter } from "~/components/ContextMeter";
 import { ModelPicker } from "~/components/ModelPicker";
 import { Button } from "~/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
-import { cn } from "~/lib/utils";
-import type { HarnessMeta } from "~/protocol";
+import type { HarnessMeta, Usage } from "~/protocol";
 import { useIsDesktop } from "~/useMediaQuery";
-
-/**
- * The context gauge: a ring that fills as the window does, green while there
- * is room, amber when it is worth wrapping up, red when the next compaction is
- * near. It renders nothing when the harness has not said — a gauge with no
- * reading is noise.
- */
-/** 12345 → "12k", 1500000 → "1.5M": token counts want one significant step. */
-function fmtTokens(n: number) {
-  if (n >= 1_000_000) {
-    const m = n / 1_000_000;
-    return `${m >= 10 ? Math.round(m) : Math.round(m * 10) / 10}M`;
-  }
-  if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
-  return String(n);
-}
-
-function ContextRing({ pct, used, window: win }: { pct: number; used?: number; window?: number }) {
-  const clamped = Math.min(100, Math.max(0, pct));
-  const r = 6;
-  const c = 2 * Math.PI * r;
-  const tone =
-    clamped >= 85 ? "text-destructive" : clamped >= 60 ? "text-attention" : "text-success";
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className={cn("flex size-8 shrink-0 items-center justify-center", tone)}>
-          {/* The ring is decoration; a screen reader gets the reading as text. */}
-          <span className="sr-only">Context window {Math.round(clamped)}% used</span>
-          <svg aria-hidden viewBox="0 0 16 16" className="size-4 -rotate-90">
-            <circle cx="8" cy="8" r={r} fill="none" strokeWidth="2.5" className="stroke-border" />
-            <circle
-              cx="8"
-              cy="8"
-              r={r}
-              fill="none"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              stroke="currentColor"
-              strokeDasharray={c}
-              strokeDashoffset={c * (1 - clamped / 100)}
-            />
-          </svg>
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>
-        {used && win
-          ? `Context ${Math.round(clamped)}% used — ${fmtTokens(used)} / ${fmtTokens(win)} tokens`
-          : `Context ${Math.round(clamped)}% used`}
-      </TooltipContent>
-    </Tooltip>
-  );
-}
 
 export function Composer({
   disabled,
@@ -73,9 +19,7 @@ export function Composer({
   model = "",
   effort = "",
   onSwitchModel,
-  contextPct,
-  contextUsed,
-  contextWindow,
+  usage,
 }: {
   disabled: boolean;
   busy: boolean;
@@ -90,11 +34,8 @@ export function Composer({
   model?: string;
   effort?: string;
   onSwitchModel?: (id: string) => void;
-  /** 0–100, or undefined when the harness has not reported it yet. */
-  contextPct?: number;
-  /** Raw readings behind contextPct: tokens in the window / window size. */
-  contextUsed?: number;
-  contextWindow?: number;
+  /** The session's token usage, source of the context meter. */
+  usage?: Usage;
 }) {
   const [text, setText] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -148,9 +89,7 @@ export function Composer({
         />
 
         <div className="flex items-center gap-1 px-2.5 pb-2">
-          {contextPct !== undefined && contextPct > 0 && (
-            <ContextRing pct={contextPct} used={contextUsed} window={contextWindow} />
-          )}
+          {usage && (usage.contextUsed ?? 0) > 0 && <ContextMeter usage={usage} model={model} />}
 
           <span className="flex-1" />
 

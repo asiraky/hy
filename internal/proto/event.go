@@ -26,6 +26,10 @@ const (
 	ToolCallUpdated = "tool_call.updated"
 	PlanUpdated     = "plan.updated"
 	UsageUpdated    = "usage.updated"
+	// ContextCompacted marks a point where the harness compressed the
+	// conversation to reclaim context window. It carries the token counts
+	// either side of the boundary so the transcript can show what happened.
+	ContextCompacted = "context.compacted"
 
 	PermissionRequested  = "permission.requested"
 	PermissionResolved   = "permission.resolved"
@@ -270,11 +274,41 @@ type UsageUpdatedPayload struct {
 	CacheRead  int64   `json:"cacheRead"`
 	CacheWrite int64   `json:"cacheWrite"`
 	Cost       float64 `json:"cost"`
+	// ContextPct is how full the context window is, and is deliberately NOT
+	// clamped to 100: an over-limit reading is a real signal (compaction is
+	// imminent or overdue), and clamping it in the adapter is what let a
+	// broken occupancy calculation masquerade as a full window.
 	ContextPct float64 `json:"contextPct,omitempty"`
 	// Raw context readings behind ContextPct, so the UI can say
-	// "12k / 200k tokens" and scale with the model's window.
+	// "12k / 200k tokens" and scale with the model's window. ContextWindow is
+	// the window occupancy is measured against — the resolved auto-compaction
+	// window, which on a 1M model may be the 200k compaction boundary.
 	ContextUsed   int64 `json:"contextUsed,omitempty"`
 	ContextWindow int64 `json:"contextWindow,omitempty"`
+	// ContextLimit is the model's full context window, which ContextWindow may
+	// be smaller than when auto-compaction runs against a tighter boundary.
+	// When it exceeds ContextWindow, the difference is the room past the
+	// compaction threshold, and the UI draws that threshold as a marker.
+	ContextLimit int64 `json:"contextLimit,omitempty"`
+	// ContextCategories is the per-category breakdown of what occupies the
+	// window (system prompt, tools, messages, …), for a segmented bar. It is
+	// present only when the harness reports it.
+	ContextCategories []ContextCategory `json:"contextCategories,omitempty"`
+}
+
+// ContextCategory is one row of the context-window occupancy breakdown.
+type ContextCategory struct {
+	Name   string `json:"name"`
+	Tokens int64  `json:"tokens"`
+}
+
+// ContextCompactedPayload reports one compaction boundary. Trigger is "auto"
+// when the harness compacted on its own to stay under the window, or "manual"
+// when a human asked for it.
+type ContextCompactedPayload struct {
+	Trigger    string `json:"trigger,omitempty"`
+	PreTokens  int64  `json:"preTokens,omitempty"`
+	PostTokens int64  `json:"postTokens,omitempty"`
 }
 
 type PermissionOption struct {

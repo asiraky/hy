@@ -53,4 +53,40 @@ describe("applyEvent turn lifecycle", () => {
     s = applyEvent(s, ev(2, "message.chunk", { blockId: "b1", role: "agent", kind: "text", delta: "late" }));
     expect(s.phase).toBe("closed");
   });
+
+  it("folds a compaction boundary into a standalone notice item", () => {
+    let s = emptyState("s1");
+    s = applyEvent(
+      s,
+      ev(1, "context.compacted", { trigger: "auto", preTokens: 180000, postTokens: 42000 }, 5000),
+    );
+    expect(s.items).toHaveLength(1);
+    const it = s.items[0];
+    expect(it.kind).toBe("notice");
+    expect(it.noticeKind).toBe("compaction");
+    expect(it.trigger).toBe("auto");
+    expect(it.preTokens).toBe(180000);
+    expect(it.postTokens).toBe(42000);
+    // No turn id: it stands on its own line rather than folding into a turn.
+    expect(it.turnId).toBeUndefined();
+  });
+
+  it("carries unclamped context occupancy through usage.updated", () => {
+    let s = emptyState("s1");
+    s = applyEvent(
+      s,
+      ev(1, "usage.updated", {
+        input: 1,
+        output: 1,
+        cacheRead: 1,
+        cacheWrite: 0,
+        cost: 0,
+        contextPct: 106,
+        contextUsed: 212000,
+        contextWindow: 200000,
+      }),
+    );
+    expect(s.usage.contextPct).toBe(106);
+    expect(s.usage.contextUsed).toBe(212000);
+  });
 });

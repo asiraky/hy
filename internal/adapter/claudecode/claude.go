@@ -285,6 +285,21 @@ type session struct {
 	blocks    map[int]*block
 	sawResult bool
 	model     string
+
+	// usage carries both cost accounting and window occupancy; it is kept on
+	// the session and re-emitted whole so a result (accounting + fallback
+	// occupancy) and a context_usage message (authoritative occupancy) can
+	// each update their part without clobbering the other's.
+	usage proto.UsageUpdatedPayload
+	// haveContextUsage records that the harness has reported real occupancy at
+	// least once; after that the result-message fallback stops touching it.
+	haveContextUsage bool
+	// lastPromptTokens is the size of the most recent request's prompt — the
+	// final assistant message's fresh + cached input — which is the occupancy
+	// fallback when the harness cannot report context usage directly. It
+	// deliberately excludes output: this request's output is next request's
+	// input, so counting it would double-count.
+	lastPromptTokens int64
 }
 
 func (s *session) Events() <-chan proto.Emission { return s.events }
@@ -473,12 +488,15 @@ func (s *session) handleSDKMessage(msg map[string]json.RawMessage) {
 		s.handleUser(msg)
 	case "result":
 		s.handleResult(msg)
+	case "context_usage":
+		s.handleContextUsage(msg)
 	}
 }
 
-// contextWindowFor is a heuristic: the SDK does not report the window, so the
-// indicator assumes the standard 200k unless the model id opts into the 1M
-// beta. Close enough for a gauge that only has three colours.
+// contextWindowFor is the fallback window used only when the harness cannot
+// report context usage directly (an older CLI without the control method): the
+// standard 200k unless the model id opts into the 1M beta. When
+// getContextUsage is available it supplies the real window and this is unused.
 func contextWindowFor(model string) int64 {
 	if strings.Contains(model, "[1m]") {
 		return 1_000_000
@@ -487,20 +505,106 @@ func contextWindowFor(model string) int64 {
 }
 
 func (s *session) handleSystem(msg map[string]json.RawMessage) {
-	if str(msg["subtype"]) != "init" {
-		return
+	switch str(msg["subtype"]) {
+	case "init":
+		var init struct {
+			Model          string `json:"model"`
+			PermissionMode string `json:"permissionMode"`
+		}
+		remarshal(msg, &init)
+		s.mu.Lock()
+		s.model = init.Model
+		s.mu.Unlock()
+		s.emit(proto.Emit(proto.SessionConfigChanged, proto.SessionConfigChangedPayload{
+			Model: init.Model, Mode: init.PermissionMode, HarnessSessionID: s.harnessSessionID,
+		}))
+	case "compact_boundary":
+		var b struct {
+			Meta struct {
+				Trigger    string `json:"trigger"`
+				PreTokens  int64  `json:"pre_tokens"`
+				PostTokens int64  `json:"post_tokens"`
+			} `json:"compact_metadata"`
+		}
+		remarshal(msg, &b)
+		s.emit(proto.Emit(proto.ContextCompacted, proto.ContextCompactedPayload{
+			Trigger:    b.Meta.Trigger,
+			PreTokens:  b.Meta.PreTokens,
+			PostTokens: b.Meta.PostTokens,
+		}))
 	}
-	var init struct {
-		Model          string `json:"model"`
-		PermissionMode string `json:"permissionMode"`
+}
+
+// handleContextUsage folds the harness's own occupancy report — the structured
+// twin of the /context command — into the usage payload. This is the correct
+// source for "how full is the window": tokens in use now, measured against the
+// window (the resolved auto-compaction window), with the category breakdown.
+func (s *session) handleContextUsage(msg map[string]json.RawMessage) {
+	var m struct {
+		Usage struct {
+			Model        string  `json:"model"`
+			TotalTokens  int64   `json:"totalTokens"`
+			MaxTokens    int64   `json:"maxTokens"`
+			RawMaxTokens int64   `json:"rawMaxTokens"`
+			Percentage   float64 `json:"percentage"`
+			Categories   []struct {
+				Name       string `json:"name"`
+				Tokens     int64  `json:"tokens"`
+				IsDeferred bool   `json:"isDeferred"`
+			} `json:"categories"`
+		} `json:"usage"`
 	}
-	remarshal(msg, &init)
+	remarshal(msg, &m)
+	u := m.Usage
+
+	// The window occupancy is measured against. Prefer rawMaxTokens (the
+	// auto-compaction window, which is what actually bounds the conversation);
+	// fall back to maxTokens, then the model heuristic.
+	window := u.RawMaxTokens
+	if window == 0 {
+		window = u.MaxTokens
+	}
+	if window == 0 {
+		s.mu.Lock()
+		window = contextWindowFor(s.model)
+		s.mu.Unlock()
+	}
+
+	var cats []proto.ContextCategory
+	for _, c := range u.Categories {
+		// Deferred rows are out-of-window tool schemas, and the free/buffer
+		// rows are the empty remainder — none of them occupy the window, so
+		// they do not belong in a segmented bar of what is used.
+		if c.IsDeferred || c.Tokens <= 0 || isFreeCategory(c.Name) {
+			continue
+		}
+		cats = append(cats, proto.ContextCategory{Name: c.Name, Tokens: c.Tokens})
+	}
+
+	pct := u.Percentage
+	if window > 0 {
+		pct = float64(u.TotalTokens) / float64(window) * 100
+	}
+
 	s.mu.Lock()
-	s.model = init.Model
+	s.haveContextUsage = true
+	s.usage.ContextUsed = u.TotalTokens
+	s.usage.ContextWindow = window
+	s.usage.ContextLimit = u.MaxTokens
+	s.usage.ContextPct = pct
+	s.usage.ContextCategories = cats
+	out := s.usage
 	s.mu.Unlock()
-	s.emit(proto.Emit(proto.SessionConfigChanged, proto.SessionConfigChangedPayload{
-		Model: init.Model, Mode: init.PermissionMode, HarnessSessionID: s.harnessSessionID,
-	}))
+
+	s.emit(proto.Emit(proto.UsageUpdated, out))
+}
+
+// isFreeCategory recognises the breakdown rows that are not occupied context —
+// the empty remainder and the compaction reserve — by the labels the CLI uses.
+func isFreeCategory(name string) bool {
+	n := strings.ToLower(name)
+	return strings.Contains(n, "free") || strings.Contains(n, "reserved") ||
+		strings.Contains(n, "buffer") || strings.Contains(n, "available")
 }
 
 type streamEvent struct {
@@ -591,9 +695,24 @@ func (s *session) handleAssistant(msg map[string]json.RawMessage) {
 				Name  string          `json:"name"`
 				Input json.RawMessage `json:"input"`
 			} `json:"content"`
+			Usage struct {
+				InputTokens              int64 `json:"input_tokens"`
+				CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+				CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+			} `json:"usage"`
 		} `json:"message"`
 	}
 	remarshal(msg, &m)
+
+	// The prompt of the latest request is the conversation so far, so its
+	// input (fresh + cached) is the context in use — the occupancy fallback
+	// when the harness cannot report it directly. Output is excluded on
+	// purpose: this request's output is the next request's input.
+	if prompt := m.Message.Usage.InputTokens + m.Message.Usage.CacheReadInputTokens + m.Message.Usage.CacheCreationInputTokens; prompt > 0 {
+		s.mu.Lock()
+		s.lastPromptTokens = prompt
+		s.mu.Unlock()
+	}
 
 	for _, c := range m.Message.Content {
 		if c.Type != "tool_use" {
@@ -653,27 +772,32 @@ func (s *session) handleResult(msg map[string]json.RawMessage) {
 	}
 	remarshal(msg, &r)
 
-	// The final request's prompt is the conversation so far, so its input
-	// (fresh + cached) plus what came back approximates the context in use.
+	// The result's usage is a cost-accounting total summed over every request
+	// in the turn, so it is right for cost and token accounting but wrong for
+	// occupancy — summing prompts that each already contain the whole
+	// conversation overcounts by roughly O(N²) in tool calls. Occupancy comes
+	// from the harness's context_usage report (handleContextUsage); until that
+	// arrives — or on a CLI too old to send it — we fall back to the size of
+	// the final request's prompt, which is the actual context in use.
 	s.mu.Lock()
-	window := contextWindowFor(s.model)
-	s.mu.Unlock()
-	used := r.Usage.InputTokens + r.Usage.CacheReadInputTokens + r.Usage.CacheCreationInputTokens + r.Usage.OutputTokens
-	var pct float64
-	if used > 0 && window > 0 {
-		pct = min(100, float64(used)/float64(window)*100)
+	s.usage.Input = r.Usage.InputTokens
+	s.usage.Output = r.Usage.OutputTokens
+	s.usage.CacheRead = r.Usage.CacheReadInputTokens
+	s.usage.CacheWrite = r.Usage.CacheCreationInputTokens
+	s.usage.Cost = r.TotalCostUSD
+	if !s.haveContextUsage {
+		window := contextWindowFor(s.model)
+		used := s.lastPromptTokens
+		s.usage.ContextUsed = used
+		s.usage.ContextWindow = window
+		if used > 0 && window > 0 {
+			s.usage.ContextPct = float64(used) / float64(window) * 100
+		}
 	}
+	out := s.usage
+	s.mu.Unlock()
 
-	s.emit(proto.Emit(proto.UsageUpdated, proto.UsageUpdatedPayload{
-		Input:         r.Usage.InputTokens,
-		Output:        r.Usage.OutputTokens,
-		CacheRead:     r.Usage.CacheReadInputTokens,
-		CacheWrite:    r.Usage.CacheCreationInputTokens,
-		Cost:          r.TotalCostUSD,
-		ContextPct:    pct,
-		ContextUsed:   used,
-		ContextWindow: window,
-	}))
+	s.emit(proto.Emit(proto.UsageUpdated, out))
 
 	stop := r.StopReason
 	switch {

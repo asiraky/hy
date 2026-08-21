@@ -232,9 +232,26 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 // here -> host: relay every SDK message verbatim. Mapping to canonical events
 // happens in Go, so this file stays stable across protocol changes.
 // ---------------------------------------------------------------------------
+// The SDK's own occupancy accounting. The per-turn `usage` on a result message
+// is a cost-accounting total summed across every request in the turn, so using
+// it as a "how full is the window" gauge overcounts by roughly O(N²) in the
+// number of tool calls. getContextUsage() is the harness's actual answer:
+// tokens in use now, the window they are measured against, and the category
+// breakdown. We ask for it once the turn settles and relay it as a synthetic
+// message the host maps like any other. Errors are swallowed — an older CLI
+// without the control method simply leaves the host on its fallback estimate.
+const reportContextUsage = () => {
+  if (typeof session.getContextUsage !== "function") return;
+  Promise.resolve()
+    .then(() => session.getContextUsage())
+    .then((usage) => notify("message", { message: { type: "context_usage", usage } }))
+    .catch(() => {});
+};
+
 try {
   for await (const message of session) {
     notify("message", { message });
+    if (message?.type === "result") reportContextUsage();
   }
   notify("fatal", { message: "session ended" });
   die(0);
