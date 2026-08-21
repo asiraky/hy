@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/asiraky/hy/internal/proto"
@@ -129,6 +130,28 @@ func TestSessionReadFileRefusesEscapes(t *testing.T) {
 	}
 	if _, err := mgr.SessionReadFile(ctx, id, "door/secret.txt"); err == nil {
 		t.Fatal("a symlinked directory escape was followed")
+	}
+}
+
+func TestSessionReadFileAcceptsAbsolutePathsUnderTheRoot(t *testing.T) {
+	mgr, id, worktree, _ := filesFixture(t)
+	file, err := mgr.SessionReadFile(context.Background(), id, filepath.Join(worktree, "sub", "deep.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.Content != "three\n" {
+		t.Fatalf("absolute in-root read mis-reported: %+v", file)
+	}
+}
+
+func TestSessionReadFileRefusesSpecialFiles(t *testing.T) {
+	mgr, id, worktree, _ := filesFixture(t)
+	if err := syscall.Mkfifo(filepath.Join(worktree, "pipe"), 0o644); err != nil {
+		t.Skipf("mkfifo unavailable: %v", err)
+	}
+	// A FIFO would block the open forever; it must be refused, not waited on.
+	if _, err := mgr.SessionReadFile(context.Background(), id, "pipe"); err == nil {
+		t.Fatal("a FIFO was opened")
 	}
 }
 

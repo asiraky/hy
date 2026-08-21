@@ -58,6 +58,18 @@ func (s *Server) serveTerm(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.Close(websocket.StatusNormalClosure, "")
 
+	// Registered by device, so revoking the device cuts this shell too — same
+	// contract as /ws.
+	device, _ := auth.DeviceFrom(r.Context())
+	s.termMu.Lock()
+	s.termLive[ws] = device.ID
+	s.termMu.Unlock()
+	defer func() {
+		s.termMu.Lock()
+		delete(s.termLive, ws)
+		s.termMu.Unlock()
+	}()
+
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 

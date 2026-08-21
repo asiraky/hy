@@ -79,20 +79,38 @@ func (m *Manager) SessionReadFile(ctx context.Context, sessionID, path string) (
 		return FileContent{}, fmt.Errorf("%s", warning)
 	}
 
-	abs, err := resolveInWorkspace(root, path)
+	rel, realRoot, err := workspaceRelative(root, path)
 	if err != nil {
 		return FileContent{}, err
 	}
 
-	info, err := os.Stat(abs)
+	// os.Root does the actual containment: every component of the open is
+	// resolved inside the root by the kernel, so a symlink cannot step out —
+	// and unlike a resolve-then-open pair, there is no gap for one to be
+	// swapped in between.
+	rootFS, err := os.OpenRoot(realRoot)
 	if err != nil {
+		return FileContent{}, fmt.Errorf("the session workspace could not be opened: %w", err)
+	}
+	defer rootFS.Close()
+
+	info, err := rootFS.Stat(rel)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return FileContent{}, fmt.Errorf("%q does not exist in this session's workspace", path)
+		}
 		return FileContent{}, fmt.Errorf("%q could not be read: %w", path, err)
 	}
 	if info.IsDir() {
 		return FileContent{}, fmt.Errorf("%q is a directory", path)
 	}
+	// A FIFO or a socket would block the open forever; only a regular file has
+	// contents worth showing.
+	if !info.Mode().IsRegular() {
+		return FileContent{}, fmt.Errorf("%q is not a regular file", path)
+	}
 
-	f, err := os.Open(abs)
+	f, err := rootFS.Open(rel)
 	if err != nil {
 		return FileContent{}, err
 	}
@@ -154,45 +172,50 @@ func (m *Manager) workspaceRoot(ctx context.Context, sessionID string) (root, wa
 	return meta.Cwd, "", nil
 }
 
-// resolveInWorkspace turns a client-supplied relative path into an absolute
-// one, proving on the way that it cannot leave the workspace. Both sides are
-// symlink-resolved before comparison — a checkout is allowed to itself live
-// behind a symlink (macOS /tmp does), and a symlink inside it must not be a
-// door out.
-func resolveInWorkspace(root, path string) (string, error) {
+// workspaceRelative turns a client-supplied path into one relative to the
+// workspace root, refusing anything that points outside it. An absolute path
+// is accepted when it sits under the root — agents write absolute paths
+// constantly — measured against both the root as recorded and its
+// symlink-resolved twin, because a checkout may itself live behind a symlink
+// (macOS /tmp does). Containment of what the path *resolves to* is not judged
+// here: os.Root enforces that at open time, where it cannot be raced.
+func workspaceRelative(root, path string) (rel, realRoot string, err error) {
 	if path == "" {
-		return "", fmt.Errorf("a path is required")
+		return "", "", fmt.Errorf("a path is required")
 	}
+	realRoot, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", "", fmt.Errorf("the session workspace could not be resolved: %w", err)
+	}
+
+	outside := func(r string) bool {
+		return r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator))
+	}
+
 	if filepath.IsAbs(path) {
-		return "", fmt.Errorf("%q is not a path inside this session's workspace", path)
-	}
-
-	realRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return "", fmt.Errorf("the session workspace could not be resolved: %w", err)
-	}
-
-	joined := filepath.Join(realRoot, filepath.FromSlash(path))
-	// Join cleans the path, but a cleaned path can still start with ".." —
-	// catch it early so the error names the path, not a resolution failure.
-	if rel, relErr := filepath.Rel(realRoot, joined); relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("%q is not a path inside this session's workspace", path)
-	}
-
-	// Resolve the target's own symlinks. The file itself may be a fresh
-	// creation EvalSymlinks can still resolve; a missing file is reported as
-	// missing by the read that follows, not here.
-	real, err := filepath.EvalSymlinks(joined)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("%q does not exist in this session's workspace", path)
+		// The client's spelling and ours can differ by a symlinked prefix
+		// (macOS /var is /private/var), so both spellings of both sides are
+		// tried. This chooses the rel to hand os.Root; it grants nothing —
+		// os.Root still refuses anything that resolves outside.
+		candidates := []string{path}
+		if resolved, resErr := filepath.EvalSymlinks(path); resErr == nil {
+			candidates = append(candidates, resolved)
 		}
-		return "", err
+		for _, p := range candidates {
+			for _, base := range []string{realRoot, root} {
+				if r, relErr := filepath.Rel(base, p); relErr == nil && !outside(r) && !filepath.IsAbs(r) {
+					return r, realRoot, nil
+				}
+			}
+		}
+		return "", "", fmt.Errorf("%q is not a path inside this session's workspace", path)
 	}
-	if rel, relErr := filepath.Rel(realRoot, real); relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("%q resolves outside this session's workspace", path)
+
+	rel = filepath.Clean(filepath.FromSlash(path))
+	if outside(rel) {
+		return "", "", fmt.Errorf("%q is not a path inside this session's workspace", path)
 	}
-	return real, nil
+	return rel, realRoot, nil
 }
 
 // listTree lists every file under root. Git does the ignoring when it can:

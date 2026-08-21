@@ -103,6 +103,7 @@ function SurfaceIcon({ s, className }: { s: Surface; className?: string }) {
 function PanelBody({
   sessionId,
   items,
+  open,
   onClose,
   expanded: panelExpanded,
   onToggleExpanded,
@@ -148,9 +149,10 @@ function PanelBody({
 
   // Opening reads the worktree, and so does the end of a turn: the agent has
   // just stopped writing, which is exactly when the data is worth re-reading.
+  // A hidden panel (kept mounted so its terminals survive) reads nothing.
   useEffect(() => {
-    void refreshChanges();
-  }, [revision, refreshChanges]);
+    if (open) void refreshChanges();
+  }, [open, revision, refreshChanges]);
 
   // ---- the worktree tree, shared by the files and file surfaces ----
   const [tree, setTree] = useState<FileTree | null>(null);
@@ -184,11 +186,11 @@ function PanelBody({
   const active = panel.surfaces.find((s) => s.id === panel.active);
   const needsTree = active?.kind === "files" || active?.kind === "file";
   useEffect(() => {
-    if (needsTree && !treeWanted.current) void refreshTree(includeIgnored);
+    if (open && needsTree && !treeWanted.current) void refreshTree(includeIgnored);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [needsTree]);
+  }, [open, needsTree]);
   useEffect(() => {
-    if (treeWanted.current) void refreshTree(includeIgnored);
+    if (open && treeWanted.current) void refreshTree(includeIgnored);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revision]);
 
@@ -203,14 +205,26 @@ function PanelBody({
 
   // ---- requests from outside ----
   const [fileLine, setFileLine] = useState<number | undefined>(undefined);
+  // A path request routes on the change list, so it waits for the list to
+  // settle rather than judging against the empty one a fresh mount holds.
+  // Each nonce is routed exactly once.
+  const routedNonce = useRef(0);
   useEffect(() => {
-    if (!request) return;
+    if (!request || request.nonce === routedNonce.current) return;
     if (request.kind === "diff") {
+      routedNonce.current = request.nonce;
       setPanel((p) => openSurface(p, { id: "diff", kind: "diff" }));
       if (request.path) setReveal({ path: request.path, nonce: request.nonce });
       return;
     }
-    if (!request.path) return;
+    if (!request.path) {
+      routedNonce.current = request.nonce;
+      return;
+    }
+    // Not settled yet: leave the nonce unrouted and let the next changes
+    // update re-run this effect.
+    if (changes === null && !changesError) return;
+    routedNonce.current = request.nonce;
     // A path in the change list opens as its diff; anything else opens as the
     // file itself — including files the session never touched.
     if (changedPaths.has(request.path) && request.line === undefined) {
@@ -226,7 +240,7 @@ function PanelBody({
     setFileLine(request.line);
     setPanel((p) => openSurface(p, fileSurface(request.path!)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [request?.nonce]);
+  }, [request?.nonce, changes, changesError]);
 
   const selectFile = useCallback((path: string) => {
     setFileLine(undefined);
@@ -416,9 +430,8 @@ export function Panel(props: PanelProps) {
     window.addEventListener("pointerup", onUp);
   }, []);
 
-  if (!props.open) return null;
-
   if (!isDesktop) {
+    if (!props.open) return null;
     return (
       <Sheet open onOpenChange={(v) => !v && props.onClose()}>
         <SheetContent
@@ -448,7 +461,13 @@ export function Panel(props: PanelProps) {
       // Expanded, the panel is the content area: the main column hides and
       // this fills what is left beside the sidebar.
       style={props.expanded ? undefined : { width }}
-      className={cn("relative flex flex-col border-l", props.expanded ? "min-w-0 flex-1" : "shrink-0")}
+      className={cn(
+        "relative flex flex-col border-l",
+        props.expanded ? "min-w-0 flex-1" : "shrink-0",
+        // Hidden, not unmounted: unmounting would hang up every terminal's
+        // shell, and hiding the panel is not closing its tabs.
+        !props.open && "hidden",
+      )}
       aria-label="Session panel"
     >
       {!props.expanded && (

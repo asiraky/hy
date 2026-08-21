@@ -145,8 +145,13 @@ export function DiffSurface({
   diffRef.current = loadDiff;
 
   // A new change list describes a worktree that has moved on; every diff read
-  // against the old one is stale.
+  // against the old one is stale. The generation is what keeps an in-flight
+  // read from before the refresh from overwriting one made after it — merely
+  // checking `requested` would accept the stale answer the moment the same
+  // path was asked for again.
+  const generation = useRef(0);
   useEffect(() => {
+    generation.current++;
     requested.current.clear();
     setDiffs({});
   }, [changes]);
@@ -155,12 +160,15 @@ export function DiffSurface({
     setExpanded((current) => (current === path && !forceOpen ? null : path));
     if (requested.current.has(path)) return;
     requested.current.add(path);
+    const mine = generation.current;
     setDiffs((d) => ({ ...d, [path]: { loading: true } }));
     void diffRef.current(path)
       .then((diff) => {
-        setDiffs((d) => (requested.current.has(path) ? { ...d, [path]: { diff, loading: false } } : d));
+        if (mine !== generation.current) return;
+        setDiffs((d) => ({ ...d, [path]: { diff, loading: false } }));
       })
       .catch((e) => {
+        if (mine !== generation.current) return;
         requested.current.delete(path);
         setDiffs((d) => ({
           ...d,

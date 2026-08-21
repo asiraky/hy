@@ -24,10 +24,10 @@ func rawSDK(t *testing.T, v any) map[string]json.RawMessage {
 
 func newTestSession() *session {
 	return &session{
-		events: make(chan proto.Emission, 256),
-		done:   make(chan struct{}),
-		blocks: map[int]*block{},
-		model:  "claude-sonnet-test",
+		events:  make(chan proto.Emission, 256),
+		done:    make(chan struct{}),
+		streams: map[string]*stream{},
+		model:   "claude-sonnet-test",
 	}
 }
 

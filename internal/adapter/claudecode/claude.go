@@ -245,7 +245,7 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 		stdin:            stdin,
 		harnessSessionID: sessionID,
 		events:           make(chan proto.Emission, 256),
-		blocks:           map[int]*block{},
+		streams:          map[string]*stream{},
 		done:             make(chan struct{}),
 	}
 	s.conn = jsonrpc.NewConn(stdout, stdin, s.handleRequest, s.handleNotification)
@@ -268,6 +268,15 @@ type block struct {
 	name    string
 }
 
+// stream is one message stream's state. There can be several at once: the main
+// conversation, plus one per running subagent, each keyed by the Task call
+// that spawned it — parallel Tasks interleave their events, and a shared block
+// map would let one agent's message_start reset another's mid-flight.
+type stream struct {
+	messageID string
+	blocks    map[int]*block
+}
+
 type session struct {
 	host  adapter.HostServices
 	cmd   *exec.Cmd
@@ -282,8 +291,7 @@ type session struct {
 
 	mu        sync.Mutex
 	turnID    string
-	messageID string
-	blocks    map[int]*block
+	streams   map[string]*stream
 	sawResult bool
 	model     string
 
@@ -639,8 +647,7 @@ func (s *session) handleStreamEvent(msg map[string]json.RawMessage) {
 	switch ev.Type {
 	case "message_start":
 		s.mu.Lock()
-		s.messageID = ev.Message.ID
-		s.blocks = map[int]*block{}
+		s.streams[parent] = &stream{messageID: ev.Message.ID, blocks: map[int]*block{}}
 		s.mu.Unlock()
 
 	case "content_block_start":
@@ -649,14 +656,19 @@ func (s *session) handleStreamEvent(msg map[string]json.RawMessage) {
 		// never carry an empty turn id.
 		turn := s.ensureTurn()
 		s.mu.Lock()
+		st := s.streams[parent]
+		if st == nil {
+			st = &stream{blocks: map[int]*block{}}
+			s.streams[parent] = st
+		}
 		b := &block{kind: ev.ContentBlock.Type}
 		switch ev.ContentBlock.Type {
 		case "text", "thinking":
-			b.blockID = fmt.Sprintf("%s:%d", s.messageID, ev.Index)
+			b.blockID = fmt.Sprintf("%s:%d", st.messageID, ev.Index)
 		case "tool_use":
 			b.toolID, b.name = ev.ContentBlock.ID, ev.ContentBlock.Name
 		}
-		s.blocks[ev.Index] = b
+		st.blocks[ev.Index] = b
 		s.mu.Unlock()
 
 		if ev.ContentBlock.Type == "tool_use" {
@@ -672,7 +684,10 @@ func (s *session) handleStreamEvent(msg map[string]json.RawMessage) {
 
 	case "content_block_delta":
 		s.mu.Lock()
-		b := s.blocks[ev.Index]
+		var b *block
+		if st := s.streams[parent]; st != nil {
+			b = st.blocks[ev.Index]
+		}
 		s.mu.Unlock()
 		if b == nil {
 			return
