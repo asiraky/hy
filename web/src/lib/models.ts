@@ -116,3 +116,18 @@ export function resolveInstance(
 export function isLegacy(model: ModelMeta): boolean {
   return model.group === LEGACY_GROUP;
 }
+
+/**
+ * Formats a context-window token count as a compact label ("1M", "200k"). It
+ * is a fact of the model rather than a knob — Claude Code fixes the window per
+ * model — so it is stated next to the model, never offered as a choice.
+ */
+export function formatContextWindow(tokens: number | undefined): string {
+  if (!tokens || tokens <= 0) return "";
+  if (tokens >= 1_000_000) {
+    const m = tokens / 1_000_000;
+    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
+  }
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
+  return String(tokens);
+}
