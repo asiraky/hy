@@ -25,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "./components/ui/select";
+import { loadResume } from "./resume";
 import { cn } from "./lib/utils";
 import { CoffeeIcon, FileDiffIcon, MessagesSquareIcon, PanelLeftIcon, PlusIcon, SettingsIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -37,21 +38,37 @@ const LAST_SESSION = "hy.lastSession";
 const SHOW_MODE_SWITCHER = false;
 
 export function App() {
+  // The snapshot a previous page of this tab saved as it went to background
+  // (resume.ts). A mobile browser discards a backgrounded tab and reloads it
+  // on return; hydrating from the cache paints the session as it was left —
+  // right frame one, right scroll position — instead of "Attaching…", and the
+  // socket then fetches only what the page missed. Cleared once consumed, and
+  // if the session turns out to be gone when the list arrives.
+  const [resume, setResume] = useState(() => {
+    try {
+      return loadResume(localStorage.getItem(LAST_SESSION));
+    } catch {
+      return null;
+    }
+  });
+  // The copy the socket-setup effect reads: priming must use what the page
+  // hydrated with, not what later clearing left behind.
+  const resumeRef = useRef(resume);
   // The socket callbacks below outlive any single render, so they read the
   // attached session from a ref rather than a captured closure. The ref is
   // written after commit, never during render, so it can only ever hold a
   // value the UI actually rendered.
-  const activeRef = useRef<string | null>(null);
+  const activeRef = useRef<string | null>(resume?.state.sessionId ?? null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [harnesses, setHarnesses] = useState<HarnessMeta[]>([]);
   const [defaultCwd, setDefaultCwd] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [state, setState] = useState<SessionState | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(resume?.state.sessionId ?? null);
+  const [state, setState] = useState<SessionState | null>(resume?.state ?? null);
   // Read by long-lived callbacks (openPath) that must see the current state
   // without re-creating themselves on every event.
-  const stateRef = useRef<SessionState | null>(null);
+  const stateRef = useRef<SessionState | null>(resume?.state ?? null);
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
@@ -178,6 +195,10 @@ export function App() {
       onAccess: setAccess,
     });
     clientRef.current = client;
+    // A resumed page attaches where it left off: the client carries the
+    // cached state and cursor into its first attach, and the server answers
+    // with just the gap.
+    if (resumeRef.current) client.prime(resumeRef.current.state);
     client.connect();
     return () => client.close();
   }, []);
@@ -195,7 +216,20 @@ export function App() {
   useEffect(() => {
     if (!sessionsLoaded || restoreAttempted.current) return;
     restoreAttempted.current = true;
-    if (activeId) return;
+    if (activeId) {
+      // Hydrated from the resume cache before the list could say whether the
+      // session still exists. It usually does; when it doesn't — deleted or
+      // closed from elsewhere while the page was dead — let go the same way
+      // a live delete would. The seenActive effect below can't: it only acts
+      // on sessions it saw in a list first.
+      if (sessions.some((s) => s.id === activeId && s.phase !== "closed")) return;
+      setActiveId(null);
+      setState(null);
+      setResume(null);
+      clientRef.current?.detach();
+      if (!isDesktop) setSidebarOpen(true);
+      return;
+    }
     const last = localStorage.getItem(LAST_SESSION);
     const pick = sessions.find((s) => s.id === last && s.phase !== "closed") ?? null;
     if (pick) select(pick.id);
@@ -526,6 +560,13 @@ export function App() {
   // visibly rises: it reads as the composer pushing the transcript up, even
   // though it is floating.
   const hasSession = state != null;
+  // The resume cache is one boot's worth of help. The Transcript captures the
+  // restored scroll as it mounts, so once a session is on screen the blob has
+  // done its job — and holding it longer would hand a stale position to the
+  // next transcript that mounts for the same session.
+  useEffect(() => {
+    if (resume && hasSession) setResume(null);
+  }, [resume, hasSession]);
   useEffect(() => {
     if (!hasSession || typeof ResizeObserver === "undefined") return;
     const overlay = overlayRef.current;
@@ -650,7 +691,7 @@ export function App() {
             <div className="from-background pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-gradient-to-b to-transparent" />
 
             <OpenPathContext.Provider value={openPath}>
-              <Transcript state={state} onContinue={()=>activeId&&clientRef.current?.command("continue_session",{sessionId:activeId})} onRetryProvision={()=>activeId&&clientRef.current?.command("retry_provision",{sessionId:activeId})} onCleanup={()=>activeId&&clientRef.current?.command("cleanup_session",{sessionId:activeId})} onForceDelete={()=>activeId&&forceDelete(activeId)} onOpenDiff={openDiff} />
+              <Transcript state={state} initialScroll={resume && activeId === resume.state.sessionId ? { top: resume.scrollTop, atBottom: resume.atBottom } : undefined} onContinue={()=>activeId&&clientRef.current?.command("continue_session",{sessionId:activeId})} onRetryProvision={()=>activeId&&clientRef.current?.command("retry_provision",{sessionId:activeId})} onCleanup={()=>activeId&&clientRef.current?.command("cleanup_session",{sessionId:activeId})} onForceDelete={()=>activeId&&forceDelete(activeId)} onOpenDiff={openDiff} />
             </OpenPathContext.Provider>
 
             {/* The mirror of the header fade: content dissolves into the

@@ -13,6 +13,7 @@ let events: ClientEvents;
 const command = vi.fn(async (_name: string, _args: unknown) => ({}) as any);
 const attach = vi.fn();
 const detach = vi.fn();
+const prime = vi.fn();
 const toast = vi.hoisted(() => ({ error: vi.fn(), info: vi.fn() }));
 
 vi.mock("sonner", () => ({ toast }));
@@ -30,6 +31,7 @@ vi.mock("./client", () => ({
     detach = detach;
     attach = attach;
     command = command;
+    prime = prime;
   },
 }));
 
@@ -70,10 +72,12 @@ const sidebarShowing = () => document.querySelector("[data-slot=sheet-content]")
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
   Element.prototype.scrollIntoView = vi.fn();
   command.mockClear();
   attach.mockClear();
   detach.mockClear();
+  prime.mockClear();
   toast.error.mockClear();
   toast.info.mockClear();
 });
@@ -648,5 +652,63 @@ describe("losing the attached session", () => {
     await act(async () => events.onSessions([session("a")]));
     expect(detach).not.toHaveBeenCalled();
     expect(sidebarShowing()).toBe(false);
+  });
+});
+
+describe("resuming after a tab discard", () => {
+  const seed = (id: string) => {
+    localStorage.setItem("hy.lastSession", id);
+    sessionStorage.setItem(
+      "hy.resume",
+      JSON.stringify({ build: "dev", state: state(id, "default"), scrollTop: 120, atBottom: false }),
+    );
+  };
+
+  it("paints the cached session immediately, with no Attaching…", async () => {
+    viewport("phone");
+    seed("a");
+    render(<App />);
+
+    // Before any frame from the server: the transcript is up, the header
+    // names the session, and nothing says "Attaching…".
+    expect(screen.queryByText("Attaching…")).toBeNull();
+    expect(screen.getByText("Session a")).toBeTruthy();
+    expect(sidebarShowing()).toBe(false);
+
+    // The client was handed the cached state so its first attach carries a
+    // cursor and the server replays only the gap.
+    expect(prime).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "a", seq: 1 }));
+
+    // The list confirming the session exists changes nothing.
+    await act(async () => events.onSessions([session("a")]));
+    expect(detach).not.toHaveBeenCalled();
+    expect(screen.getByText("Session a")).toBeTruthy();
+  });
+
+  it("lets go when the list reveals the session is gone", async () => {
+    viewport("phone");
+    seed("a");
+    render(<App />);
+    expect(screen.getByText("Session a")).toBeTruthy();
+
+    // Deleted from elsewhere while the page was dead: released like a live
+    // delete, and the phone lands back on the sidebar.
+    await act(async () => events.onSessions([session("b")]));
+    expect(detach).toHaveBeenCalled();
+    expect(sidebarShowing()).toBe(true);
+  });
+
+  it("ignores a cache written by a different bundle", async () => {
+    viewport("phone");
+    localStorage.setItem("hy.lastSession", "a");
+    sessionStorage.setItem(
+      "hy.resume",
+      JSON.stringify({ build: "other", state: state("a", "default"), scrollTop: 0, atBottom: true }),
+    );
+    render(<App />);
+    expect(prime).not.toHaveBeenCalled();
+    // The cold path instead: restore once the list arrives.
+    await act(async () => events.onSessions([session("a")]));
+    expect(attach).toHaveBeenCalledWith("a");
   });
 });
