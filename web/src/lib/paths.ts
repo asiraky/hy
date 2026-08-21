@@ -15,14 +15,45 @@ export interface DetectedPath {
 // of these, with no slash and no line anchor, is a domain being mentioned, not
 // a file.
 const TLDS = new Set([
-  "com", "org", "net", "io", "dev", "app", "ai", "co", "edu", "gov", "info",
-  "biz", "xyz", "me", "tv", "sh", "gg", "au", "uk", "de", "fr", "jp", "nz",
+  "com",
+  "org",
+  "net",
+  "io",
+  "dev",
+  "app",
+  "ai",
+  "co",
+  "edu",
+  "gov",
+  "info",
+  "biz",
+  "xyz",
+  "me",
+  "tv",
+  "sh",
+  "gg",
+  "au",
+  "uk",
+  "de",
+  "fr",
+  "jp",
+  "nz",
 ]);
 
 // Extensionless names that are files anyway.
 const BARE_FILES = new Set([
-  "makefile", "dockerfile", "rakefile", "gemfile", "justfile", "procfile",
-  "readme", "license", "codeowners", "changelog", "contributing", "authors",
+  "makefile",
+  "dockerfile",
+  "rakefile",
+  "gemfile",
+  "justfile",
+  "procfile",
+  "readme",
+  "license",
+  "codeowners",
+  "changelog",
+  "contributing",
+  "authors",
 ]);
 
 // Everything a path may be made of. Spaces, backticks and most punctuation
@@ -70,8 +101,28 @@ export function detectPath(raw: string): DetectedPath | null {
   const dot = base.lastIndexOf(".");
   const ext = dot > 0 ? base.slice(dot + 1).toLowerCase() : "";
 
+  // A slash command or skill (`/code-review`, `/loop`): one leading slash, one
+  // segment, no extension and no line anchor. Real absolute paths worth
+  // opening have a directory above the file (`/etc/hosts`, `/Users/...`), so
+  // requiring a second segment costs nothing and stops every `/skill` mention
+  // from rendering as a file chip.
+  const bareName =
+    BARE_FILES.has(base.toLowerCase()) ||
+    BARE_FILES.has(base.toLowerCase().replace(/\.(md|txt|rst)$/, ""));
+  if (
+    absolute &&
+    !text.slice(1).includes("/") &&
+    ext === "" &&
+    line === undefined &&
+    !trailingSlash &&
+    !bareName
+  ) {
+    return null;
+  }
+
   // A domain: dotted, slashless, anchorless, ending in a TLD.
-  if (!hasSlash && line === undefined && ext !== "" && TLDS.has(ext)) return null;
+  if (!hasSlash && line === undefined && ext !== "" && TLDS.has(ext))
+    return null;
 
   // The admission rule: a path prefix, or an extension, or a line anchor, or a
   // known bare filename. A bare word (`filter`, `main`) is none of these.
@@ -87,16 +138,21 @@ export function detectPath(raw: string): DetectedPath | null {
     // explicit relative/absolute prefix (`./scripts/build`, `/usr/bin/dev`).
     // The extension must sit on the basename, so a dotted hostname segment
     // (`github.com/asiraky/hy`) does not masquerade as one.
-    const hasExt = ext !== "" && /^[a-z0-9]{1,10}$/.test(ext) && !/^\d+$/.test(ext);
-    const knownBare =
-      BARE_FILES.has(base.toLowerCase()) ||
-      BARE_FILES.has(base.toLowerCase().replace(/\.(md|txt|rst)$/, ""));
-    if (!hasExt && !knownBare && line === undefined && !trailingSlash && !explicitRel && !absolute) {
+    const hasExt =
+      ext !== "" && /^[a-z0-9]{1,10}$/.test(ext) && !/^\d+$/.test(ext);
+    if (
+      !hasExt &&
+      !bareName &&
+      line === undefined &&
+      !trailingSlash &&
+      !explicitRel &&
+      !absolute
+    ) {
       return null;
     }
     return { path: text, line };
   }
-  if (BARE_FILES.has(base.toLowerCase()) || BARE_FILES.has(base.toLowerCase().replace(/\.(md|txt|rst)$/, ""))) {
+  if (bareName) {
     return { path: text, line };
   }
   if (ext !== "" && /^[a-z0-9]{1,10}$/.test(ext) && !/^\d+$/.test(ext)) {
