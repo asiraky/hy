@@ -261,15 +261,19 @@ function MessageMeta({ item }: { item: Item }) {
   };
 
   return (
-    <div className="text-muted-foreground -mt-2 flex items-center gap-1.5 text-[10px] opacity-60 transition-opacity md:opacity-0 md:group-hover:opacity-60 md:group-focus-within:opacity-60">
+    <div className="text-muted-foreground flex items-center gap-1.5 text-[13px] opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
       {time && <span className="font-mono">{time}</span>}
       <button
         type="button"
         onClick={copy}
         aria-label="Copy message"
-        className="hover:text-foreground focus-visible:ring-ring flex cursor-pointer items-center gap-1 rounded-sm outline-none focus-visible:ring-2"
+        className="hover:text-foreground focus-visible:ring-ring flex cursor-pointer items-center gap-1 rounded-md px-1 py-0.5 outline-none focus-visible:ring-2"
       >
-        {copied ? <CheckIcon className="text-success size-3" /> : <CopyIcon className="size-3" />}
+        {copied ? (
+          <CheckIcon className="text-success size-3.5" />
+        ) : (
+          <CopyIcon className="size-3.5" />
+        )}
         {copied ? "copied" : "copy"}
       </button>
     </div>
