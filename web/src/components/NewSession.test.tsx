@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { render, viewport } from "~/test/harness";
@@ -98,6 +98,84 @@ describe("NewSession", () => {
       expect(b.className).toContain("md:size-9");
       expect(b.className).not.toContain("md:size-8");
     }
+  });
+
+  it("starts a bypass session with no confirmation of any kind", async () => {
+    // Bypass is a value in a dropdown, not a decision to re-litigate: picking
+    // it once (here, as the project default) is the whole opt-in.
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirm);
+    const onCreate = vi.fn(async () => {});
+    open({
+      projects: [
+        {
+          ...project,
+          config: {
+            ...project.config,
+            // "local" keeps the workspace choice out of it: this test is about
+            // the permission mode, and the main checkout is the one choice
+            // that needs nothing else named before Start is live.
+            defaults: {
+              ...project.config.defaults,
+              mode: "bypassPermissions",
+              workspace: "local",
+            },
+          },
+        } as unknown as Project,
+      ],
+      harnesses: [
+        {
+          ...harness,
+          permissionModes: [
+            { id: "default", label: "Default", default: true },
+            { id: "bypassPermissions", label: "Bypass", description: "Skip all permission checks" },
+          ],
+        } as unknown as HarnessMeta,
+      ],
+      onCreate,
+    });
+
+    const start = await screen.findByRole("button", { name: "Start" });
+    // The workspace listing lands a tick later; Start is disabled until it has.
+    await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false));
+    await act(async () => {
+      fireEvent.click(start);
+    });
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "bypassPermissions" }),
+    );
+  });
+
+  it("gives the bypass mode the same plain treatment as every other mode", () => {
+    const withModes = {
+      ...harness,
+      permissionModes: [
+        { id: "default", label: "Default", default: true },
+        { id: "bypassPermissions", label: "Bypass", description: "Skip all permission checks" },
+      ],
+    } as unknown as HarnessMeta;
+    const withDefault = (mode: string) =>
+      ({
+        ...project,
+        config: { ...project.config, defaults: { ...project.config.defaults, mode } },
+      }) as unknown as Project;
+
+    open({ projects: [withDefault("default")], harnesses: [withModes] });
+    const plain = screen.getByRole("combobox", { name: /Permissions/ }).className;
+    const plainText = surface().textContent ?? "";
+    cleanup();
+
+    open({ projects: [withDefault("bypassPermissions")], harnesses: [withModes] });
+    const bypass = screen.getByRole("combobox", { name: /Permissions/ });
+    // No warning colour, no badge, no extra copy: the control renders the same
+    // whichever mode is selected. Only the label and description differ.
+    expect(bypass.className).toBe(plain);
+    expect(bypass.textContent).toBe("Bypass");
+    expect((surface().textContent ?? "").replace("BypassSkip all permission checks", "")).toBe(
+      plainText.replace("Default", ""),
+    );
   });
 
   it("writes branch names in the interface font, not a terminal one", async () => {

@@ -318,20 +318,12 @@ export function App() {
   const switchMode = useCallback(
     (modeId: string) => {
       if (!activeId) return;
-      const m = modeOptions.find((x) => x.id === modeId);
-      if (
-        m?.danger &&
-        !window.confirm(
-          `Switch this session to "${m.label}"?\n\n${m.description ?? ""}\n\nThe agent will act without asking you first.`,
-        )
-      ) {
-        return;
-      }
+      // Every mode switches the same way: the picked value is the decision.
       clientRef.current?.command("set_mode", { sessionId: activeId, mode: modeId }).catch((e) => {
         toast.error("Could not switch permission mode", { description: e.message });
       });
     },
-    [activeId, modeOptions],
+    [activeId],
   );
   const accentOf = useCallback(
     (id: string) => harnesses.find((h) => h.id === id)?.accent,
