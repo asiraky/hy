@@ -39,7 +39,7 @@ export interface ToolContent {
 
 export interface Item {
   id: string;
-  kind: "message" | "tool";
+  kind: "message" | "tool" | "notice";
   turnId?: string;
   /** When the item's first event landed, in millis. Display metadata only. */
   receivedAt?: number;
@@ -51,6 +51,12 @@ export interface Item {
   status?: ToolStatus;
   input?: unknown;
   content?: ToolContent[];
+  // notice
+  noticeKind?: "compaction";
+  /** For a compaction notice: whether the harness ("auto") or a human triggered it. */
+  trigger?: string;
+  preTokens?: number;
+  postTokens?: number;
 }
 
 /** One file the session changed, aggregated across the whole session. */
@@ -159,12 +165,22 @@ export interface Usage {
   cacheRead: number;
   cacheWrite: number;
   cost: number;
-  /** How full the context window is, 0–100. Absent when the harness cannot say. */
+  /** How full the context window is, 0–100+ (unclamped). Absent when the harness cannot say. */
   contextPct?: number;
   /** Tokens currently in the context window. */
   contextUsed?: number;
-  /** The model's context window size in tokens. */
+  /** The window occupancy is measured against — the auto-compaction window. */
   contextWindow?: number;
+  /** The model's full context window, when it is larger than contextWindow
+   *  (i.e. auto-compaction runs against a tighter boundary). */
+  contextLimit?: number;
+  /** Whether the harness compacts automatically as the window fills. When
+   *  false, the window is a hard limit and no compaction will happen. */
+  autoCompact?: boolean;
+  /** The token count at which auto-compaction triggers, when reported. */
+  autoCompactThreshold?: number;
+  /** Per-category breakdown of what occupies the window, for a segmented bar. */
+  contextCategories?: { name: string; tokens: number }[];
 }
 
 export interface PlanEntry {

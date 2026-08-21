@@ -35,3 +35,4 @@ coverage/
 *.coverprofile
 .DS_Store
 *.swp
+.worktree-scratch/
