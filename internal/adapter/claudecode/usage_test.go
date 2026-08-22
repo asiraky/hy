@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/asiraky/hy/internal/proto"
+	"github.com/asiraky/omniplex/internal/proto"
 )
 
 // rawSDK turns a value into the map[string]json.RawMessage shape the SDK-message

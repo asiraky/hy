@@ -141,7 +141,7 @@ export function detectPath(raw: string): DetectedPath | null {
     // anchor, an explicit directory (trailing slash, `web/src/`), or an
     // explicit relative/absolute prefix (`./scripts/build`, `/usr/bin/dev`).
     // The extension must sit on the basename, so a dotted hostname segment
-    // (`github.com/asiraky/hy`) does not masquerade as one.
+    // (`github.com/asiraky/omniplex`) does not masquerade as one.
     const hasExt =
       ext !== "" && /^[a-z0-9]{1,10}$/.test(ext) && !/^\d+$/.test(ext);
     if (

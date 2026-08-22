@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/asiraky/hy/internal/proto"
-	"github.com/asiraky/hy/internal/store"
+	"github.com/asiraky/omniplex/internal/proto"
+	"github.com/asiraky/omniplex/internal/store"
 )
 
 // fakeGh puts a `gh` on PATH ahead of any real one. The script writes the

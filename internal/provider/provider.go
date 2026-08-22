@@ -4,7 +4,7 @@
 // adapter uses the ambient environment, which is the single-account case and
 // needs no configuration.
 //
-// Instances are declared in the user config file (~/.hy/config.json) under
+// Instances are declared in the user config file (~/.omniplex/config.json) under
 // "providers". Each entry is held raw and written back verbatim, so a config
 // authored on a branch that knows a driver this build does not still loads,
 // presents as unavailable, and loses nothing on rewrite.

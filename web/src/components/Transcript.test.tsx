@@ -59,7 +59,7 @@ describe("copying an agent message", () => {
     expect(writeText).toHaveBeenCalledWith("# Title\n\n**bold** and `code`");
   });
 
-  // hy is routinely reached over plain http on a LAN address, which is not a
+  // omniplex is routinely reached over plain http on a LAN address, which is not a
   // secure context: there is no `navigator.clipboard` there at all. The copy
   // has to happen anyway rather than dying silently under a thumb.
   it("still copies with no clipboard API — an http origin on a phone", () => {

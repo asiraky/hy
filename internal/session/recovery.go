@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/asiraky/hy/internal/projection"
-	"github.com/asiraky/hy/internal/proto"
+	"github.com/asiraky/omniplex/internal/projection"
+	"github.com/asiraky/omniplex/internal/proto"
 )
 
 // ErrNothingToContinue is returned when a continue arrives for a session whose
@@ -33,7 +33,7 @@ const maxRecoveryAttempts = 3
 // state of the conversation. The harness repairs its own transcript on resume
 // (an interrupted tool call is closed off before the next request), so what
 // the agent cannot know is which of its side effects actually landed.
-const recoveryPrompt = "[hy] The hy server restarted and interrupted your previous turn. " +
+const recoveryPrompt = "[omniplex] The omniplex server restarted and interrupted your previous turn. " +
 	"Any tool call that was in flight did not report its result back, so you cannot assume it succeeded or failed. " +
 	"Check the real state of the work first — the files, the diff, whatever you had just run — then continue from where you left off. " +
 	"Do not redo work that is already done, and do not start over."

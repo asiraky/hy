@@ -1,4 +1,4 @@
-// Package project defines the portable project configuration edited by hy.
+// Package project defines the portable project configuration edited by omniplex.
 package project
 
 import (
@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const ConfigPath = ".hy/project.json"
+const ConfigPath = ".omniplex/project.json"
 
 type Defaults struct {
 	Harness    string `json:"harness,omitempty"`
@@ -113,7 +113,7 @@ func Save(root string, cfg Config) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	dir := filepath.Join(root, ".hy")
+	dir := filepath.Join(root, ".omniplex")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return cfg, err
 	}

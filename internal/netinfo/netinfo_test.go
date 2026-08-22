@@ -90,7 +90,7 @@ func TestPlanAlwaysBindsSomething(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(plan.Addrs) == 0 {
-		t.Fatal("the plan bound no addresses; the operator could not reach hy at all")
+		t.Fatal("the plan bound no addresses; the operator could not reach omniplex at all")
 	}
 	var loopback bool
 	for _, a := range plan.Addrs {

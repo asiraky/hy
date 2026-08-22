@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/asiraky/hy/internal/project"
+	"github.com/asiraky/omniplex/internal/project"
 )
 
 // The config held against a project is a cache of the file in the repo, so a
-// pull that changes .hy/project.json has to take effect without the operator
+// pull that changes .omniplex/project.json has to take effect without the operator
 // removing and re-adding the project.
 func TestReloadProjectsTakesTheFileOverTheCache(t *testing.T) {
 	root, _, _ := gitRepo(t)
@@ -19,11 +19,11 @@ func TestReloadProjectsTakesTheFileOverTheCache(t *testing.T) {
 	mgr := NewManager(st, func(string, ...any) {}, &fakeAdapter{})
 	defer mgr.Shutdown()
 
-	if err := os.MkdirAll(filepath.Join(root, ".hy"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, ".omniplex"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cfg := project.DefaultConfig(root)
-	cfg.Workspace.Provision = "scripts/hy-provision.mjs"
+	cfg.Workspace.Provision = "scripts/omniplex-provision.mjs"
 	cfg.Defaults.BaseBranch = "main"
 	if err := os.WriteFile(filepath.Join(root, project.ConfigPath), mustJSON(t, cfg), 0o644); err != nil {
 		t.Fatal(err)
@@ -36,7 +36,7 @@ func TestReloadProjectsTakesTheFileOverTheCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Config.Workspace.Provision != "scripts/hy-provision.mjs" {
+	if got.Config.Workspace.Provision != "scripts/omniplex-provision.mjs" {
 		t.Fatalf("provision hook is %q, want the one from the file", got.Config.Workspace.Provision)
 	}
 	if got.Config.Defaults.BaseBranch != "main" {

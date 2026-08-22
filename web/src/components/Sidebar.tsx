@@ -52,7 +52,7 @@ function ago(ms: number) {
   return `${Math.floor(s / 86400)}d`;
 }
 
-const WIDTH_KEY = "hy.sidebarWidth";
+const WIDTH_KEY = "omniplex.sidebarWidth";
 const MIN_WIDTH = 208;
 const MAX_WIDTH = 480;
 const DEFAULT_WIDTH = 288;
@@ -76,7 +76,7 @@ interface SidebarProps {
   // Supplied by the server via the adapter; the sidebar knows no harness names.
   accentOf: (harness: string) => string | undefined;
   projectName: (id?: string) => string | undefined;
-  /** The project's own checkout, which is never a worktree hy may remove. */
+  /** The project's own checkout, which is never a worktree omniplex may remove. */
   projectRoot: (id?: string) => string | undefined;
 }
 
@@ -345,7 +345,7 @@ function SidebarPanel({
           offers. Branding and the status dot earn no space up here — the dot
           lives in the footer, still one click from the access panel. */}
       <div className="flex items-center gap-2 px-3 pt-[calc(0.5rem+env(safe-area-inset-top))] pb-1.5">
-        <span className="flex-1 px-1.5 font-mono text-sm font-semibold tracking-tight">hy</span>
+        <span className="flex-1 px-1.5 font-mono text-sm font-semibold tracking-tight">Omniplex</span>
         <IconButton label="New session" onClick={props.onNew} className="text-muted-foreground hover:text-foreground">
           <PlusIcon />
         </IconButton>

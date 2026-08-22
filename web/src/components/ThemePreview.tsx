@@ -251,9 +251,9 @@ const PALETTES: Palette[] = [
 ];
 
 const FAKE_SESSIONS = [
-  { harness: "claude", title: "Fix the flaky websocket test", project: "hy", branch: "feature/ws-retry", ago: "2m", active: true },
+  { harness: "claude", title: "Fix the flaky websocket test", project: "omniplex", branch: "feature/ws-retry", ago: "2m", active: true },
   { harness: "codex", title: "Add CSV export to reports", project: "reports", branch: "main", ago: "1h", active: false },
-  { harness: "claude", title: "Untitled", project: "hy", branch: "feature/theme-page", ago: "3h", active: false },
+  { harness: "claude", title: "Untitled", project: "omniplex", branch: "feature/theme-page", ago: "3h", active: false },
 ];
 
 export function ThemePreview() {
@@ -293,7 +293,7 @@ export function ThemePreview() {
       {/* ---- Fake sidebar ---- */}
       <aside className="bg-sidebar text-sidebar-foreground flex w-72 shrink-0 flex-col border-r" style={{ borderColor: "var(--sidebar-border)" }}>
         <div className="flex items-center gap-2 px-3 pt-2 pb-1.5">
-          <span className="flex-1 px-1.5 font-mono text-sm font-semibold tracking-tight">hy</span>
+          <span className="flex-1 px-1.5 font-mono text-sm font-semibold tracking-tight">Omniplex</span>
           <span className="text-muted-foreground flex size-8 items-center justify-center">
             <PlusIcon className="size-4" />
           </span>

@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/asiraky/hy/internal/adapter"
-	"github.com/asiraky/hy/internal/projection"
-	"github.com/asiraky/hy/internal/proto"
-	"github.com/asiraky/hy/internal/userconfig"
+	"github.com/asiraky/omniplex/internal/adapter"
+	"github.com/asiraky/omniplex/internal/projection"
+	"github.com/asiraky/omniplex/internal/proto"
+	"github.com/asiraky/omniplex/internal/userconfig"
 )
 
 // summaryTimeout bounds one summarisation. It is generous because the cost is
@@ -51,7 +51,7 @@ type SessionSummary struct {
 //
 // It runs against the harness that did the work, under that session's provider
 // instance, so the summary is billed to the account that owns the conversation
-// and needs no credential hy does not already hold. The adapter picks the
+// and needs no credential omniplex does not already hold. The adapter picks the
 // model: "fastest thing this harness offers" is knowledge that belongs beside
 // the harness, not here.
 func (m *Manager) SummarizeSession(ctx context.Context, sessionID string) (SessionSummary, error) {

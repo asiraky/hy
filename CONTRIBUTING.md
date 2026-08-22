@@ -1,6 +1,6 @@
-# Contributing to hy
+# Contributing to Omniplex
 
-Thanks for helping improve hy.
+Thanks for helping improve Omniplex.
 
 ## Before opening a change
 

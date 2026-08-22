@@ -3,13 +3,13 @@ package claudecode
 import (
 	"testing"
 
-	"github.com/asiraky/hy/internal/adapter"
-	"github.com/asiraky/hy/internal/proto"
+	"github.com/asiraky/omniplex/internal/adapter"
+	"github.com/asiraky/omniplex/internal/proto"
 )
 
 // The bug this file guards against: Claude Code rotates its conversation id in
 // place when the user runs /clear — a new conversation, under a new id, in the
-// same process. hy names the conversation at start and used to assume that
+// same process. omniplex names the conversation at start and used to assume that
 // name was forever, so after a /clear a server restart would resume the
 // *original* id: the cleared conversation came back from the dead, and the
 // live post-clear conversation (with everything the agent had asked since) was
@@ -21,7 +21,7 @@ import (
 // HarnessSessionID a later resume passes back.
 func TestSessionIDRotationIsReported(t *testing.T) {
 	s := newTestSession()
-	s.harnessSessionID = "hy-chose-this"
+	s.harnessSessionID = "omniplex-chose-this"
 
 	s.handleSDKMessage(rawSDK(t, map[string]any{
 		"type":       "system",
@@ -92,7 +92,7 @@ func TestSubagentMessagesDoNotRenameTheSession(t *testing.T) {
 }
 
 // Resume must continue the conversation the harness says this session is —
-// the rotated id when one was reported — and only fall back to hy's own name
+// the rotated id when one was reported — and only fall back to omniplex's own name
 // when the harness never spoke (sessions from before rotations were tracked).
 func TestConversationIDPrefersTheHarnessIDOnResume(t *testing.T) {
 	cases := []struct {
@@ -100,10 +100,10 @@ func TestConversationIDPrefersTheHarnessIDOnResume(t *testing.T) {
 		o    adapter.CreateOptions
 		want string
 	}{
-		{"fresh session uses hy's name", adapter.CreateOptions{SessionID: "hy-id"}, "hy-id"},
-		{"resume without a rotation uses hy's name", adapter.CreateOptions{SessionID: "hy-id", Resume: true}, "hy-id"},
-		{"resume after a rotation uses the rotated id", adapter.CreateOptions{SessionID: "hy-id", Resume: true, HarnessSessionID: "rotated"}, "rotated"},
-		{"a rotation never renames a fresh session", adapter.CreateOptions{SessionID: "hy-id", HarnessSessionID: "rotated"}, "hy-id"},
+		{"fresh session uses omniplex's name", adapter.CreateOptions{SessionID: "omniplex-id"}, "omniplex-id"},
+		{"resume without a rotation uses omniplex's name", adapter.CreateOptions{SessionID: "omniplex-id", Resume: true}, "omniplex-id"},
+		{"resume after a rotation uses the rotated id", adapter.CreateOptions{SessionID: "omniplex-id", Resume: true, HarnessSessionID: "rotated"}, "rotated"},
+		{"a rotation never renames a fresh session", adapter.CreateOptions{SessionID: "omniplex-id", HarnessSessionID: "rotated"}, "omniplex-id"},
 	}
 	for _, tc := range cases {
 		if got := conversationID(tc.o); got != tc.want {

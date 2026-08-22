@@ -3,7 +3,7 @@ package codexapp
 import (
 	"testing"
 
-	"github.com/asiraky/hy/internal/adapter"
+	"github.com/asiraky/omniplex/internal/adapter"
 )
 
 func effort(levels ...string) []struct {
@@ -45,7 +45,7 @@ func TestMapCodexModelsFoldsOlderGenerations(t *testing.T) {
 	}
 }
 
-// Codex flags its own default, so hy never has to guess which row to
+// Codex flags its own default, so omniplex never has to guess which row to
 // preselect — and must not invent an empty-id "Default" row of its own.
 func TestMapCodexModelsCarriesTheHarnessDefault(t *testing.T) {
 	got := mapCodexModels(liveRows())

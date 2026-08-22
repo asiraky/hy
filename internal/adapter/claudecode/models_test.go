@@ -3,7 +3,7 @@ package claudecode
 import (
 	"testing"
 
-	"github.com/asiraky/hy/internal/adapter"
+	"github.com/asiraky/omniplex/internal/adapter"
 )
 
 // The SDK's own rows, as observed from claude CLI 2.1.238 — including the twin

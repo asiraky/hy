@@ -18,7 +18,7 @@ import (
 func testBundle(assetName, script string) fstest.MapFS {
 	return fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte(
-			`<!doctype html><html><head><meta name="hy-build" content="dev" /></head>` +
+			`<!doctype html><html><head><meta name="omniplex-build" content="dev" /></head>` +
 				`<body><script type="module" src="/assets/` + assetName + `"></script></body></html>`)},
 		"assets/" + assetName: &fstest.MapFile{Data: []byte(script)},
 	}

@@ -18,11 +18,11 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
-	"github.com/asiraky/hy/internal/auth"
-	"github.com/asiraky/hy/internal/endpoints"
-	"github.com/asiraky/hy/internal/overlay"
-	"github.com/asiraky/hy/internal/session"
-	"github.com/asiraky/hy/internal/store"
+	"github.com/asiraky/omniplex/internal/auth"
+	"github.com/asiraky/omniplex/internal/endpoints"
+	"github.com/asiraky/omniplex/internal/overlay"
+	"github.com/asiraky/omniplex/internal/session"
+	"github.com/asiraky/omniplex/internal/store"
 )
 
 // Server exposes the sync protocol over WebSocket and a small HTTP API, and

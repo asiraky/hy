@@ -1,4 +1,4 @@
-module github.com/asiraky/hy
+module github.com/asiraky/omniplex
 
 go 1.25.0
 

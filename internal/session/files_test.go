@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/asiraky/hy/internal/proto"
-	"github.com/asiraky/hy/internal/store"
+	"github.com/asiraky/omniplex/internal/proto"
+	"github.com/asiraky/omniplex/internal/store"
 )
 
 // filesFixture is a session in a git worktree holding a committed file, an

@@ -21,9 +21,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/asiraky/hy/internal/adapter"
-	"github.com/asiraky/hy/internal/jsonrpc"
-	"github.com/asiraky/hy/internal/proto"
+	"github.com/asiraky/omniplex/internal/adapter"
+	"github.com/asiraky/omniplex/internal/jsonrpc"
+	"github.com/asiraky/omniplex/internal/proto"
 )
 
 // Adapter creates codex sessions.
@@ -80,7 +80,7 @@ func (a *Adapter) Probe(ctx context.Context, env map[string]string) adapter.Avai
 	})
 }
 
-// PermissionModes are hy's presets over Codex's two orthogonal axes (approval
+// PermissionModes are omniplex's presets over Codex's two orthogonal axes (approval
 // policy × sandbox) plus its reviewer selector. The ids are adapter-internal;
 // modeSettings maps them onto the app-server protocol. Codex has no single
 // "permission mode" — pretending it does would delete the modes that are the
@@ -181,7 +181,7 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 		CodexHome string `json:"codexHome"`
 	}
 	if err := s.conn.Call(ctx, "initialize", map[string]any{
-		"clientInfo":   map[string]any{"name": "hy", "version": "0.1.0"},
+		"clientInfo":   map[string]any{"name": "omniplex", "version": "0.1.0"},
 		"capabilities": map[string]any{},
 	}, &initRes); err != nil {
 		_ = s.Close()
@@ -255,7 +255,7 @@ type session struct {
 	closed sync.Once
 
 	mu sync.Mutex
-	// turnID is hy's own turn id, echoed onto emitted events. serverTurnID is
+	// turnID is omniplex's own turn id, echoed onto emitted events. serverTurnID is
 	// codex's id for the in-flight turn — turn/interrupt needs it, and it is not
 	// the same value as turnID.
 	turnID       string
@@ -444,12 +444,12 @@ func (s *session) currentTurn() string {
 }
 
 // ensureTurn returns the active turn id, opening a harness-initiated turn if
-// none is open. Codex can produce work hy never prompted — a queued follow-up,
+// none is open. Codex can produce work omniplex never prompted — a queued follow-up,
 // an auto-continuation — and that work is a real turn: without a turn.started
 // the session list and restart recovery both read the session as idle while
 // it is working. Mirrors the claude adapter's ensureTurn.
 // serverTurn is the codex-side turn id from the triggering notification, when
-// it carries one; recording it is what lets Cancel interrupt a turn hy never
+// it carries one; recording it is what lets Cancel interrupt a turn omniplex never
 // started. Empty is fine — the turn still opens, it just cannot be interrupted.
 func (s *session) ensureTurn(serverTurn string) string {
 	s.mu.Lock()
@@ -884,7 +884,7 @@ func (s *session) handleItem(completed bool, turn string, params json.RawMessage
 		return
 	}
 	it := p.Item
-	// open reports whether hy has this turn open; a completion arriving with
+	// open reports whether omniplex has this turn open; a completion arriving with
 	// no open turn is a straggler from after turn/completed. Labelling such
 	// events with codex's own turn id keeps the timeline coherent, but see the
 	// agentMessage case for the one event that must not go out at all.

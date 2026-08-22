@@ -239,7 +239,7 @@ function clientId(): string {
   // Safari throws on localStorage when the user has blocked storage, and a
   // throw here would escape the open handler and abandon the handshake. An
   // ephemeral id is a far better outcome than no connection.
-  const key = "hy.clientId";
+  const key = "omniplex.clientId";
   try {
     const existing = localStorage.getItem(key);
     if (existing) return existing;

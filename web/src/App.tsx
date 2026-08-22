@@ -33,7 +33,7 @@ import { cn } from "./lib/utils";
 import { CoffeeIcon, FileDiffIcon, MessagesSquareIcon, PanelLeftIcon, PlusIcon, SettingsIcon, SparklesIcon } from "lucide-react";
 import { toast } from "sonner";
 
-const LAST_SESSION = "hy.lastSession";
+const LAST_SESSION = "omniplex.lastSession";
 
 // The permission-mode switcher is parked, not removed: changing modes mid-chat
 // is not something we want to offer right now, and hiding it is cheaper to
@@ -508,14 +508,14 @@ export function App() {
   );
 
   const forceDelete = useCallback((id: string) => {
-    // Only a worktree hy provisioned is hy's to destroy, so only that case may
+    // Only a worktree omniplex provisioned is omniplex's to destroy, so only that case may
     // promise it. The old copy promised it to every session and kept the
     // promise for one of them.
     const removes = sessions.find((s) => s.id === id)?.workspaceMode === "managed";
     const accepted = window.confirm(
       removes
         ? "Tear down failed. Would you like to force delete?\n\nThis skips the teardown script, removes the recorded Git worktree, and permanently deletes the session."
-        : "Tear down failed. Would you like to force delete?\n\nThis skips the teardown script and permanently deletes the session. The checkout is left on disk — hy did not create it.",
+        : "Tear down failed. Would you like to force delete?\n\nThis skips the teardown script and permanently deletes the session. The checkout is left on disk — omniplex did not create it.",
     );
     if (!accepted) return;
     clientRef.current?.command("force_delete_session", { sessionId: id }).catch((e) => toast.error("Force delete failed", { description: e.message }));

@@ -9,13 +9,13 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/asiraky/hy/internal/project"
-	"github.com/asiraky/hy/internal/proto"
-	"github.com/asiraky/hy/internal/store"
+	"github.com/asiraky/omniplex/internal/project"
+	"github.com/asiraky/omniplex/internal/proto"
+	"github.com/asiraky/omniplex/internal/store"
 )
 
 // gitRepo builds a repository with one extra worktree, which is the shape the
-// picker exists to offer: a checkout hy did not create but can still attach to.
+// picker exists to offer: a checkout omniplex did not create but can still attach to.
 func gitRepo(t *testing.T) (root, worktree, branch string) {
 	t.Helper()
 	root = t.TempDir()
@@ -164,7 +164,7 @@ func TestCreateProjectAttachesToExistingWorktreeWithoutProvisioning(t *testing.T
 		t.Fatalf("branch is %q, want %q", meta.Branch, branch)
 	}
 
-	// The whole point of borrowing: hy did not make this checkout, so closing
+	// The whole point of borrowing: omniplex did not make this checkout, so closing
 	// the session must leave it exactly where it was.
 	if err := mgr.Cleanup(context.Background(), a.ID); err != nil {
 		t.Fatal(err)
@@ -276,7 +276,7 @@ func TestLocalSessionRunsInTheProjectRootAndSkipsHooks(t *testing.T) {
 	// A provision hook that would be destructive against a live checkout: if
 	// it runs, it leaves evidence.
 	for _, name := range []string{"provision", "deprovision"} {
-		script := "#!/bin/sh\ntouch \"$HY_PROJECT_ROOT/" + name + "-ran\"\n"
+		script := "#!/bin/sh\ntouch \"$OMNIPLEX_PROJECT_ROOT/" + name + "-ran\"\n"
 		if err := os.WriteFile(filepath.Join(root, name), []byte(script), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -329,7 +329,7 @@ func TestLocalSessionRunsInTheProjectRootAndSkipsHooks(t *testing.T) {
 		t.Fatal("the provision hook ran against the user's own checkout")
 	}
 
-	// Closing it is the dangerous half: nothing hy did not create may go.
+	// Closing it is the dangerous half: nothing omniplex did not create may go.
 	if err := mgr.Cleanup(context.Background(), a.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +345,7 @@ func TestLocalSessionRunsInTheProjectRootAndSkipsHooks(t *testing.T) {
 	}
 }
 
-// Sharing the main checkout is the user's call: hy reports that somebody is
+// Sharing the main checkout is the user's call: omniplex reports that somebody is
 // already there and starts the session anyway.
 func TestSecondLocalSessionIsAllowedWhileTheFirstIsLive(t *testing.T) {
 	root, _, _ := gitRepo(t)
@@ -387,7 +387,7 @@ func TestSecondLocalSessionIsAllowedWhileTheFirstIsLive(t *testing.T) {
 }
 
 // Force delete is the one path that removes a worktree without a hook, and it
-// must still recognise a checkout that was never hy's to remove.
+// must still recognise a checkout that was never omniplex's to remove.
 func TestForceDeleteOfALocalSessionRemovesNothing(t *testing.T) {
 	root, _, _ := gitRepo(t)
 	st, p := testProject(t, root)
@@ -418,7 +418,7 @@ func TestForceDeleteOfALocalSessionRemovesNothing(t *testing.T) {
 func TestCleanupIgnoresADeprovisionScriptLeftOnALocalSession(t *testing.T) {
 	root, _, _ := gitRepo(t)
 	st, p := testProject(t, root)
-	script := "#!/bin/sh\ntouch \"$HY_PROJECT_ROOT/deprovision-ran\"\n"
+	script := "#!/bin/sh\ntouch \"$OMNIPLEX_PROJECT_ROOT/deprovision-ran\"\n"
 	if err := os.WriteFile(filepath.Join(root, "deprovision"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -454,7 +454,7 @@ func TestCleanupIgnoresADeprovisionScriptLeftOnALocalSession(t *testing.T) {
 	}
 }
 
-// A workspace mode hy does not recognise must not fall through into "start a
+// A workspace mode omniplex does not recognise must not fall through into "start a
 // harness in the project root with the hooks still attached".
 func TestUnknownWorkspaceModeIsRefused(t *testing.T) {
 	root, _, _ := gitRepo(t)

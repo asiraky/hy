@@ -13,15 +13,15 @@
     <!-- Stamped with the bundle's content hash when the Go server serves this
          document. It stays "dev" under the Vite dev server, which is how the
          client knows to skip build-mismatch checks during development. -->
-    <meta name="hy-build" content="dev" />
-    <title>hy</title>
+    <meta name="omniplex-build" content="dev" />
+    <title>Omniplex</title>
     <!-- Runs before the first paint, so the page is never briefly the wrong
          colour while the bundle loads. The key and the three values are the
          ones in src/lib/theme.ts; the two have to agree. -->
     <script>
       (function () {
         try {
-          var stored = localStorage.getItem("hy.theme");
+          var stored = localStorage.getItem("omniplex.theme");
           var theme = stored === "light" || stored === "dark" ? stored : null;
           var dark = theme
             ? theme === "dark"

@@ -44,7 +44,7 @@ type webAssets struct {
 // buildPlaceholder is replaced at startup with the real build id. It stays as
 // written when the Vite dev server serves the page, which is how the client
 // knows to skip build-mismatch checks during development.
-const buildPlaceholder = `<meta name="hy-build" content="dev" />`
+const buildPlaceholder = `<meta name="omniplex-build" content="dev" />`
 
 func newWebAssets(fsys fs.FS) (*webAssets, error) {
 	if fsys == nil {
@@ -91,7 +91,7 @@ func newWebAssets(fsys fs.FS) (*webAssets, error) {
 	w.index = []byte(strings.Replace(
 		string(index),
 		buildPlaceholder,
-		`<meta name="hy-build" content="`+w.buildID+`" />`,
+		`<meta name="omniplex-build" content="`+w.buildID+`" />`,
 		1,
 	))
 	sum := sha256.Sum256(w.index)

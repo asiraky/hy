@@ -81,7 +81,7 @@ type Options struct {
 
 // Write prints the banner.
 func Write(w io.Writer, o Options) {
-	fmt.Fprintf(w, "\n  hy — harness multiplexer\n\n")
+	fmt.Fprintf(w, "\n  Omniplex — harness multiplexer\n\n")
 	fmt.Fprintf(w, "  log       %s\n", o.DBPath)
 	fmt.Fprintf(w, "  cwd       %s\n", o.Cwd)
 	for _, h := range o.Harness {

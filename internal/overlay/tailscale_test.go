@@ -22,7 +22,7 @@ func TestDetectStripsTheTrailingDot(t *testing.T) {
 	    "Online": true
 	  }
 	}`)
-	t.Setenv("HY_TAILSCALE_PATH", cli)
+	t.Setenv("OMNIPLEX_TAILSCALE_PATH", cli)
 
 	got := Detect(context.Background())
 	if got.DNSName != "aarons-macbook-pro.tailb9bafe.ts.net" {
@@ -41,7 +41,7 @@ func TestDetectStripsTheTrailingDot(t *testing.T) {
 func TestDetectRefusesWhenBackendIsNotRunning(t *testing.T) {
 	for _, state := range []string{"NeedsLogin", "Stopped", "NoState", "Starting"} {
 		cli := fakeCLI(t, `{"BackendState":"`+state+`","Self":{"DNSName":"box.tail1.ts.net."}}`)
-		t.Setenv("HY_TAILSCALE_PATH", cli)
+		t.Setenv("OMNIPLEX_TAILSCALE_PATH", cli)
 
 		got := Detect(context.Background())
 		if got.Running {
@@ -58,7 +58,7 @@ func TestDetectRefusesWhenBackendIsNotRunning(t *testing.T) {
 func TestDetectSurvivesABrokenCLI(t *testing.T) {
 	t.Run("non-zero exit", func(t *testing.T) {
 		cli := failingCLI(t)
-		t.Setenv("HY_TAILSCALE_PATH", cli)
+		t.Setenv("OMNIPLEX_TAILSCALE_PATH", cli)
 		got := Detect(context.Background())
 		if got.Running || got.DNSName != "" {
 			t.Fatalf("got %+v; want an empty status", got)
@@ -70,7 +70,7 @@ func TestDetectSurvivesABrokenCLI(t *testing.T) {
 
 	t.Run("garbage output", func(t *testing.T) {
 		cli := fakeCLI(t, "not json at all")
-		t.Setenv("HY_TAILSCALE_PATH", cli)
+		t.Setenv("OMNIPLEX_TAILSCALE_PATH", cli)
 		got := Detect(context.Background())
 		if got.Running {
 			t.Fatalf("garbage parsed as running: %+v", got)
@@ -93,7 +93,7 @@ func TestDetectWithNoCLIAtAll(t *testing.T) {
 // An explicit path that does not exist must fail rather than quietly falling
 // back to a different binary than the operator named.
 func TestExplicitPathIsNotSecondGuessed(t *testing.T) {
-	t.Setenv("HY_TAILSCALE_PATH", filepath.Join(t.TempDir(), "does-not-exist"))
+	t.Setenv("OMNIPLEX_TAILSCALE_PATH", filepath.Join(t.TempDir(), "does-not-exist"))
 	if got := FindCLI(); got != "" {
 		t.Fatalf("FindCLI() = %q; want empty for a bad explicit path", got)
 	}

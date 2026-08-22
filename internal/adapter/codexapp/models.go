@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/asiraky/hy/internal/adapter"
-	"github.com/asiraky/hy/internal/jsonrpc"
+	"github.com/asiraky/omniplex/internal/adapter"
+	"github.com/asiraky/omniplex/internal/jsonrpc"
 )
 
 // modelListTimeout bounds the listing run. It starts an app-server and asks it
@@ -33,7 +33,7 @@ func (a *Adapter) Models() []adapter.ModelMeta {
 }
 
 // codexModel is one row of the app-server's model/list response. Only the
-// fields hy presents are named; the rest of the payload is ignored rather than
+// fields omniplex presents are named; the rest of the payload is ignored rather than
 // mirrored, so a Codex release adding a field changes nothing here.
 type codexModel struct {
 	ID          string `json:"id"`
@@ -87,7 +87,7 @@ func (a *Adapter) ListModels(ctx context.Context, env map[string]string) ([]adap
 	)
 
 	if err := conn.Call(ctx, "initialize", map[string]any{
-		"clientInfo":   map[string]any{"name": "hy", "version": "0.1.0"},
+		"clientInfo":   map[string]any{"name": "omniplex", "version": "0.1.0"},
 		"capabilities": map[string]any{},
 	}, nil); err != nil {
 		return nil, fmt.Errorf("codex initialize: %w", err)
@@ -130,10 +130,10 @@ func (a *Adapter) ListModels(ctx context.Context, env map[string]string) ([]adap
 	return models, nil
 }
 
-// mapCodexModels turns Codex's rows into hy's and decides the legacy split.
+// mapCodexModels turns Codex's rows into omniplex's and decides the legacy split.
 //
 // Codex marks nothing as superseded — `hidden` is false and `upgrade` null for
-// every row — so the split is hy's presentation call: the newest generation is
+// every row — so the split is omniplex's presentation call: the newest generation is
 // current and everything below it is legacy. Deriving it from the ids rather
 // than listing names means a 5.7 release re-sorts itself.
 func mapCodexModels(in []codexModel) []adapter.ModelMeta {

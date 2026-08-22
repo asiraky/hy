@@ -154,7 +154,7 @@ describe("Sidebar", () => {
     expect(names.indexOf("Hide sessions")).toBe(names.indexOf("New session") + 1);
   });
 
-  it("offers the worktree removal as a checkbox, ticked for one hy provisioned", () => {
+  it("offers the worktree removal as a checkbox, ticked for one omniplex provisioned", () => {
     const managed = session("a", { workspaceMode: "managed", cwd: "/tmp/repo/.worktrees/a" });
     const props = renderSidebar({ sessions: [managed], activeId: "a" });
 
@@ -180,13 +180,13 @@ describe("Sidebar", () => {
     expect(props.onDelete).toHaveBeenCalledWith("a", false);
   });
 
-  it("defaults a borrowed worktree to staying, and says hy did not make it", () => {
+  it("defaults a borrowed worktree to staying, and says omniplex did not make it", () => {
     const borrowed = session("a", { workspaceMode: "borrowed", cwd: "/tmp/elsewhere" });
     const props = renderSidebar({ sessions: [borrowed], activeId: "a" });
 
     confirmDelete("a");
     expect(checkbox()!.getAttribute("data-state")).toBe("unchecked");
-    expect(screen.getByText(/hy did not create this worktree/)).toBeTruthy();
+    expect(screen.getByText(/omniplex did not create this worktree/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(props.onDelete).toHaveBeenCalledWith("a", false);
@@ -244,7 +244,7 @@ describe("Sidebar", () => {
     });
 
     confirmDelete("a");
-    // hy still knows of b and b still names that path.
+    // omniplex still knows of b and b still names that path.
     expect(checkbox()).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));

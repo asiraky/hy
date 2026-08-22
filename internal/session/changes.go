@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/asiraky/hy/internal/proto"
-	"github.com/asiraky/hy/internal/store"
+	"github.com/asiraky/omniplex/internal/proto"
+	"github.com/asiraky/omniplex/internal/store"
 )
 
 // The truth about what a session changed is in Git, not in the event log. A

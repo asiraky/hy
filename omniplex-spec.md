@@ -317,7 +317,7 @@ claude -p \
   --session-id <uuid>
 ```
 
-(`default` is the SDK/config spelling of manual mode; `manual` is a CLI-only alias, and hy drives the SDK.)
+(`default` is the SDK/config spelling of manual mode; `manual` is a CLI-only alias, and Omniplex drives the SDK.)
 
 Verified against CLI 2.1.234: all of these flags exist, `--session-id` takes a caller-supplied UUID (so *you* own session identity, not the CLI), `--resume`/`--fork-session` cover resume and branching, and the binary implements a bidirectional `control_request` / `control_response` protocol carrying `can_use_tool`. That last one is the critical finding — it is `canUseTool` across a process boundary, so permission interception does not require the TS SDK.
 

@@ -11,7 +11,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/creack/pty"
 
-	"github.com/asiraky/hy/internal/auth"
+	"github.com/asiraky/omniplex/internal/auth"
 )
 
 // The terminal surface: one WebSocket per open terminal tab, carrying a pty

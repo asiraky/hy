@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/asiraky/hy/internal/projection"
-	"github.com/asiraky/hy/internal/proto"
+	"github.com/asiraky/omniplex/internal/projection"
+	"github.com/asiraky/omniplex/internal/proto"
 )
 
 // summaryFixture is a two-turn session covering everything renderTranscript

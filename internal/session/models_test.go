@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/asiraky/hy/internal/adapter"
-	"github.com/asiraky/hy/internal/store"
+	"github.com/asiraky/omniplex/internal/adapter"
+	"github.com/asiraky/omniplex/internal/store"
 )
 
 func modelsTestManager(t *testing.T, fa *fakeAdapter) *Manager {
