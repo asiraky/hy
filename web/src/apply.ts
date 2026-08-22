@@ -56,7 +56,9 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
         ...s,
         model: p.model || s.model,
         mode: p.mode || s.mode,
-        effort: p.effort || s.effort,
+        // "" is a value effort can be set to — the harness's own default —
+        // so an event that carries it must win, which || would not let it.
+        effort: p.effort ?? s.effort,
         title: p.title || s.title,
       };
 

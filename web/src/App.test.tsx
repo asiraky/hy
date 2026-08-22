@@ -13,6 +13,7 @@ let events: ClientEvents;
 const command = vi.fn(async (_name: string, _args: unknown) => ({}) as any);
 const attach = vi.fn();
 const detach = vi.fn();
+const prime = vi.fn();
 const toast = vi.hoisted(() => ({ error: vi.fn(), info: vi.fn() }));
 
 vi.mock("sonner", () => ({ toast }));
@@ -30,6 +31,7 @@ vi.mock("./client", () => ({
     detach = detach;
     attach = attach;
     command = command;
+    prime = prime;
   },
 }));
 
@@ -70,10 +72,12 @@ const sidebarShowing = () => document.querySelector("[data-slot=sheet-content]")
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
   Element.prototype.scrollIntoView = vi.fn();
   command.mockClear();
   attach.mockClear();
   detach.mockClear();
+  prime.mockClear();
   toast.error.mockClear();
   toast.info.mockClear();
 });
@@ -648,5 +652,171 @@ describe("losing the attached session", () => {
     await act(async () => events.onSessions([session("a")]));
     expect(detach).not.toHaveBeenCalled();
     expect(sidebarShowing()).toBe(false);
+  });
+});
+
+describe("resuming after a tab discard", () => {
+  const seed = (id: string) => {
+    localStorage.setItem("hy.lastSession", id);
+    sessionStorage.setItem(
+      "hy.resume",
+      JSON.stringify({ build: "dev", state: state(id, "default"), scrollTop: 120, atBottom: false }),
+    );
+  };
+
+  it("paints the cached session immediately, with no Attaching…", async () => {
+    viewport("phone");
+    seed("a");
+    render(<App />);
+
+    // Before any frame from the server: the transcript is up, the header
+    // names the session, and nothing says "Attaching…".
+    expect(screen.queryByText("Attaching…")).toBeNull();
+    expect(screen.getByText("Session a")).toBeTruthy();
+    expect(sidebarShowing()).toBe(false);
+
+    // The client was handed the cached state so its first attach carries a
+    // cursor and the server replays only the gap.
+    expect(prime).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "a", seq: 1 }));
+
+    // The list confirming the session exists changes nothing.
+    await act(async () => events.onSessions([session("a")]));
+    expect(detach).not.toHaveBeenCalled();
+    expect(screen.getByText("Session a")).toBeTruthy();
+  });
+
+  it("lets go when the list reveals the session is gone", async () => {
+    viewport("phone");
+    seed("a");
+    render(<App />);
+    expect(screen.getByText("Session a")).toBeTruthy();
+
+    // Deleted from elsewhere while the page was dead: released like a live
+    // delete, and the phone lands back on the sidebar.
+    await act(async () => events.onSessions([session("b")]));
+    expect(detach).toHaveBeenCalled();
+    expect(sidebarShowing()).toBe(true);
+  });
+
+  it("ignores a cache written by a different bundle", async () => {
+    viewport("phone");
+    localStorage.setItem("hy.lastSession", "a");
+    sessionStorage.setItem(
+      "hy.resume",
+      JSON.stringify({ build: "other", state: state("a", "default"), scrollTop: 0, atBottom: true }),
+    );
+    render(<App />);
+    expect(prime).not.toHaveBeenCalled();
+    // The cold path instead: restore once the list arrives.
+    await act(async () => events.onSessions([session("a")]));
+    expect(attach).toHaveBeenCalledWith("a");
+  });
+});
+
+describe("transcript scroll position", () => {
+  // jsdom lays nothing out, so the scroller's geometry is stated outright:
+  // a 1000px transcript in a 400px window, which is all `atBottom` reads.
+  const CONTENT = 1000;
+  const VIEWPORT = 400;
+
+  beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      value: CONTENT,
+      configurable: true,
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      value: VIEWPORT,
+      configurable: true,
+    });
+  });
+  afterEach(() => {
+    delete (HTMLElement.prototype as any).scrollHeight;
+    delete (HTMLElement.prototype as any).clientHeight;
+  });
+
+  const boot = async () => {
+    viewport("desktop");
+    render(<App />);
+    await act(async () => {
+      events.onProjects([project]);
+      events.onHarnesses([harness], "/tmp/repo");
+      events.onSessions([session("a"), session("b")]);
+    });
+  };
+
+  const open = async (id: string) => {
+    await act(async () => {
+      fireEvent.click(screen.getByText(`Session ${id}`));
+      events.onState(id, state(id, "default"));
+    });
+  };
+
+  const scroller = () =>
+    document.querySelector("main .overflow-y-auto.overscroll-contain") as HTMLElement;
+
+  const scrollTo = async (top: number) => {
+    await act(async () => {
+      scroller().scrollTop = top;
+      scroller().dispatchEvent(new Event("scroll"));
+    });
+  };
+
+  it("comes back to where you were reading after a switch away", async () => {
+    await boot();
+    await open("a");
+    await scrollTo(300);
+
+    // Switching unmounts the transcript, so the position has to have been
+    // kept somewhere outside it.
+    await open("b");
+    expect(scroller().scrollTop).not.toBe(300);
+
+    await open("a");
+    expect(scroller().scrollTop).toBe(300);
+  });
+
+  it("leaves a session that was read to the tail following the tail", async () => {
+    await boot();
+    await open("a");
+    await scrollTo(CONTENT - VIEWPORT);
+
+    await open("b");
+    await open("a");
+    // At the bottom means pinned, not parked on an offset: no jump-to-bottom
+    // button, because there is nowhere to jump to.
+    expect(screen.queryByLabelText("Scroll to bottom")).toBeNull();
+  });
+
+  it("forgets a resumed position when the list says that session is gone", async () => {
+    // The cache hydrates a position for "a" before any list exists, so the
+    // prune that follows the list has never seen the id — it has to be
+    // dropped here or an id coming back would inherit a dead offset.
+    localStorage.setItem("hy.lastSession", "a");
+    sessionStorage.setItem(
+      "hy.resume",
+      JSON.stringify({ build: "dev", state: state("a", "default"), scrollTop: 300, atBottom: false }),
+    );
+    viewport("desktop");
+    render(<App />);
+    await act(async () => {
+      events.onProjects([project]);
+      events.onHarnesses([harness], "/tmp/repo");
+      events.onSessions([session("b")]);
+    });
+    await act(async () => events.onSessions([session("a"), session("b")]));
+    await open("a");
+    expect(scroller().scrollTop).not.toBe(300);
+  });
+
+  it("forgets the position of a session that goes away", async () => {
+    await boot();
+    await open("a");
+    await scrollTo(300);
+    await act(async () => events.onSessions([session("b")]));
+    // The id coming back is a different session wearing an old name; it must
+    // not inherit a stranger's place in the transcript.
+    await act(async () => events.onSessions([session("a"), session("b")]));
+    await open("a");
+    expect(scroller().scrollTop).not.toBe(300);
   });
 });

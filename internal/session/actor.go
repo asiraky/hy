@@ -709,7 +709,7 @@ func (a *Actor) handle(c command) (stop bool) {
 			c.reply <- cmdResult{err: err}
 			return false
 		}
-		a.append(proto.Emit(proto.SessionConfigChanged, proto.SessionConfigChangedPayload{Effort: c.effort}))
+		a.append(proto.Emit(proto.SessionConfigChanged, proto.SessionConfigChangedPayload{Effort: &c.effort}))
 		c.reply <- cmdResult{}
 
 	case cmdListComposer:

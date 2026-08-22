@@ -1,6 +1,7 @@
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
+import { ContextNote, EffortMenu } from "~/components/EffortMenu";
 import { PROVIDER_LOGOS, ProviderLogo } from "~/components/ProviderLogo";
 import { Button } from "~/components/ui/button";
 import { Collapsible, CollapsibleContent } from "~/components/ui/collapsible";
@@ -22,6 +23,7 @@ import {
   resolveModel,
   type PickerInstance,
 } from "~/lib/models";
+import { formatEffort } from "~/lib/efforts";
 import { rankModels, type ModelRow } from "~/lib/modelSearch";
 import { cn } from "~/lib/utils";
 import { useIsDesktop } from "~/useMediaQuery";
@@ -44,6 +46,12 @@ export interface ModelSelection {
  * Every row says what the model is and what it is for, because the old
  * single-line list could not distinguish two Opuses — or say what "Default"
  * resolved to.
+ *
+ * Reasoning effort joins it on the same terms. It is a second axis, not a
+ * second control: passing the effort props adds a row at the foot of this menu
+ * that opens the levels as a submenu, and the trigger then names the model and
+ * the level together. A composer that had two dropdowns elbowing the send
+ * button has one.
  */
 export function ModelPicker({
   harnesses,
@@ -51,6 +59,10 @@ export function ModelPicker({
   onChange,
   lockInstance = false,
   disabled = false,
+  efforts = [],
+  effort = "",
+  contextLabel = "",
+  onEffortChange,
   id,
   className,
   open: controlledOpen,
@@ -65,6 +77,17 @@ export function ModelPicker({
    */
   lockInstance?: boolean;
   disabled?: boolean;
+  /**
+   * The running model's reasoning levels, most modest first. Empty — a legacy
+   * model that accepts none, or a caller with no business offering them — and
+   * the effort row simply does not appear.
+   */
+  efforts?: string[];
+  /** The active effort, or "" for no level named. */
+  effort?: string;
+  /** The running model's context window, already formatted ("1M"), or "". */
+  contextLabel?: string;
+  onEffortChange?: (effort: string) => void;
   id?: string;
   className?: string;
   /** Optional controlled state, used by composer actions such as /model. */
@@ -106,6 +129,12 @@ export function ModelPicker({
     const pool = lockInstance && shown ? [shown] : instances;
     return rankModels(rowsOf(pool), search);
   }, [searching, search, instances, lockInstance, shown]);
+
+  const showEffort = efforts.length > 0 && !!onEffortChange;
+  // A model that offers no levels still ran at one, and that is still half of
+  // what this control is naming — so the trigger says it, and only the row
+  // that switches it goes away.
+  const namesEffort = showEffort || !!effort;
 
   const choose = (instance: PickerInstance, model: ModelMeta) => {
     setOpen(false);
@@ -166,6 +195,27 @@ export function ModelPicker({
     </Command>
   );
 
+  // Deliberately outside the Command above. cmdk claims arrows and Enter for
+  // the whole of its root, so a button nested in it cannot be operated from
+  // the keyboard: Enter would select the highlighted model instead.
+  const footer = (showEffort || contextLabel) && (
+    <div className="border-t">
+      {showEffort && (
+        <div className="p-1">
+          <EffortMenu
+            efforts={efforts}
+            value={effort}
+            onChange={(next) => {
+              setOpen(false);
+              onEffortChange?.(next);
+            }}
+          />
+        </div>
+      )}
+      {contextLabel && <ContextNote label={contextLabel} />}
+    </div>
+  );
+
   const trigger = (
     <Button
       id={id}
@@ -182,10 +232,21 @@ export function ModelPicker({
       {selectedInstance && <ProviderLogo provider={selectedInstance.driver} />}
       <span className="min-w-0 flex-1 truncate text-left text-[13px]">
         {selectedModel?.label ?? "No model"}
-        {selectedModel?.version && selectedModel.version !== selectedModel.label && (
+        {/* The generation and the effort compete for one line, and only one of
+            them is a knob: when effort is on show, the generation stays in the
+            list, where the row that names it also explains it. */}
+        {!namesEffort && selectedModel?.version && selectedModel.version !== selectedModel.label && (
           <span className="text-muted-foreground ml-1.5 text-[11px]">{selectedModel.version}</span>
         )}
       </span>
+      {namesEffort && (
+        <span className="text-muted-foreground shrink-0 text-[12px]">
+          <span aria-hidden className="mr-1.5 opacity-60">
+            ·
+          </span>
+          {formatEffort(effort)}
+        </span>
+      )}
       <ChevronDownIcon className="text-muted-foreground size-4 shrink-0" />
     </Button>
   );
@@ -196,11 +257,12 @@ export function ModelPicker({
     return (
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetTrigger asChild>{trigger}</SheetTrigger>
-        <SheetContent side="bottom" className="h-[85dvh] p-0 pb-[env(safe-area-inset-bottom)]">
+        <SheetContent side="bottom" className="flex h-[85dvh] flex-col p-0 pb-[env(safe-area-inset-bottom)]">
           <SheetHeader className="pb-0">
             <SheetTitle>Model</SheetTitle>
           </SheetHeader>
           {body}
+          {footer}
         </SheetContent>
       </Sheet>
     );
@@ -211,6 +273,7 @@ export function ModelPicker({
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent align="start" className="w-[min(34rem,calc(100vw-2rem))] p-0">
         {body}
+        {footer}
       </PopoverContent>
     </Popover>
   );

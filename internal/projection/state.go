@@ -263,8 +263,11 @@ func (s *State) Apply(ev proto.Event) {
 		if p.Mode != "" {
 			s.Mode = p.Mode
 		}
-		if p.Effort != "" {
-			s.Effort = p.Effort
+		// Unlike the fields around it, an empty effort is a choice — "let the
+		// harness decide" — so the event says whether it touched effort at
+		// all rather than inferring it from emptiness.
+		if p.Effort != nil {
+			s.Effort = *p.Effort
 		}
 		if p.Title != "" {
 			s.Title = p.Title

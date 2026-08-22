@@ -22,6 +22,7 @@ import {
 } from "~/components/ui/select";
 import { Separator } from "~/components/ui/separator";
 import { Textarea } from "~/components/ui/textarea";
+import { formatEffort } from "~/lib/efforts";
 import { cn } from "~/lib/utils";
 import type { HarnessMeta, Issue, Project, ProjectConfig, UserConfig } from "~/protocol";
 import { makeFormatter } from "./WorkspacePicker";
@@ -379,7 +380,7 @@ export function ProjectSettings({
                           harness's models actually accept. */}
                       {effortsOf(harnesses, cfg.defaults.harness ?? "").map((e) => (
                         <SelectItem key={e} value={e}>
-                          {e}
+                          {formatEffort(e)}
                         </SelectItem>
                       ))}
                     </SelectContent>

@@ -95,6 +95,20 @@ export class Client {
     this.ws?.close();
   }
 
+  /**
+   * Adopt a state snapshot cached by a previous page of this tab (see
+   * resume.ts), before connecting. The first attach then carries afterSeq, so
+   * the server replays only what happened while the page was dead — and if
+   * that gap has grown past replay range it answers with a snapshot, which
+   * replaces the cache wholesale. Either way the reader starts on the cached
+   * transcript instead of "Attaching…".
+   */
+  prime(state: SessionState) {
+    this.sessionId = state.sessionId;
+    this.cursor = state.seq;
+    this.state = state;
+  }
+
   /** Attach to a session, replacing any current attachment. */
   attach(sessionId: string) {
     if (this.sessionId && this.sessionId !== sessionId) {

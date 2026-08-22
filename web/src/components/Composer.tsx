@@ -2,7 +2,6 @@ import { ArrowUpIcon, SquareIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ContextMeter } from "~/components/ContextMeter";
-import { EffortPicker, formatContextWindow } from "~/components/EffortPicker";
 import { ModelPicker } from "~/components/ModelPicker";
 import { Button } from "~/components/ui/button";
 import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from "~/components/ui/command";
@@ -14,7 +13,7 @@ import {
   replaceComposerTrigger,
   submittedComposerAction,
 } from "~/lib/composerItems";
-import { pickerInstances, resolveInstance, resolveModel } from "~/lib/models";
+import { formatContextWindow, pickerInstances, resolveInstance, resolveModel } from "~/lib/models";
 import type { ComposerItem, HarnessMeta, Usage } from "~/protocol";
 import { useIsDesktop } from "~/useMediaQuery";
 
@@ -394,13 +393,18 @@ export function Composer({
           <span className="flex-1" />
 
           {harnesses.length > 0 && (
-            // The same picker the new-session dialog uses, with the account
-            // fixed: the harness is already running under it, so only the
-            // model is still a choice.
+            // The one control for what runs the next turn: the account is
+            // fixed — the harness is already running under it — so the model
+            // is the choice, and reasoning effort opens out of the same menu
+            // rather than sitting beside it as a second dropdown.
             <ModelPicker
               harnesses={harnesses}
               lockInstance
               disabled={disabled}
+              efforts={onSwitchEffort ? modelEfforts : []}
+              effort={effort}
+              contextLabel={contextLabel}
+              onEffortChange={onSwitchEffort}
               value={{ harness, instance, model }}
               onChange={(next) => {
                 onSwitchModel?.(next.model);
@@ -418,21 +422,8 @@ export function Composer({
               }}
               open={modelPickerOpen}
               onOpenChange={setModelPickerOpen}
-              className="text-muted-foreground hover:text-foreground h-11 w-auto max-w-[45%] min-w-0 border-0 px-2 shadow-none md:h-8 md:min-h-8"
+              className="text-muted-foreground hover:text-foreground h-11 w-auto max-w-[55%] min-w-0 border-0 px-2 shadow-none md:h-8 md:min-h-8"
             />
-          )}
-          {modelEfforts.length > 0 && onSwitchEffort ? (
-            <EffortPicker
-              efforts={modelEfforts}
-              value={effort}
-              contextLabel={contextLabel}
-              disabled={disabled}
-              onChange={onSwitchEffort}
-            />
-          ) : (
-            effort && (
-              <span className="text-muted-foreground shrink-0 text-[12px] capitalize">{effort}</span>
-            )
           )}
 
           {busy ? (
@@ -442,7 +433,10 @@ export function Composer({
               onClick={onCancel}
               aria-label="Interrupt the running turn"
               title="Interrupt the running turn"
-              className="size-11 rounded-full md:size-8"
+              // Set apart from the model control beside it: the send button
+              // ends the row rather than continuing it, and a shared gap made
+              // the two read as one cluster.
+              className="ml-1.5 size-11 shrink-0 rounded-full md:ml-2 md:size-8"
             >
               <SquareIcon className="size-3.5 fill-current" />
             </Button>
@@ -452,7 +446,7 @@ export function Composer({
               disabled={disabled || !draft.trim()}
               onClick={() => void send()}
               aria-label="Send"
-              className="size-11 rounded-full md:size-8"
+              className="ml-1.5 size-11 shrink-0 rounded-full md:ml-2 md:size-8"
             >
               <ArrowUpIcon />
             </Button>
