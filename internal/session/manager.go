@@ -16,6 +16,7 @@ import (
 
 	"github.com/asiraky/hy/internal/adapter"
 	"github.com/asiraky/hy/internal/project"
+	"github.com/asiraky/hy/internal/projection"
 	"github.com/asiraky/hy/internal/proto"
 	"github.com/asiraky/hy/internal/provider"
 	"github.com/asiraky/hy/internal/store"
@@ -919,7 +920,24 @@ func (m *Manager) forgetFn(id string, a *Actor) func() {
 }
 
 func (m *Manager) List(ctx context.Context) ([]store.SessionMeta, error) {
-	return m.store.ListSessions(ctx)
+	metas, err := m.store.ListSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Attention is derived, never stored: a live actor answers from its
+	// projection (which knows about pending permissions and questions), and a
+	// session with no actor answers from its phase — a dead actor cancelled
+	// its pending requests on the way down, so the phase is the whole story.
+	m.mu.Lock()
+	for i := range metas {
+		if a, ok := m.actors[metas[i].ID]; ok {
+			metas[i].Attention = a.Attention()
+		} else {
+			metas[i].Attention = projection.AttentionForPhase(metas[i].Phase)
+		}
+	}
+	m.mu.Unlock()
+	return metas, nil
 }
 
 // Close disposes a session's harness. The log is untouched.

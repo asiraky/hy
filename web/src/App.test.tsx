@@ -712,3 +712,111 @@ describe("resuming after a tab discard", () => {
     expect(attach).toHaveBeenCalledWith("a");
   });
 });
+
+describe("transcript scroll position", () => {
+  // jsdom lays nothing out, so the scroller's geometry is stated outright:
+  // a 1000px transcript in a 400px window, which is all `atBottom` reads.
+  const CONTENT = 1000;
+  const VIEWPORT = 400;
+
+  beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      value: CONTENT,
+      configurable: true,
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      value: VIEWPORT,
+      configurable: true,
+    });
+  });
+  afterEach(() => {
+    delete (HTMLElement.prototype as any).scrollHeight;
+    delete (HTMLElement.prototype as any).clientHeight;
+  });
+
+  const boot = async () => {
+    viewport("desktop");
+    render(<App />);
+    await act(async () => {
+      events.onProjects([project]);
+      events.onHarnesses([harness], "/tmp/repo");
+      events.onSessions([session("a"), session("b")]);
+    });
+  };
+
+  const open = async (id: string) => {
+    await act(async () => {
+      fireEvent.click(screen.getByText(`Session ${id}`));
+      events.onState(id, state(id, "default"));
+    });
+  };
+
+  const scroller = () =>
+    document.querySelector("main .overflow-y-auto.overscroll-contain") as HTMLElement;
+
+  const scrollTo = async (top: number) => {
+    await act(async () => {
+      scroller().scrollTop = top;
+      scroller().dispatchEvent(new Event("scroll"));
+    });
+  };
+
+  it("comes back to where you were reading after a switch away", async () => {
+    await boot();
+    await open("a");
+    await scrollTo(300);
+
+    // Switching unmounts the transcript, so the position has to have been
+    // kept somewhere outside it.
+    await open("b");
+    expect(scroller().scrollTop).not.toBe(300);
+
+    await open("a");
+    expect(scroller().scrollTop).toBe(300);
+  });
+
+  it("leaves a session that was read to the tail following the tail", async () => {
+    await boot();
+    await open("a");
+    await scrollTo(CONTENT - VIEWPORT);
+
+    await open("b");
+    await open("a");
+    // At the bottom means pinned, not parked on an offset: no jump-to-bottom
+    // button, because there is nowhere to jump to.
+    expect(screen.queryByLabelText("Scroll to bottom")).toBeNull();
+  });
+
+  it("forgets a resumed position when the list says that session is gone", async () => {
+    // The cache hydrates a position for "a" before any list exists, so the
+    // prune that follows the list has never seen the id — it has to be
+    // dropped here or an id coming back would inherit a dead offset.
+    localStorage.setItem("hy.lastSession", "a");
+    sessionStorage.setItem(
+      "hy.resume",
+      JSON.stringify({ build: "dev", state: state("a", "default"), scrollTop: 300, atBottom: false }),
+    );
+    viewport("desktop");
+    render(<App />);
+    await act(async () => {
+      events.onProjects([project]);
+      events.onHarnesses([harness], "/tmp/repo");
+      events.onSessions([session("b")]);
+    });
+    await act(async () => events.onSessions([session("a"), session("b")]));
+    await open("a");
+    expect(scroller().scrollTop).not.toBe(300);
+  });
+
+  it("forgets the position of a session that goes away", async () => {
+    await boot();
+    await open("a");
+    await scrollTo(300);
+    await act(async () => events.onSessions([session("b")]));
+    // The id coming back is a different session wearing an old name; it must
+    // not inherit a stranger's place in the transcript.
+    await act(async () => events.onSessions([session("a"), session("b")]));
+    await open("a");
+    expect(scroller().scrollTop).not.toBe(300);
+  });
+});

@@ -9,23 +9,16 @@ import {
 } from "react";
 
 import type { ConnectionStatus } from "~/client";
+import {
+  DeleteSessionDialog,
+  useDeleteSession,
+} from "~/components/DeleteSessionDialog";
 import { HarnessBadge } from "~/components/HarnessBadge";
 import { IconButton } from "~/components/IconButton";
 import { StatusDot } from "~/components/StatusDot";
 import { ThemeToggle } from "~/components/ThemeToggle";
 import { Button } from "~/components/ui/button";
-import { Checkbox } from "~/components/ui/checkbox";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "~/components/ui/dialog";
-import { Label } from "~/components/ui/label";
 import { Separator } from "~/components/ui/separator";
-import { Spinner } from "~/components/ui/spinner";
 import { Sheet, SheetContent, SheetTitle } from "~/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
@@ -36,9 +29,20 @@ const BUSY_PHASES = ["turn", "provisioning", "creating", "cleaning"];
 // How long a row takes to fold away once it has left the list. Kept in step
 // with the duration on the row itself.
 const EXIT_MS = 260;
-// How long a delete may take before the dialog stops holding the window shut.
-const STUCK_MS = 10_000;
 const FAILED_PHASES = ["provision_failed", "cleanup_failed"];
+
+// The server derives attention from the live projection, which knows about
+// pending permissions and questions; phase alone does not. The phase sets
+// above remain only as a fallback for a server that predates attention.
+function working(s: SessionMeta) {
+  return s.attention ? s.attention === "working" : BUSY_PHASES.includes(s.phase);
+}
+function needsInput(s: SessionMeta) {
+  return s.attention === "needs_permission" || s.attention === "needs_answer";
+}
+function failed(s: SessionMeta) {
+  return s.attention ? s.attention === "failed" : FAILED_PHASES.includes(s.phase);
+}
 
 function ago(ms: number) {
   const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
@@ -91,63 +95,38 @@ function useDeleteFlow({
   onDelete,
   projectRoot,
 }: Pick<SidebarProps, "sessions" | "onDelete" | "projectRoot">) {
-  // Deleting a session can take a checkout on disk with it, so a stray click
-  // on the X must not be enough on its own — the row's X only opens this
-  // confirmation, and the checkout only goes if it is asked for there.
-  const [confirming, setConfirming] = useState<SessionMeta | null>(null);
-  const [removeWorktree, setRemoveWorktree] = useState(false);
-  // A delete is not instant — the server tears the workspace down first, and
-  // the row only leaves the list when that finishes. Three pieces of state
-  // carry the wait:
+  // Two pieces of state, and both are about the *list* — the confirmation, the
+  // guards and the wait all live in useDeleteSession, which the transcript's
+  // "this landed" prompt opens too.
   //
-  // `deleting` keeps the dialog open, and honest, while the work runs.
   // `frozen` pins the list to the order it had when Delete was pressed: the
   //   server stamps the session as it enters "cleaning" and the list is
   //   ordered by that stamp, so without this the row shoots to the top and
   //   sits there until it vanishes.
   // `exiting` keeps the row on screen, in its own place, for one last
   //   animation after it has already left the list.
-  const [deleting, setDeleting] = useState<SessionMeta | null>(null);
   const [frozen, setFrozen] = useState<string[] | null>(null);
   const [exiting, setExiting] = useState<SessionMeta | null>(null);
-  // The delete this component is currently living through, for the one thing
-  // that arrives too late to read state: a refusal from the server.
-  const latest = useRef<string | null>(null);
-  const ask = (s: SessionMeta) => {
-    // Defaulted on for a worktree hy provisioned, because that is what hy did
-    // before and it is usually right; off for one it merely borrowed.
-    setRemoveWorktree(s.workspaceMode === "managed");
-    setConfirming(s);
-  };
 
-  const mode = confirming?.workspaceMode ?? "";
-  // "The last session hy knows of" is a question the sidebar can already
-  // answer: it holds every session's cwd. A closed session counts — it still
-  // names that path, and hy still knows of it.
-  const sharers = confirming
-    ? sessions.filter((s) => s.id !== confirming.id && s.cwd === confirming.cwd)
-    : [];
-  // Only these two modes have a directory hy could remove. A local session is
-  // the user's own checkout, and a session with no project has no lease at all
-  // — offering a checkbox for either would be offering an action the server
-  // will not perform. Nor does a managed session whose provisioning failed
-  // before it got a directory: its cwd is still the project root, and the
-  // server refuses to remove that whatever the dialog asked for.
-  const hasWorktree =
-    (mode === "managed" || mode === "borrowed") &&
-    !!confirming?.cwd &&
-    confirming.cwd !== projectRoot(confirming.projectId);
-  const removable = hasWorktree && sharers.length === 0;
+  const session = useDeleteSession({
+    sessions,
+    onDelete,
+    projectRoot,
+    onStart: () => {
+      setFrozen(sessions.map((s) => s.id));
+      setExiting(null);
+    },
+    // The request never went, so there is no departure to animate.
+    onRefused: () => setFrozen(null),
+  });
+  const { deleting, settle } = session;
 
   // Handing the row off to its exit animation is done here, during the render
   // that drops it, rather than in an effect: an effect would let one commit
   // through with the row already gone, and the DOM node we want to animate
   // would be destroyed before it could move.
   if (deleting && !sessions.some((s) => s.id === deleting.id)) {
-    setDeleting(null);
-    // Only the dialog that was asking about *this* session; the user may have
-    // dismissed it and opened another meanwhile.
-    setConfirming((c) => (c?.id === deleting.id ? null : c));
+    settle(deleting.id);
     setExiting(deleting);
   }
 
@@ -159,9 +138,11 @@ function useDeleteFlow({
       : null;
   useEffect(() => {
     if (!failed) return;
-    setDeleting(null);
-    setConfirming((c) => (c?.id === failed ? null : c));
+    settle(failed);
     setFrozen(null);
+    // settle is recreated each render and only ever reads the id it is given,
+    // so tracking it here would re-run this for no change in what it does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [failed]);
 
   // The animation is the only thing still holding either of these.
@@ -189,60 +170,7 @@ function useDeleteFlow({
     return list;
   }, [sessions, frozen, exiting]);
 
-  // The dialog is only "busy" for the session it is currently asking about: it
-  // can be dismissed once the wait has gone long and reopened on another row,
-  // and that row's Delete button must still be a live button.
-  const busy = !!deleting && deleting.id === confirming?.id;
-
-  // A deprovision hook is a user's own script and can hang forever. The dialog
-  // holds the window while a delete is running, so it has to admit when the
-  // wait has stopped being normal and let go.
-  const [stuck, setStuck] = useState(false);
-  useEffect(() => {
-    if (!deleting) {
-      setStuck(false);
-      return;
-    }
-    const t = setTimeout(() => setStuck(true), STUCK_MS);
-    return () => clearTimeout(t);
-  }, [deleting]);
-
-  const startDelete = () => {
-    if (!confirming || busy) return;
-    const target = confirming;
-    latest.current = target.id;
-    setFrozen(sessions.map((s) => s.id));
-    setExiting(null);
-    setDeleting(target);
-    Promise.resolve(onDelete(target.id, removable && removeWorktree)).catch(() => {
-      // The failure has already been reported where it was raised; all that is
-      // left here is to stop claiming the delete is still happening. Written
-      // against the current state, not the state at the click: a slow refusal
-      // must not clear a delete the user has since started on another row.
-      if (latest.current !== target.id) return;
-      setDeleting(null);
-      setFrozen(null);
-      setConfirming((c) => (c?.id === target.id ? null : c));
-    });
-  };
-
-  return {
-    rows,
-    ask,
-    confirming,
-    deleting,
-    exiting,
-    busy,
-    stuck,
-    mode,
-    sharers,
-    hasWorktree,
-    removable,
-    removeWorktree,
-    setRemoveWorktree,
-    startDelete,
-    dismiss: () => setConfirming(null),
-  };
+  return { session, rows, ask: session.ask, deleting, exiting };
 }
 
 type DeleteFlow = ReturnType<typeof useDeleteFlow>;
@@ -297,7 +225,12 @@ function SessionList({
           >
             <div
               className={cn(
-                "group relative rounded-lg transition-colors",
+                // min-w-0: a grid item's automatic minimum size is its
+                // min-content width, and a `truncate`d line is `nowrap` — so
+                // its min-content is the whole untruncated string. Left at
+                // `auto` the row grows to fit the longest title and is clipped
+                // by the scroller instead of ever reaching the ellipsis.
+                "group relative min-w-0 rounded-lg transition-colors",
                 leaving && "overflow-hidden",
                 active
                   ? "bg-sidebar-accent text-sidebar-accent-foreground"
@@ -319,14 +252,21 @@ function SessionList({
                   <span className="min-w-0 flex-1 truncate text-[13px]">
                     {s.title || "Untitled"}
                   </span>
-                  {BUSY_PHASES.includes(s.phase) && (
+                  {working(s) && (
                     <span
                       role="status"
                       aria-label="Working"
                       className="bg-primary size-1.5 shrink-0 animate-pulse rounded-full motion-reduce:animate-none"
                     />
                   )}
-                  {FAILED_PHASES.includes(s.phase) && (
+                  {needsInput(s) && (
+                    <span
+                      role="status"
+                      aria-label="Waiting for your input"
+                      className="bg-attention size-1.5 shrink-0 animate-pulse rounded-full motion-reduce:animate-none"
+                    />
+                  )}
+                  {failed(s) && (
                     <CircleAlertIcon
                       aria-label="Needs attention"
                       className="text-destructive size-3 shrink-0"
@@ -338,13 +278,19 @@ function SessionList({
                 </span>
                 <span className="text-muted-foreground mt-1 flex min-w-0 items-center gap-1 font-mono text-[10px]">
                   <FolderIcon aria-hidden className="size-3 shrink-0" />
-                  <span className="truncate">
+                  {/* With a branch alongside it the project keeps its natural
+                      width up to half the line and the branch takes what is
+                      left, so a long branch can no longer shrink a short
+                      project name to a letter and an ellipsis. With no branch
+                      there is nothing to share with, and the cap would only
+                      truncate a name that fits. */}
+                  <span className={cn("truncate", s.branch ? "max-w-[50%] shrink-0" : "min-w-0")}>
                     {projectName(s.projectId) ?? s.cwd.split("/").slice(-2).join("/")}
                   </span>
                   {s.branch && (
                     <>
                       <GitBranchIcon aria-hidden className="ml-1 size-3 shrink-0" />
-                      <span className="truncate">{s.branch}</span>
+                      <span className="min-w-0 flex-1 truncate">{s.branch}</span>
                     </>
                   )}
                   <span className="ml-auto flex shrink-0 items-center pl-1.5">
@@ -388,118 +334,6 @@ function SessionList({
   );
 }
 
-/**
- * The confirmation, and then the wait. Rendered above the sidebar's two shapes
- * so that neither the sheet closing nor a change of breakpoint can take it
- * away mid-delete.
- */
-function DeleteDialog({ flow }: { flow: DeleteFlow }) {
-  // It stays put while the delete runs: closing it on the click would be
-  // claiming the session is gone at the moment the work starts. The one way
-  // out is `stuck` — a teardown script that hangs must not take the window
-  // with it — and taking it only hides the progress. The delete carries on,
-  // and the row still leaves on its own.
-  const held = flow.busy && !flow.stuck;
-  return (
-    <Dialog open={flow.confirming !== null} onOpenChange={(open) => !open && flow.dismiss()}>
-      <DialogContent
-        className="sm:max-w-sm"
-        showCloseButton={!held}
-        onEscapeKeyDown={(e) => held && e.preventDefault()}
-        onInteractOutside={(e) => held && e.preventDefault()}
-      >
-        <DialogHeader>
-          <DialogTitle>Delete “{flow.confirming?.title || "Untitled"}”?</DialogTitle>
-          {/* Whatever else it says, it says plainly whether anything on disk
-              is at risk. The old copy promised a worktree removal that a
-              borrowed session never performed. */}
-          <DialogDescription>
-            {flow.mode === "local"
-              ? "This permanently deletes the session and its transcript. Your checkout is left untouched."
-              : "This permanently deletes the session and its transcript."}
-          </DialogDescription>
-        </DialogHeader>
-
-        {flow.confirming && flow.hasWorktree && (
-          <div className="space-y-2 text-[12px]">
-            {flow.removable ? (
-              <>
-                <div className="flex items-start gap-2">
-                  {/* Settled the moment Delete was pressed: the request has
-                      already gone with the answer that was ticked then, so
-                      changing it now would only make the dialog lie about what
-                      is happening on disk. */}
-                  <Checkbox
-                    id="delete-remove-worktree"
-                    checked={flow.removeWorktree}
-                    onCheckedChange={(v) => flow.setRemoveWorktree(v === true)}
-                    disabled={flow.busy}
-                    className="mt-0.5"
-                  />
-                  <div className="min-w-0">
-                    <Label htmlFor="delete-remove-worktree" className="cursor-pointer">
-                      Also delete the worktree
-                    </Label>
-                    <span className="text-muted-foreground block font-mono text-[11px] break-all">
-                      {flow.confirming.cwd}
-                    </span>
-                  </div>
-                </div>
-                <p className="text-muted-foreground text-[11px]">
-                  {flow.confirming.branch
-                    ? `The branch ${flow.confirming.branch} is kept either way.`
-                    : "Branches are never deleted."}
-                  {flow.mode === "borrowed" && " hy did not create this worktree."}
-                </p>
-              </>
-            ) : (
-              <p className="text-muted-foreground text-[11px]">
-                The worktree is left on disk: {flow.sharers.length} other session
-                {flow.sharers.length === 1 ? "" : "s"} still
-                {flow.sharers.length === 1 ? " uses" : " use"} it
-                {flow.sharers[0]?.title ? ` (“${flow.sharers[0].title}”)` : ""}.
-              </p>
-            )}
-          </div>
-        )}
-
-        {flow.stuck && (
-          <p className="text-muted-foreground text-[11px]">
-            This is taking longer than usual. You can close this — the delete
-            keeps running, and the session goes when it finishes.
-          </p>
-        )}
-
-        <DialogFooter>
-          <Button variant="outline" onClick={flow.dismiss} disabled={flow.busy}>
-            Cancel
-          </Button>
-          <Button variant="destructive" onClick={flow.startDelete} disabled={flow.busy}>
-            {flow.busy ? (
-              <>
-                <Spinner aria-hidden className="size-4" />
-                {/* Named, because tearing a worktree down is the slow part
-                    and the one worth waiting through. */}
-                {flow.removable && flow.removeWorktree ? "Deleting worktree…" : "Deleting…"}
-              </>
-            ) : (
-              "Delete"
-            )}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/**
- * The panel itself, identical whether it is docked or in the mobile sheet.
- *
- * `showCollapse` is the one difference, and it is not a platform difference:
- * the collapse control is only offered when there is something behind the
- * panel to go back to. On a phone with no session selected there is nothing,
- * so the row is just the title and the one action.
- */
 function SidebarPanel({
   showCollapse,
   flow,
@@ -609,7 +443,7 @@ export function Sidebar(props: SidebarProps) {
             <SidebarPanel {...props} flow={flow} showCollapse={props.activeId !== null} />
           </SheetContent>
         </Sheet>
-        <DeleteDialog flow={flow} />
+        <DeleteSessionDialog flow={flow.session} />
       </>
     );
   }
@@ -617,7 +451,7 @@ export function Sidebar(props: SidebarProps) {
   return (
     <>
       <DockedSidebar {...props} flow={flow} />
-      <DeleteDialog flow={flow} />
+      <DeleteSessionDialog flow={flow.session} />
     </>
   );
 }

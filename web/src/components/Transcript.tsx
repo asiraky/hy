@@ -8,6 +8,7 @@ import {
   CopyIcon,
   DownloadIcon,
   FileTextIcon,
+  GitMergeIcon,
   PencilIcon,
   SearchIcon,
   TerminalIcon,
@@ -30,10 +31,11 @@ import { IconButton } from "~/components/IconButton";
 import { Markdown } from "~/components/Markdown";
 import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { useCopy } from "~/lib/clipboard";
 import { fmtTokens } from "~/lib/format";
 import { cn } from "~/lib/utils";
-import type { Item, SessionState, ToolStatus, Turn } from "~/protocol";
+import type { Item, PullRequest, SessionState, ToolStatus, Turn } from "~/protocol";
 import { saveResume } from "~/resume";
 import { buildRows, foldLabel, rowTurnID, summarise } from "~/rows";
 import { atBottom, useAutoScroll } from "~/useAutoScroll";
@@ -45,6 +47,9 @@ import { useSmoothText } from "~/useSmoothText";
 // pinned to its top edge. The 9rem fallback matches the collapsed composer for
 // the first frame, before the measurement lands.
 const TAIL_RESERVE = "calc(var(--composer-h, 9rem) + 6rem)";
+// The tail's room plus whatever extra the scroll hook is asking for to lift a
+// just-sent prompt clear of the composer (`--anchor-reserve`, 0 when it is not).
+const CONTENT_RESERVE = `calc(${TAIL_RESERVE} + var(--anchor-reserve, 0px))`;
 
 // One icon per tool kind the protocol defines. Anything new falls through to
 // the neutral dot rather than rendering nothing.
@@ -333,7 +338,7 @@ function UserMessage({ item }: { item: Item }) {
   };
 
   return (
-    <div ref={wrapRef} className="fade-in flex flex-col items-end">
+    <div ref={wrapRef} data-msg-id={item.id} className="fade-in flex flex-col items-end">
       <div
         ref={bodyRef}
         style={
@@ -537,6 +542,39 @@ function WorkspaceCard({
   );
 }
 
+// MergedCard is the whole of the "you are probably done here" affordance: one
+// quiet pill at the foot of the transcript, where the reader already is when
+// the news arrives. It is not a banner and it does not nag — the transcript is
+// the thing being read, so the offer sits in it and is either taken or
+// scrolled past. Clicking opens the ordinary delete confirmation, which is
+// where the worktree question is actually asked and answered.
+function MergedCard({ pr, onFinish }: { pr: PullRequest; onFinish: () => void }) {
+  // The tooltip is the explanation, and a touch screen has none — so the
+  // label states the fact and the aria-label states the offer, leaving the
+  // pill legible without a hover and safe without one too: nothing is
+  // destroyed until the confirmation says so.
+  const offer = `Pull request #${pr.number} was merged — finish with this session`;
+  return (
+    <div className="fade-in flex justify-center pt-1 pb-2">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={offer}
+            onClick={onFinish}
+            className="text-muted-foreground hover:text-foreground h-11 rounded-full border border-dashed px-3 text-[12px] font-normal md:h-7"
+          >
+            <GitMergeIcon aria-hidden className="text-success size-3.5" />
+            PR #{pr.number} merged
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Done with this session? Delete it and its worktree.</TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
 // InterruptedCard is what a turn that died looks like. A cross on the last
 // tool call is not an explanation: it says something stopped, not that the
 // work is unfinished and nobody is coming back for it. The server retries by
@@ -579,26 +617,38 @@ function InterruptedCard({ turn, onContinue }: { turn: Turn; onContinue: () => v
 export function Transcript({
   state,
   initialScroll,
+  onScrollChange,
   onRetryProvision,
   onCleanup,
   onForceDelete,
   onContinue,
   onOpenDiff,
+  pr,
+  onFinish,
 }: {
   state: SessionState;
-  /** Where a resumed page was scrolled when it went to background (resume.ts).
-      Applied once, on mount; the parent clears the prop right after. */
+  /** Where this session was last scrolled — the position the parent kept from
+      the previous time this session was open, or the one a resumed page saved
+      as it went to background (resume.ts). Applied once, on mount. */
   initialScroll?: { top: number; atBottom: boolean };
+  /** Reports where the reader is, so the parent can hand it back the next time
+      this session is opened. Switching sessions unmounts this component, so a
+      position it kept to itself would die with it. */
+  onScrollChange?: (sessionId: string, top: number, atBottom: boolean) => void;
   onRetryProvision: () => void;
   onCleanup: () => void;
   onForceDelete: () => void;
   onContinue: () => void;
   onOpenDiff: (path?: string) => void;
+  /** The session branch's pull request, when hy could find one. */
+  pr?: PullRequest | null;
+  /** Opens the delete confirmation for this session. */
+  onFinish: () => void;
 }) {
   // Follow the tail unless the reader has scrolled up; the button below is
   // how they get back. A restore that was scrolled up mounts unpinned, or the
   // first stick would snap it to the bottom over the restored position.
-  const { scrollerRef, contentRef, pinned, stick, scrollToBottom } = useAutoScroll<
+  const { scrollerRef, contentRef, pinned, stick, scrollToBottom, anchorTo } = useAutoScroll<
     HTMLDivElement,
     HTMLDivElement
   >(initialScroll?.atBottom ?? true);
@@ -645,6 +695,35 @@ export function Transcript({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // The same idea one scope smaller: where the reader is, reported up as it
+  // moves, so that switching to another session and back returns to the place
+  // they were reading rather than the bottom. Held in a ref so a new callback
+  // identity does not re-subscribe the listener.
+  const onScrollChangeRef = useRef(onScrollChange);
+  useEffect(() => {
+    onScrollChangeRef.current = onScrollChange;
+  }, [onScrollChange]);
+  // A layout effect, because its cleanup has to run while the scroller is
+  // still in the document: a detached node reports a scrollTop of zero, and
+  // the final read below is the one that catches movement whose scroll event
+  // was still queued when the switch happened.
+  useLayoutEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const report = () =>
+      onScrollChangeRef.current?.(latestState.current.sessionId, el.scrollTop, atBottom(el));
+    el.addEventListener("scroll", report, { passive: true });
+    // Mounting counts as a position too: a transcript left at the tail — or
+    // one that just restored an offset above — has somewhere to come back to
+    // even if the reader never touches it.
+    report();
+    return () => {
+      el.removeEventListener("scroll", report);
+      report();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Only the final agent block is still growing; everything above it is
   // settled and renders in full. A block the harness opened but never filled is
   // not it: nothing of it is on screen, so treating it as the growing one would
@@ -664,6 +743,38 @@ export function Transcript({
     }
     return undefined;
   }, [ownItems, state.turns]);
+
+  // Sending a prompt should not leave it jammed against the composer with the
+  // answer arriving in the sliver below. The newest prompt is lifted to the top
+  // of the view instead, so the reply streams into the open space under it and
+  // its first lines are readable the moment they land.
+  const lastPromptID = useMemo(() => {
+    for (let i = ownItems.length - 1; i >= 0; i--) {
+      const it = ownItems[i];
+      if (it.kind === "message" && it.role === "user") return it.id;
+    }
+    return undefined;
+  }, [ownItems]);
+
+  // Only a prompt that arrived while this session was already on screen is one
+  // the reader just sent. Opening a session, or switching between two, also
+  // changes the newest prompt — the whole transcript arrives at once — and
+  // yanking the view then would be moving a transcript nobody asked to move.
+  // Which is why the session is remembered separately from the prompt: a
+  // session first seen with no prompt in it at all still anchors the first one
+  // it gets.
+  const seenSession = useRef<string>(undefined);
+  const seenPrompt = useRef<string>(undefined);
+  useLayoutEffect(() => {
+    const fresh = seenSession.current !== state.sessionId;
+    const prev = seenPrompt.current;
+    seenSession.current = state.sessionId;
+    seenPrompt.current = lastPromptID;
+    if (fresh || !lastPromptID || lastPromptID === prev) return;
+    anchorTo(
+      scrollerRef.current?.querySelector<HTMLElement>(`[data-msg-id="${lastPromptID}"]`) ?? null,
+    );
+  }, [state.sessionId, lastPromptID, anchorTo, scrollerRef]);
 
   const rows = useMemo(
     () => buildRows(ownItems, state.turns, state.phase),
@@ -707,7 +818,7 @@ export function Transcript({
         <div
           ref={contentRef}
           className="mx-auto flex max-w-3xl flex-col gap-3.5 px-4 pt-6 md:px-5"
-          style={{ paddingBottom: TAIL_RESERVE }}
+          style={{ paddingBottom: CONTENT_RESERVE }}
         >
           <WorkspaceCard
             state={state}
@@ -764,6 +875,9 @@ export function Transcript({
             )}
 
           {interrupted && <InterruptedCard turn={interrupted} onContinue={onContinue} />}
+
+          {/* Last, because it is the latest news about the work above it. */}
+          {pr?.merged && <MergedCard pr={pr} onFinish={onFinish} />}
         </div>
       </div>
 
