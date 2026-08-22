@@ -4,7 +4,7 @@
 
 import { applyEvent, emptyState } from "./apply";
 import { checkBuild } from "./boot";
-import type { Access, HarnessMeta, Project, ServerFrame, SessionMeta, SessionState } from "./protocol";
+import type { Access, HarnessMeta, Label, Project, ServerFrame, SessionMeta, SessionState } from "./protocol";
 
 export type ConnectionStatus = "connecting" | "online" | "offline";
 
@@ -22,6 +22,7 @@ export interface ClientEvents {
   onHarnesses(harnesses: HarnessMeta[], defaultCwd: string): void;
   onComposerItemsChanged(sessionId: string): void;
   onProjects(projects: Project[]): void;
+  onLabels(labels: Label[]): void;
   onState(sessionId: string, state: SessionState): void;
   onAccess(access: Access): void;
 }
@@ -152,6 +153,7 @@ export class Client {
         this.events.onSessions(f.sessions ?? []);
         this.events.onHarnesses(f.harnesses ?? [], f.cwd ?? "");
         this.events.onProjects(f.projects ?? []);
+        this.events.onLabels(f.labels ?? []);
         if (f.access) {
           this.events.onAccess(f.access);
         }
@@ -166,6 +168,12 @@ export class Client {
       // this the picker would show the fallback list until a reconnect.
       case "harnesses":
         this.events.onHarnesses(f.harnesses ?? [], f.cwd ?? "");
+        break;
+
+      // Label definitions changed somewhere — this device or a paired one.
+      // The list travels whole; absent means the last label was deleted.
+      case "labels":
+        this.events.onLabels(f.labels ?? []);
         break;
 
       case "composer_items_changed":

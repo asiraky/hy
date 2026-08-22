@@ -13,6 +13,7 @@ func TestOnlyPolledReadsSkipTheCommandLedger(t *testing.T) {
 		"prompt", "delete_session", "force_delete_session", "cleanup_session",
 		"close_session", "create_session", "save_project", "save_user_config",
 		"resolve_permission", "cancel",
+		"create_label", "save_label", "delete_label", "set_session_label",
 	} {
 		if pollingCommand(mutation) {
 			t.Fatalf("%q changes something and must keep its replay guarantee", mutation)

@@ -63,6 +63,15 @@ CREATE TABLE IF NOT EXISTS commands (
   result        BLOB,
   created_at    INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS labels (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  color         TEXT NOT NULL DEFAULT '',
+  position      INTEGER NOT NULL DEFAULT 0,
+  collapsed     INTEGER NOT NULL DEFAULT 0,
+  created_at    INTEGER NOT NULL
+);
 `
 
 // SessionMeta is the row-level view of a session, enough for a session list.
@@ -95,7 +104,11 @@ type SessionMeta struct {
 	// BaseRef is the ref a managed worktree was branched from, chosen per
 	// session. Empty falls back to the project's default base branch, which is
 	// what every session created before this field existed did.
-	BaseRef           string          `json:"baseRef,omitempty"`
+	BaseRef string `json:"baseRef,omitempty"`
+	// LabelID is the user-defined label this session sits under, or "" for
+	// unlabelled. It is the user's own workflow marker, not lifecycle: nothing
+	// in the server reads it, and the sidebar groups by it.
+	LabelID           string          `json:"labelId,omitempty"`
 	ProvisionScript   string          `json:"-"`
 	DeprovisionScript string          `json:"-"`
 	ProvisionResult   json.RawMessage `json:"-"`
@@ -129,6 +142,7 @@ func Open(path string) (*Store, error) {
 		`ALTER TABLE sessions ADD COLUMN provision_result BLOB`,
 		`ALTER TABLE sessions ADD COLUMN provider_instance TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE sessions ADD COLUMN base_ref TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN label_id TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.Exec(migration); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return nil, fmt.Errorf("migrate schema: %w", err)
@@ -236,8 +250,8 @@ func (s *Store) Session(ctx context.Context, id string) (SessionMeta, error) {
 	var m SessionMeta
 	var provisionResult []byte
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, cwd, harness, provider_instance, title, created_at, updated_at, head_seq, phase, project_id, branch, model, mode, effort, workspace_mode, base_ref, provision_script, deprovision_script, provision_result FROM sessions WHERE id = ?`, id).
-		Scan(&m.ID, &m.Cwd, &m.Harness, &m.ProviderInstance, &m.Title, &m.CreatedAt, &m.UpdatedAt, &m.HeadSeq, &m.Phase, &m.ProjectID, &m.Branch, &m.Model, &m.Mode, &m.Effort, &m.WorkspaceMode, &m.BaseRef, &m.ProvisionScript, &m.DeprovisionScript, &provisionResult)
+		`SELECT id, cwd, harness, provider_instance, title, created_at, updated_at, head_seq, phase, project_id, branch, model, mode, effort, workspace_mode, base_ref, label_id, provision_script, deprovision_script, provision_result FROM sessions WHERE id = ?`, id).
+		Scan(&m.ID, &m.Cwd, &m.Harness, &m.ProviderInstance, &m.Title, &m.CreatedAt, &m.UpdatedAt, &m.HeadSeq, &m.Phase, &m.ProjectID, &m.Branch, &m.Model, &m.Mode, &m.Effort, &m.WorkspaceMode, &m.BaseRef, &m.LabelID, &m.ProvisionScript, &m.DeprovisionScript, &provisionResult)
 	m.ProvisionResult = json.RawMessage(provisionResult)
 	if errors.Is(err, sql.ErrNoRows) {
 		return m, ErrNotFound
@@ -247,7 +261,7 @@ func (s *Store) Session(ctx context.Context, id string) (SessionMeta, error) {
 
 func (s *Store) ListSessions(ctx context.Context) ([]SessionMeta, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, cwd, harness, provider_instance, title, created_at, updated_at, head_seq, phase, project_id, branch, model, mode, effort, workspace_mode, base_ref
+		`SELECT id, cwd, harness, provider_instance, title, created_at, updated_at, head_seq, phase, project_id, branch, model, mode, effort, workspace_mode, base_ref, label_id
 		 FROM sessions ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
@@ -257,7 +271,7 @@ func (s *Store) ListSessions(ctx context.Context) ([]SessionMeta, error) {
 	out := []SessionMeta{}
 	for rows.Next() {
 		var m SessionMeta
-		if err := rows.Scan(&m.ID, &m.Cwd, &m.Harness, &m.ProviderInstance, &m.Title, &m.CreatedAt, &m.UpdatedAt, &m.HeadSeq, &m.Phase, &m.ProjectID, &m.Branch, &m.Model, &m.Mode, &m.Effort, &m.WorkspaceMode, &m.BaseRef); err != nil {
+		if err := rows.Scan(&m.ID, &m.Cwd, &m.Harness, &m.ProviderInstance, &m.Title, &m.CreatedAt, &m.UpdatedAt, &m.HeadSeq, &m.Phase, &m.ProjectID, &m.Branch, &m.Model, &m.Mode, &m.Effort, &m.WorkspaceMode, &m.BaseRef, &m.LabelID); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
@@ -336,6 +350,143 @@ func (s *Store) DeleteSession(ctx context.Context, id string) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// ---- Labels (user-defined session groupings) ----
+
+// Label is one user-defined grouping. Labels are user-level, not per-project:
+// definitions live here so ordering and assignment survive restarts and fan
+// out to paired devices, which the userconfig file cannot do.
+type Label struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Color string `json:"color"`
+	// Position is the user's chosen sidebar order, smallest first.
+	Position int `json:"position"`
+	// CollapsedByDefault marks a group that should start folded — a "Parked"
+	// group stays out of the way without hiding its sessions. Live collapse
+	// state is a device-local concern; only this default is shared.
+	CollapsedByDefault bool  `json:"collapsedByDefault"`
+	CreatedAt          int64 `json:"createdAt"`
+}
+
+func (s *Store) ListLabels(ctx context.Context) ([]Label, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, name, color, position, collapsed, created_at FROM labels ORDER BY position ASC, created_at ASC, id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []Label{}
+	for rows.Next() {
+		var l Label
+		var collapsed int
+		if err := rows.Scan(&l.ID, &l.Name, &l.Color, &l.Position, &collapsed, &l.CreatedAt); err != nil {
+			return nil, err
+		}
+		l.CollapsedByDefault = collapsed != 0
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// CreateLabel inserts a new definition at the end of the order. The position
+// is claimed inside the INSERT itself — not read beforehand by the caller —
+// so two devices creating at once cannot land on the same slot. The returned
+// label carries the position the row actually got.
+func (s *Store) CreateLabel(ctx context.Context, l Label) (Label, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO labels (id, name, color, position, collapsed, created_at)
+		 VALUES (?,?,?,(SELECT COALESCE(MAX(position),-1)+1 FROM labels),?,?)`,
+		l.ID, l.Name, l.Color, boolInt(l.CollapsedByDefault), l.CreatedAt)
+	if err != nil {
+		return Label{}, err
+	}
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT position FROM labels WHERE id=?`, l.ID).Scan(&l.Position); err != nil {
+		return Label{}, err
+	}
+	return l, nil
+}
+
+// SaveLabel rewrites an existing definition — rename, recolour, reorder, or
+// the collapse default. Unknown ids are refused rather than upserted, so a
+// stale client cannot resurrect a label another device just deleted.
+func (s *Store) SaveLabel(ctx context.Context, l Label) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE labels SET name=?, color=?, position=?, collapsed=? WHERE id=?`,
+		l.Name, l.Color, l.Position, boolInt(l.CollapsedByDefault), l.ID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteLabel removes a definition and unlabels every session carrying it, in
+// one transaction. It never deletes a session.
+func (s *Store) DeleteLabel(ctx context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET label_id='' WHERE label_id=?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM labels WHERE id=?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SetSessionLabel points a session at a label, or "" to clear it. It leaves
+// updated_at alone on purpose: filing a session is not activity, and bumping
+// the stamp would shuffle a most-recent-first list the user was just reading.
+func (s *Store) SetSessionLabel(ctx context.Context, sessionID, labelID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if labelID != "" {
+		var n int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM labels WHERE id=?`, labelID).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			return ErrNotFound
+		}
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE sessions SET label_id=? WHERE id=?`, labelID, sessionID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // ---- Snapshots (a cache; deleting the table changes only latency) ----

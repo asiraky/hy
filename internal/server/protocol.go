@@ -46,7 +46,11 @@ type serverFrame struct {
 	Sessions  []store.SessionMeta `json:"sessions,omitempty"`
 	Harnesses []session.Harness   `json:"harnesses,omitempty"`
 	Projects  []project.Project   `json:"projects,omitempty"`
-	Cwd       string              `json:"cwd,omitempty"`
+	// Labels is the user's label definitions, sent on welcome and re-sent
+	// whole on every change; a client treats an absent field on a labels
+	// frame as "none defined".
+	Labels []store.Label `json:"labels,omitempty"`
+	Cwd    string        `json:"cwd,omitempty"`
 	// Access travels on welcome, after the gate, so an unpaired caller
 	// learns nothing about how else this machine can be reached.
 	Access *endpoints.Set `json:"access,omitempty"`
@@ -150,6 +154,33 @@ type setModelArgs struct {
 type setEffortArgs struct {
 	SessionID string `json:"sessionId"`
 	Effort    string `json:"effort"`
+}
+
+type createLabelArgs struct {
+	Name  string `json:"name"`
+	Color string `json:"color"`
+}
+
+// saveLabelArgs is the whole definition, restated: rename, recolour, reorder,
+// and the collapse default all travel through the one shape.
+type saveLabelArgs struct {
+	LabelID            string `json:"labelId"`
+	Name               string `json:"name"`
+	Color              string `json:"color"`
+	Position           int    `json:"position"`
+	CollapsedByDefault bool   `json:"collapsedByDefault"`
+}
+
+type deleteLabelArgs struct {
+	LabelID string `json:"labelId"`
+}
+
+// setSessionLabelArgs files a session under a label; an empty labelId clears
+// it. One label per session — a status, not a tag set — so this is the whole
+// assignment surface.
+type setSessionLabelArgs struct {
+	SessionID string `json:"sessionId"`
+	LabelID   string `json:"labelId"`
 }
 
 type runComposerActionArgs struct {

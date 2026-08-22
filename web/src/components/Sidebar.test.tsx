@@ -38,6 +38,9 @@ function renderSidebar(over: Partial<React.ComponentProps<typeof Sidebar>> = {})
     accentOf: () => undefined,
     projectName: () => "repo",
     projectRoot: () => "/tmp/repo",
+    labels: [],
+    onSetLabel: vi.fn(),
+    onManageLabels: vi.fn(),
     ...over,
   };
   render(<Sidebar {...props} />);
@@ -63,6 +66,9 @@ function renderLive(sessions: SessionMeta[], over: Partial<React.ComponentProps<
     accentOf: () => undefined,
     projectName: () => "repo",
     projectRoot: () => "/tmp/repo",
+    labels: [],
+    onSetLabel: vi.fn(),
+    onManageLabels: vi.fn(),
     ...over,
   };
   let setOpen: (open: boolean) => void = () => {};

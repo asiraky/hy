@@ -369,6 +369,31 @@ export interface SessionMeta {
   model?: string;
   mode?: string;
   workspaceMode?: string;
+  /**
+   * The user-defined label this session is filed under, or absent for
+   * unlabelled. One label per session — a status, not a tag set.
+   */
+  labelId?: string;
+}
+
+/**
+ * One user-defined label. User-level, not per-project: the same set applies
+ * everywhere, and the server re-broadcasts the whole list on any change so
+ * every paired device stays current. A label means only what the user decides
+ * it means — nothing in the system reads it back.
+ */
+export interface Label {
+  id: string;
+  name: string;
+  color: string;
+  /** The user's chosen sidebar order, smallest first. */
+  position: number;
+  /**
+   * Start this group folded. Only the default is shared; live collapse state
+   * is device-local, like the sidebar width.
+   */
+  collapsedByDefault?: boolean;
+  createdAt: number;
 }
 
 /**
@@ -504,6 +529,7 @@ export interface ServerFrame {
     | "welcome"
     | "sessions"
     | "harnesses"
+    | "labels"
     | "composer_items_changed"
     | "snapshot"
     | "event"
@@ -518,6 +544,8 @@ export interface ServerFrame {
   sessions?: SessionMeta[];
   harnesses?: HarnessMeta[];
   projects?: Project[];
+  /** Absent means none defined: an empty list is omitted from the frame. */
+  labels?: Label[];
   cwd?: string;
   access?: Access;
   sessionId?: string;
