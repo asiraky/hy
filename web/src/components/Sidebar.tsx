@@ -444,7 +444,10 @@ function DockedSidebar(props: SidebarProps) {
         aria-orientation="vertical"
         aria-label="Resize the sidebar"
         onPointerDown={startDrag}
-        className="hover:bg-primary/40 absolute inset-y-0 -right-1 z-10 w-2 cursor-col-resize"
+        // z-20: the handle overhangs 4px into <main>, whose header/composer
+        // fade gradients are z-10 and painted later in the DOM — at equal
+        // z-index they'd carve a notch out of the hover highlight.
+        className="hover:bg-primary/40 absolute inset-y-0 -right-1 z-20 w-2 cursor-col-resize"
       />
     </aside>
   );
