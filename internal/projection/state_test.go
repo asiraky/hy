@@ -86,6 +86,96 @@ func TestStreamingWhileIdleImpliesTurn(t *testing.T) {
 	}
 }
 
+// A finish for a turn that is not the open one — a stale close from an
+// adapter, a duplicate — must not take the session idle while different work
+// is running, and must not paint the running turn's tools as failed. Mirrored
+// by web/src/apply.test.ts.
+func TestStaleTurnFinishedDoesNotGoIdle(t *testing.T) {
+	s := New("s1")
+	s.Apply(event(t, 1, proto.TurnStarted, proto.TurnStartedPayload{TurnID: "t1", Prompt: "go"}))
+	s.Apply(event(t, 2, proto.ToolCallStarted, proto.ToolCallStartedPayload{
+		TurnID: "t1", ToolCallID: "c1", Kind: proto.KindExecute, Title: "ls", Status: proto.StatusInProgress,
+	}))
+	s.Apply(event(t, 3, proto.TurnFinished, proto.TurnFinishedPayload{TurnID: "t-stale", StopReason: proto.StopError}))
+
+	if s.Phase != "turn" {
+		t.Fatalf("phase after stale finish = %q, want turn", s.Phase)
+	}
+	if s.Items[1].Status != proto.StatusInProgress {
+		t.Fatalf("running tool status = %q, want in_progress untouched", s.Items[1].Status)
+	}
+
+	// The real finish still closes the turn.
+	s.Apply(event(t, 4, proto.TurnFinished, proto.TurnFinishedPayload{TurnID: "t1", StopReason: proto.StopEndTurn}))
+	if s.Phase != "idle" || !s.Turns[0].Done {
+		t.Fatalf("after real finish: phase=%q done=%v, want idle/true", s.Phase, s.Turns[0].Done)
+	}
+	if s.Items[1].Status != proto.StatusFailed {
+		t.Fatalf("tool status after its turn finished = %q, want failed", s.Items[1].Status)
+	}
+}
+
+// A tool going active while idle is a running turn; a straggling completion of
+// a background tool after the turn ended is not, and must not reopen
+// "working" with nothing left to close it. Mirrored by web/src/apply.test.ts.
+func TestToolUpdateWhileIdle(t *testing.T) {
+	s := New("s1")
+	s.Apply(event(t, 1, proto.ToolCallUpdated, proto.ToolCallUpdatedPayload{
+		ToolCallID: "c1", Status: proto.StatusCompleted,
+	}))
+	if s.Phase != "idle" {
+		t.Fatalf("phase after straggling completion = %q, want idle", s.Phase)
+	}
+
+	s.Apply(event(t, 2, proto.ToolCallUpdated, proto.ToolCallUpdatedPayload{
+		ToolCallID: "c2", Status: proto.StatusInProgress,
+	}))
+	if s.Phase != "turn" {
+		t.Fatalf("phase after tool going active = %q, want turn", s.Phase)
+	}
+}
+
+// Attention is the derived whose-turn-is-it signal. A pending permission or
+// question outranks the running turn: the agent is blocked on a human, so it
+// is the user's turn, categorised.
+func TestAttention(t *testing.T) {
+	s := New("s1")
+	if got := s.Attention(); got != AttentionNeedsPrompt {
+		t.Fatalf("idle attention = %q, want needs_prompt", got)
+	}
+
+	s.Apply(event(t, 1, proto.TurnStarted, proto.TurnStartedPayload{TurnID: "t1", Prompt: "go"}))
+	if got := s.Attention(); got != AttentionWorking {
+		t.Fatalf("mid-turn attention = %q, want working", got)
+	}
+
+	s.Apply(event(t, 2, proto.PermissionRequested, proto.PermissionRequestedPayload{RequestID: "r1", TurnID: "t1"}))
+	if got := s.Attention(); got != AttentionNeedsPermission {
+		t.Fatalf("pending-permission attention = %q, want needs_permission", got)
+	}
+
+	s.Apply(event(t, 3, proto.PermissionResolved, proto.PermissionResolvedPayload{RequestID: "r1", Outcome: proto.OutcomeAllowOnce}))
+	if got := s.Attention(); got != AttentionWorking {
+		t.Fatalf("attention after resolve = %q, want working", got)
+	}
+
+	s.Apply(event(t, 4, proto.ElicitationRequested, proto.ElicitationRequestedPayload{RequestID: "e1", Prompt: "which?"}))
+	if got := s.Attention(); got != AttentionNeedsAnswer {
+		t.Fatalf("pending-question attention = %q, want needs_answer", got)
+	}
+	s.Apply(event(t, 5, proto.ElicitationResolved, proto.ElicitationResolvedPayload{RequestID: "e1", Action: "accept"}))
+
+	s.Apply(event(t, 6, proto.TurnFinished, proto.TurnFinishedPayload{TurnID: "t1", StopReason: proto.StopEndTurn}))
+	if got := s.Attention(); got != AttentionNeedsPrompt {
+		t.Fatalf("post-turn attention = %q, want needs_prompt", got)
+	}
+
+	s.Apply(event(t, 7, proto.SessionClosed, proto.SessionClosedPayload{Reason: "done"}))
+	if got := s.Attention(); got != AttentionClosed {
+		t.Fatalf("closed attention = %q, want closed", got)
+	}
+}
+
 // The defence must not resurrect a closed session.
 func TestStreamingDoesNotReopenClosedSession(t *testing.T) {
 	s := New("s1")

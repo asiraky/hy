@@ -10,6 +10,69 @@ import (
 	"github.com/asiraky/hy/internal/proto"
 )
 
+// Attention is the derived answer to "whose turn is it?" — the one signal a
+// session list, a notifier, or any future routing system should read. It is a
+// pure function of projected state, never stored: the log stays authoritative.
+//
+// The user's-turn states are deliberately split three ways. "Waiting for a
+// prompt", "waiting for a permission decision", and "waiting for an answer to
+// a question" are all the user's turn, but anything built on top of this (a
+// notification, a queue, a triage view) needs to know which kind of turn it is.
+const (
+	// AttentionWorking: the agent (or the workspace lifecycle) is busy; there
+	// is nothing for the user to do but wait or interrupt.
+	AttentionWorking = "working"
+	// AttentionNeedsPermission: the harness is parked on a tool-permission
+	// decision. The user's turn, and time-sensitive: the agent is blocked.
+	AttentionNeedsPermission = "needs_permission"
+	// AttentionNeedsAnswer: the harness asked a question (elicitation) and is
+	// blocked on the reply. The user's turn.
+	AttentionNeedsAnswer = "needs_answer"
+	// AttentionNeedsPrompt: idle — the conversation is with the user.
+	AttentionNeedsPrompt = "needs_prompt"
+	// AttentionFailed: workspace provisioning or cleanup failed; the session
+	// needs a human decision before anything else can happen.
+	AttentionFailed = "failed"
+	// AttentionClosed: the session is a closed transcript.
+	AttentionClosed = "closed"
+)
+
+// Attention derives the session's attention state from the projection. Pending
+// human requests outrank the running turn on purpose: a turn that is blocked
+// on a permission is the user's turn, not the agent's.
+func (s *State) Attention() string {
+	switch {
+	case s.Closed || s.Phase == "closed":
+		return AttentionClosed
+	case s.Phase == "provision_failed" || s.Phase == "cleanup_failed":
+		return AttentionFailed
+	case len(s.Pending) > 0:
+		return AttentionNeedsPermission
+	case len(s.Elicitations) > 0:
+		return AttentionNeedsAnswer
+	case s.Phase == "turn" || s.Phase == "provisioning" || s.Phase == "cleaning":
+		return AttentionWorking
+	default:
+		return AttentionNeedsPrompt
+	}
+}
+
+// AttentionForPhase derives attention for a session with no live projection —
+// a row in the store whose actor is not running. A dead actor cancels its
+// pending permissions on the way down, so the phase alone is enough.
+func AttentionForPhase(phase string) string {
+	switch phase {
+	case "closed":
+		return AttentionClosed
+	case "provision_failed", "cleanup_failed":
+		return AttentionFailed
+	case "turn", "creating", "provisioning", "cleaning":
+		return AttentionWorking
+	default:
+		return AttentionNeedsPrompt
+	}
+}
+
 // ItemKind discriminates timeline entries.
 const (
 	ItemMessage = "message"
@@ -310,7 +373,20 @@ func (s *State) Apply(ev proto.Event) {
 	case proto.TurnFinished:
 		var p proto.TurnFinishedPayload
 		decode(ev.Payload, &p)
-		s.Phase = "idle"
+		// Only the finish of the turn that is actually open may take the
+		// session idle. A stale finish — an adapter closing a turn the log
+		// never opened, or a duplicate for a turn already superseded — must
+		// not report "user's turn" while different work is running. This is
+		// the projection's twin of the actor's turnActive guard; without it
+		// the two disagree and the UI goes idle while the busy guard holds.
+		// Mirrored in web/src/apply.ts.
+		open := ""
+		for i := range s.Turns {
+			if !s.Turns[i].Done {
+				open = s.Turns[i].ID
+			}
+		}
+		match := open == "" || p.TurnID == open
 		for i := range s.Turns {
 			if s.Turns[i].ID == p.TurnID {
 				s.Turns[i].StopReason = p.StopReason
@@ -319,10 +395,17 @@ func (s *State) Apply(ev proto.Event) {
 				s.Turns[i].FinishedAt = ev.Timestamp
 			}
 		}
-		// Any tool left mid-flight when the turn ended is no longer running.
-		for i := range s.Items {
-			if s.Items[i].Kind == ItemTool && (s.Items[i].Status == proto.StatusInProgress || s.Items[i].Status == proto.StatusPending) {
-				s.Items[i].Status = proto.StatusFailed
+		if match {
+			s.Phase = "idle"
+			// Any tool of this turn left mid-flight is no longer running. Tools
+			// of other turns are left alone: a stray finish must not paint
+			// unrelated running work as failed.
+			for i := range s.Items {
+				if s.Items[i].Kind == ItemTool &&
+					(s.Items[i].Status == proto.StatusInProgress || s.Items[i].Status == proto.StatusPending) &&
+					(s.Items[i].TurnID == p.TurnID || s.Items[i].TurnID == "") {
+					s.Items[i].Status = proto.StatusFailed
+				}
 			}
 		}
 
@@ -374,6 +457,13 @@ func (s *State) Apply(ev proto.Event) {
 	case proto.ToolCallUpdated:
 		var p proto.ToolCallUpdatedPayload
 		decode(ev.Payload, &p)
+		// Same defence as message.chunk, but only for a tool going active. A
+		// completion is not: a background tool's result straggling in after
+		// the turn ended must not reopen "working" with nothing left to close
+		// it.
+		if s.Phase == "idle" && p.Status == proto.StatusInProgress {
+			s.Phase = "turn"
+		}
 		s.upsert(p.ToolCallID, func(it *Item) {
 			it.Kind = ItemTool
 			if it.ReceivedAt == 0 {

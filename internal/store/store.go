@@ -80,12 +80,18 @@ type SessionMeta struct {
 	UpdatedAt        int64  `json:"updatedAt"`
 	HeadSeq          int64  `json:"headSeq"`
 	Phase            string `json:"phase"`
-	ProjectID        string `json:"projectId,omitempty"`
-	Branch           string `json:"branch,omitempty"`
-	Model            string `json:"model,omitempty"`
-	Mode             string `json:"mode,omitempty"`
-	Effort           string `json:"effort,omitempty"`
-	WorkspaceMode    string `json:"workspaceMode,omitempty"`
+	// Attention is the derived whose-turn-is-it signal — see
+	// projection.Attention. It is not a column: the session manager fills it
+	// from the live projection (or from Phase for a session with no running
+	// actor) when it serves a list. The stored row never holds it, so it can
+	// never go stale in the database.
+	Attention     string `json:"attention,omitempty"`
+	ProjectID     string `json:"projectId,omitempty"`
+	Branch        string `json:"branch,omitempty"`
+	Model         string `json:"model,omitempty"`
+	Mode          string `json:"mode,omitempty"`
+	Effort        string `json:"effort,omitempty"`
+	WorkspaceMode string `json:"workspaceMode,omitempty"`
 	// BaseRef is the ref a managed worktree was branched from, chosen per
 	// session. Empty falls back to the project's default base branch, which is
 	// what every session created before this field existed did.

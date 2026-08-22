@@ -64,6 +64,10 @@ type Actor struct {
 	mu   sync.Mutex // guards subs and headSeq for readers outside the loop
 	subs map[string]*Subscriber
 	head int64
+	// attention caches state.Attention() for readers outside the loop — the
+	// session list wants it without a round trip through the inbox. Written
+	// only by the actor goroutine; the projection stays the source of truth.
+	attention string
 
 	// onExit lets the manager forget a disposed actor, so the next attach
 	// resumes the session from the log instead of finding a dead one.
@@ -348,6 +352,14 @@ func (a *Actor) Head() int64 {
 	return a.head
 }
 
+// Attention returns the session's derived attention state — see
+// projection.Attention. Safe from any goroutine.
+func (a *Actor) Attention() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.attention
+}
+
 // State returns a snapshot of the projection as of Head. It is produced inside
 // the actor loop so it can never observe a half-applied event.
 func (a *Actor) State(ctx context.Context) (*projection.State, error) {
@@ -545,6 +557,12 @@ func (a *Actor) pump(sess adapter.Session) {
 
 func (a *Actor) run() {
 	defer a.wg.Done()
+	// Seed the attention cache from the state the actor starts with — a
+	// resumed projection, or an empty one. Every constructor builds the state
+	// before starting this goroutine, so this is the first read.
+	a.mu.Lock()
+	a.attention = a.state.Attention()
+	a.mu.Unlock()
 	for {
 		select {
 		case c := <-a.inbox:
@@ -789,7 +807,6 @@ func (a *Actor) handle(c command) (stop bool) {
 			a.append(proto.Emit(proto.TurnFinished, proto.TurnFinishedPayload{
 				TurnID: turnID, StopReason: proto.StopError, Error: err.Error(),
 			}))
-			_ = a.store.SetPhase(ctx, a.ID, "idle")
 			c.reply <- cmdResult{err: err}
 			return false
 		}
@@ -956,6 +973,7 @@ func (a *Actor) append(em proto.Emission) {
 		return
 	}
 
+	prevPhase := a.state.Phase
 	a.state.Apply(ev)
 
 	a.mu.Lock()
@@ -970,13 +988,14 @@ func (a *Actor) append(em proto.Emission) {
 		if p, ok := em.Payload.(proto.TurnStartedPayload); ok && a.turnActive == "" {
 			a.turnActive = p.TurnID
 		}
-		_ = a.store.SetPhase(ctx, a.ID, "turn")
 	}
 	if em.Type == proto.TurnFinished {
 		// Only the finish of the turn that is actually active may clear it. A
 		// finish for some other turn — a stale close from the adapter, or the
 		// resolution of an interleaving the actor has already moved past —
 		// must not release the busy guard while different work is running.
+		// The projection applies the same guard when folding the event, so
+		// the phase it lands on and the busy guard agree.
 		p, ok := em.Payload.(proto.TurnFinishedPayload)
 		if a.turnActive == "" || (ok && p.TurnID == a.turnActive) {
 			// Only a turn whose baseline was taken can be measured. A
@@ -988,11 +1007,31 @@ func (a *Actor) append(em proto.Emission) {
 			}
 			a.measuring = ""
 			a.turnActive = ""
-			_ = a.store.SetPhase(ctx, a.ID, "idle")
 		}
 	}
-	if em.Type == proto.TurnFinished || em.Type == proto.TurnStarted {
+
+	// The stored phase column is a cache of the projection, kept for the
+	// session list and for restart recovery, which scans rows without folding
+	// logs. Syncing it on every turn-shaped transition — not just on turn
+	// events — is what lets activity-promoted turns (streaming or a tool
+	// going active while the log said idle) survive a restart. Workspace
+	// events are excluded: the lifecycle runner owns those writes, and its
+	// vocabulary (ready, provisioning, …) is wider than the projection's.
+	switch em.Type {
+	case proto.TurnStarted, proto.TurnFinished, proto.MessageChunk, proto.ToolCallStarted, proto.ToolCallUpdated, proto.SessionClosed:
+		if phase := a.state.Phase; phase != prevPhase && (phase == "turn" || phase == "idle" || phase == "closed") {
+			if err := a.store.SetPhase(ctx, a.ID, phase); err != nil {
+				a.logf("set phase %s on %s: %v", phase, a.ID, err)
+			}
+		}
+	}
+
+	// Attention is the derived whose-turn-is-it signal. Any event that moves
+	// it — turn boundaries, a permission being asked or answered, activity
+	// while idle — re-notifies the session list.
+	if att := a.state.Attention(); att != a.Attention() {
 		a.mu.Lock()
+		a.attention = att
 		onPhase := a.onPhase
 		a.mu.Unlock()
 		if onPhase != nil {

@@ -47,6 +47,27 @@ describe("applyEvent turn lifecycle", () => {
     expect(s2.phase).toBe("turn");
   });
 
+  it("ignores a stale turn.finished while a different turn is open", () => {
+    let s = emptyState("s1");
+    s = applyEvent(s, ev(1, "turn.started", { turnId: "t1", prompt: "go" }));
+    s = applyEvent(s, ev(2, "tool_call.started", { turnId: "t1", toolCallId: "c1", kind: "execute", title: "ls", status: "in_progress" }));
+    s = applyEvent(s, ev(3, "turn.finished", { turnId: "t-stale", stopReason: "error" }));
+    expect(s.phase).toBe("turn");
+    expect(s.items[1].status).toBe("in_progress");
+
+    s = applyEvent(s, ev(4, "turn.finished", { turnId: "t1", stopReason: "end_turn" }));
+    expect(s.phase).toBe("idle");
+    expect(s.items[1].status).toBe("failed");
+  });
+
+  it("treats a tool going active while idle as a running turn, but not a straggling completion", () => {
+    let s = emptyState("s1");
+    s = applyEvent(s, ev(1, "tool_call.updated", { toolCallId: "c1", status: "completed" }));
+    expect(s.phase).toBe("idle");
+    s = applyEvent(s, ev(2, "tool_call.updated", { toolCallId: "c2", status: "in_progress" }));
+    expect(s.phase).toBe("turn");
+  });
+
   it("does not reopen a closed session on a stray chunk", () => {
     let s = emptyState("s1");
     s = applyEvent(s, ev(1, "session.closed", { reason: "closed" }));
