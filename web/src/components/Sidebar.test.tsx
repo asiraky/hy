@@ -65,13 +65,20 @@ function renderLive(sessions: SessionMeta[], over: Partial<React.ComponentProps<
     projectRoot: () => "/tmp/repo",
     ...over,
   };
+  let setOpen: (open: boolean) => void = () => {};
   function Live() {
     const [list, setList] = useState(sessions);
+    const [open, setPanelOpen] = useState(true);
     set = setList;
-    return <Sidebar {...props} sessions={list} />;
+    setOpen = setPanelOpen;
+    return <Sidebar {...props} sessions={list} open={open} />;
   }
   render(<Live />);
-  return { props, serverSays: (next: SessionMeta[]) => act(() => set(next)) };
+  return {
+    props,
+    serverSays: (next: SessionMeta[]) => act(() => set(next)),
+    setSidebarOpen: (open: boolean) => act(() => setOpen(open)),
+  };
 }
 
 // Radix marks the rest of the document aria-hidden while a dialog is open, so
@@ -318,5 +325,57 @@ describe("Sidebar", () => {
 
     expect(screen.queryByRole("button", { name: /Deleting/ })).toBeNull();
     expect(rowOrder()).toEqual(["Session a"]);
+  });
+
+  it("holds the window while the delete runs, and lets go once the wait is abnormal", () => {
+    vi.useFakeTimers();
+    try {
+      renderLive([session("a"), session("b")]);
+      confirmDelete("a");
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+      // Escape would otherwise close it over a delete the user cannot see the
+      // progress of anywhere else.
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+      expect(screen.getByRole("button", { name: /Deleting/ })).toBeTruthy();
+
+      // A deprovision hook can hang forever; the dialog admits it and offers
+      // the way out it was withholding.
+      act(() => vi.advanceTimersByTime(11_000));
+      expect(screen.getByText(/taking longer than usual/)).toBeTruthy();
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+      expect(screen.queryByRole("button", { name: /Deleting/ })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles the worktree answer once it has been sent", () => {
+    const managed = session("a", { workspaceMode: "managed", cwd: "/tmp/repo/.worktrees/a" });
+    renderLive([managed, session("b")]);
+
+    confirmDelete("a");
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    // The request has already gone with the box ticked; unticking it now would
+    // only make the dialog lie about what is happening on disk.
+    expect(checkbox()!.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: /Deleting worktree/ })).toBeTruthy();
+  });
+
+  it("keeps the delete on screen when the sidebar closes under it", () => {
+    // On a phone, deleting a row selects it, and selecting closes the sheet —
+    // which used to take the dialog, the pinned order and the animation with
+    // it, because they lived inside the list.
+    viewport("phone");
+    const { serverSays, setSidebarOpen } = renderLive([session("a"), session("b")]);
+
+    confirmDelete("a");
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    setSidebarOpen(false);
+    expect(screen.getByRole("button", { name: /Deleting/ })).toBeTruthy();
+
+    serverSays([session("b")]);
+    expect(screen.queryByRole("button", { name: /Deleting/ })).toBeNull();
   });
 });

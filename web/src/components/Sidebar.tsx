@@ -36,6 +36,8 @@ const BUSY_PHASES = ["turn", "provisioning", "creating", "cleaning"];
 // How long a row takes to fold away once it has left the list. Kept in step
 // with the duration on the row itself.
 const EXIT_MS = 260;
+// How long a delete may take before the dialog stops holding the window shut.
+const STUCK_MS = 10_000;
 const FAILED_PHASES = ["provision_failed", "cleanup_failed"];
 
 function ago(ms: number) {
@@ -74,18 +76,21 @@ interface SidebarProps {
   projectRoot: (id?: string) => string | undefined;
 }
 
-function SessionList({
+/**
+ * Everything the delete takes: the confirmation, the wait, and the row's exit.
+ *
+ * It lives above the sidebar's two shapes rather than inside the list, because
+ * the list does not outlive either of them. The mobile sheet closes when a
+ * session is selected — which deleting a row does — and crossing the `md`
+ * breakpoint swaps the sheet for the docked panel outright. Both unmount the
+ * list, and a delete held in there would lose its dialog, its ordering and its
+ * animation mid-flight.
+ */
+function useDeleteFlow({
   sessions,
-  activeId,
-  onSelect,
   onDelete,
-  accentOf,
-  projectName,
   projectRoot,
-}: Pick<
-  SidebarProps,
-  "sessions" | "activeId" | "onSelect" | "onDelete" | "accentOf" | "projectName" | "projectRoot"
->) {
+}: Pick<SidebarProps, "sessions" | "onDelete" | "projectRoot">) {
   // Deleting a session can take a checkout on disk with it, so a stray click
   // on the X must not be enough on its own — the row's X only opens this
   // confirmation, and the checkout only goes if it is asked for there.
@@ -185,9 +190,22 @@ function SessionList({
   }, [sessions, frozen, exiting]);
 
   // The dialog is only "busy" for the session it is currently asking about: it
-  // can be dismissed mid-delete and reopened on another row, and that row's
-  // Delete button must still be a live button.
+  // can be dismissed once the wait has gone long and reopened on another row,
+  // and that row's Delete button must still be a live button.
   const busy = !!deleting && deleting.id === confirming?.id;
+
+  // A deprovision hook is a user's own script and can hang forever. The dialog
+  // holds the window while a delete is running, so it has to admit when the
+  // wait has stopped being normal and let go.
+  const [stuck, setStuck] = useState(false);
+  useEffect(() => {
+    if (!deleting) {
+      setStuck(false);
+      return;
+    }
+    const t = setTimeout(() => setStuck(true), STUCK_MS);
+    return () => clearTimeout(t);
+  }, [deleting]);
 
   const startDelete = () => {
     if (!confirming || busy) return;
@@ -207,6 +225,38 @@ function SessionList({
       setConfirming((c) => (c?.id === target.id ? null : c));
     });
   };
+
+  return {
+    rows,
+    ask,
+    confirming,
+    deleting,
+    exiting,
+    busy,
+    stuck,
+    mode,
+    sharers,
+    hasWorktree,
+    removable,
+    removeWorktree,
+    setRemoveWorktree,
+    startDelete,
+    dismiss: () => setConfirming(null),
+  };
+}
+
+type DeleteFlow = ReturnType<typeof useDeleteFlow>;
+
+function SessionList({
+  flow,
+  activeId,
+  onSelect,
+  accentOf,
+  projectName,
+}: Pick<SidebarProps, "activeId" | "onSelect" | "accentOf" | "projectName"> & {
+  flow: DeleteFlow;
+}) {
+  const { rows, ask, deleting, exiting } = flow;
 
   if (rows.length === 0) {
     return (
@@ -334,83 +384,111 @@ function SessionList({
         );
       })}
 
-      {/* It stays put while the delete runs: closing it on the click would be
-          claiming the session is gone at the moment the work starts. It is
-          still dismissable, though — a teardown script that hangs must not
-          take the window with it. Dismissing only hides the progress; the
-          delete carries on and the row still leaves on its own. */}
-      <Dialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Delete “{confirming?.title || "Untitled"}”?</DialogTitle>
-            {/* Whatever else it says, it says plainly whether anything on disk
-                is at risk. The old copy promised a worktree removal that a
-                borrowed session never performed. */}
-            <DialogDescription>
-              {mode === "local"
-                ? "This permanently deletes the session and its transcript. Your checkout is left untouched."
-                : "This permanently deletes the session and its transcript."}
-            </DialogDescription>
-          </DialogHeader>
-
-          {confirming && hasWorktree && (
-            <div className="space-y-2 text-[12px]">
-              {removable ? (
-                <>
-                  <div className="flex items-start gap-2">
-                    <Checkbox
-                      id="delete-remove-worktree"
-                      checked={removeWorktree}
-                      onCheckedChange={(v) => setRemoveWorktree(v === true)}
-                      className="mt-0.5"
-                    />
-                    <div className="min-w-0">
-                      <Label htmlFor="delete-remove-worktree" className="cursor-pointer">
-                        Also delete the worktree
-                      </Label>
-                      <span className="text-muted-foreground block font-mono text-[11px] break-all">
-                        {confirming.cwd}
-                      </span>
-                    </div>
-                  </div>
-                  <p className="text-muted-foreground text-[11px]">
-                    {confirming.branch
-                      ? `The branch ${confirming.branch} is kept either way.`
-                      : "Branches are never deleted."}
-                    {mode === "borrowed" && " hy did not create this worktree."}
-                  </p>
-                </>
-              ) : (
-                <p className="text-muted-foreground text-[11px]">
-                  The worktree is left on disk: {sharers.length} other session
-                  {sharers.length === 1 ? "" : "s"} still
-                  {sharers.length === 1 ? " uses" : " use"} it
-                  {sharers[0]?.title ? ` (“${sharers[0].title}”)` : ""}.
-                </p>
-              )}
-            </div>
-          )}
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirming(null)} disabled={busy}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={startDelete} disabled={busy}>
-              {busy ? (
-                <>
-                  <Spinner aria-hidden className="size-4" />
-                  {/* Named, because tearing a worktree down is the slow part
-                      and the one worth waiting through. */}
-                  {removable && removeWorktree ? "Deleting worktree…" : "Deleting…"}
-                </>
-              ) : (
-                "Delete"
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
+  );
+}
+
+/**
+ * The confirmation, and then the wait. Rendered above the sidebar's two shapes
+ * so that neither the sheet closing nor a change of breakpoint can take it
+ * away mid-delete.
+ */
+function DeleteDialog({ flow }: { flow: DeleteFlow }) {
+  // It stays put while the delete runs: closing it on the click would be
+  // claiming the session is gone at the moment the work starts. The one way
+  // out is `stuck` — a teardown script that hangs must not take the window
+  // with it — and taking it only hides the progress. The delete carries on,
+  // and the row still leaves on its own.
+  const held = flow.busy && !flow.stuck;
+  return (
+    <Dialog open={flow.confirming !== null} onOpenChange={(open) => !open && flow.dismiss()}>
+      <DialogContent
+        className="sm:max-w-sm"
+        showCloseButton={!held}
+        onEscapeKeyDown={(e) => held && e.preventDefault()}
+        onInteractOutside={(e) => held && e.preventDefault()}
+      >
+        <DialogHeader>
+          <DialogTitle>Delete “{flow.confirming?.title || "Untitled"}”?</DialogTitle>
+          {/* Whatever else it says, it says plainly whether anything on disk
+              is at risk. The old copy promised a worktree removal that a
+              borrowed session never performed. */}
+          <DialogDescription>
+            {flow.mode === "local"
+              ? "This permanently deletes the session and its transcript. Your checkout is left untouched."
+              : "This permanently deletes the session and its transcript."}
+          </DialogDescription>
+        </DialogHeader>
+
+        {flow.confirming && flow.hasWorktree && (
+          <div className="space-y-2 text-[12px]">
+            {flow.removable ? (
+              <>
+                <div className="flex items-start gap-2">
+                  {/* Settled the moment Delete was pressed: the request has
+                      already gone with the answer that was ticked then, so
+                      changing it now would only make the dialog lie about what
+                      is happening on disk. */}
+                  <Checkbox
+                    id="delete-remove-worktree"
+                    checked={flow.removeWorktree}
+                    onCheckedChange={(v) => flow.setRemoveWorktree(v === true)}
+                    disabled={flow.busy}
+                    className="mt-0.5"
+                  />
+                  <div className="min-w-0">
+                    <Label htmlFor="delete-remove-worktree" className="cursor-pointer">
+                      Also delete the worktree
+                    </Label>
+                    <span className="text-muted-foreground block font-mono text-[11px] break-all">
+                      {flow.confirming.cwd}
+                    </span>
+                  </div>
+                </div>
+                <p className="text-muted-foreground text-[11px]">
+                  {flow.confirming.branch
+                    ? `The branch ${flow.confirming.branch} is kept either way.`
+                    : "Branches are never deleted."}
+                  {flow.mode === "borrowed" && " hy did not create this worktree."}
+                </p>
+              </>
+            ) : (
+              <p className="text-muted-foreground text-[11px]">
+                The worktree is left on disk: {flow.sharers.length} other session
+                {flow.sharers.length === 1 ? "" : "s"} still
+                {flow.sharers.length === 1 ? " uses" : " use"} it
+                {flow.sharers[0]?.title ? ` (“${flow.sharers[0].title}”)` : ""}.
+              </p>
+            )}
+          </div>
+        )}
+
+        {flow.stuck && (
+          <p className="text-muted-foreground text-[11px]">
+            This is taking longer than usual. You can close this — the delete
+            keeps running, and the session goes when it finishes.
+          </p>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={flow.dismiss} disabled={flow.busy}>
+            Cancel
+          </Button>
+          <Button variant="destructive" onClick={flow.startDelete} disabled={flow.busy}>
+            {flow.busy ? (
+              <>
+                <Spinner aria-hidden className="size-4" />
+                {/* Named, because tearing a worktree down is the slow part
+                    and the one worth waiting through. */}
+                {flow.removable && flow.removeWorktree ? "Deleting worktree…" : "Deleting…"}
+              </>
+            ) : (
+              "Delete"
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -422,7 +500,11 @@ function SessionList({
  * panel to go back to. On a phone with no session selected there is nothing,
  * so the row is just the title and the one action.
  */
-function SidebarPanel({ showCollapse, ...props }: SidebarProps & { showCollapse: boolean }) {
+function SidebarPanel({
+  showCollapse,
+  flow,
+  ...props
+}: SidebarProps & { showCollapse: boolean; flow: DeleteFlow }) {
   return (
     <div className="bg-sidebar text-sidebar-foreground flex h-full min-h-0 flex-col">
       {/* One quiet header row: what the panel is, and the one action it
@@ -445,7 +527,13 @@ function SidebarPanel({ showCollapse, ...props }: SidebarProps & { showCollapse:
       </div>
 
       <nav aria-label="Sessions" className="scroll-thin min-h-0 flex-1 overflow-y-auto px-2 py-2">
-        <SessionList {...props} />
+        <SessionList
+          flow={flow}
+          activeId={props.activeId}
+          onSelect={props.onSelect}
+          accentOf={props.accentOf}
+          projectName={props.projectName}
+        />
       </nav>
 
       <Separator />
@@ -477,6 +565,11 @@ function SidebarPanel({ showCollapse, ...props }: SidebarProps & { showCollapse:
 
 export function Sidebar(props: SidebarProps) {
   const isDesktop = useIsDesktop();
+  // Held here, above both shapes, so a delete survives the sheet closing under
+  // it and the switch between them. The dialog is rendered here for the same
+  // reason: selecting a session closes the sheet on a phone, and deleting one
+  // selects it.
+  const flow = useDeleteFlow(props);
 
   // Below md the sidebar is a drawer over the transcript, which is a sheet's
   // whole job: overlay, focus trap, escape to close. At md it is the docked
@@ -484,44 +577,52 @@ export function Sidebar(props: SidebarProps) {
   // here is the same one useMediaQuery and the CSS agree on.
   if (!isDesktop) {
     return (
-      <Sheet open={props.open} onOpenChange={props.onOpenChange}>
-        <SheetContent
-          side="left"
-          tabIndex={-1}
-          // Full-bleed on a phone. A 15% sliver of dimmed transcript is not
-          // context, it is a target for a mis-tap, and with no session
-          // selected there is nothing behind the panel at all.
-          // `sm:max-w-none` is not redundant: the sheet's own base classes cap
-          // it at 24rem from `sm` up, which would leave a 384px panel on a
-          // landscape phone — inside this branch, but past that breakpoint.
-          className="w-screen max-w-none gap-0 border-r-0 p-0 pl-[env(safe-area-inset-left)] sm:max-w-none"
-          // The sheet's own X would be a second close control in the same
-          // corner as the collapse button, misaligned with it and present
-          // even when there is nothing to close back to. One control, and it
-          // lives in the panel header where the docked sidebar puts it.
-          showCloseButton={false}
-          // Radix otherwise focuses the first control inside, which pops its
-          // tooltip open on a touch screen and leaves it there. Focus still
-          // has to enter the panel — a modal that traps focus outside itself
-          // is unusable with a keyboard or a screen reader — so it lands on
-          // the panel rather than nowhere.
-          onOpenAutoFocus={(e) => {
-            e.preventDefault();
-            (e.currentTarget as HTMLElement | null)?.focus();
-          }}
-        >
-          <SheetTitle className="sr-only">Sessions</SheetTitle>
-          {/* Nothing behind the panel means nothing to collapse to. */}
-          <SidebarPanel {...props} showCollapse={props.activeId !== null} />
-        </SheetContent>
-      </Sheet>
+      <>
+        <Sheet open={props.open} onOpenChange={props.onOpenChange}>
+          <SheetContent
+            side="left"
+            tabIndex={-1}
+            // Full-bleed on a phone. A 15% sliver of dimmed transcript is not
+            // context, it is a target for a mis-tap, and with no session
+            // selected there is nothing behind the panel at all.
+            // `sm:max-w-none` is not redundant: the sheet's own base classes cap
+            // it at 24rem from `sm` up, which would leave a 384px panel on a
+            // landscape phone — inside this branch, but past that breakpoint.
+            className="w-screen max-w-none gap-0 border-r-0 p-0 pl-[env(safe-area-inset-left)] sm:max-w-none"
+            // The sheet's own X would be a second close control in the same
+            // corner as the collapse button, misaligned with it and present
+            // even when there is nothing to close back to. One control, and it
+            // lives in the panel header where the docked sidebar puts it.
+            showCloseButton={false}
+            // Radix otherwise focuses the first control inside, which pops its
+            // tooltip open on a touch screen and leaves it there. Focus still
+            // has to enter the panel — a modal that traps focus outside itself
+            // is unusable with a keyboard or a screen reader — so it lands on
+            // the panel rather than nowhere.
+            onOpenAutoFocus={(e) => {
+              e.preventDefault();
+              (e.currentTarget as HTMLElement | null)?.focus();
+            }}
+          >
+            <SheetTitle className="sr-only">Sessions</SheetTitle>
+            {/* Nothing behind the panel means nothing to collapse to. */}
+            <SidebarPanel {...props} flow={flow} showCollapse={props.activeId !== null} />
+          </SheetContent>
+        </Sheet>
+        <DeleteDialog flow={flow} />
+      </>
     );
   }
 
-  return <DockedSidebar {...props} />;
+  return (
+    <>
+      <DockedSidebar {...props} flow={flow} />
+      <DeleteDialog flow={flow} />
+    </>
+  );
 }
 
-function DockedSidebar(props: SidebarProps) {
+function DockedSidebar({ flow, ...props }: SidebarProps & { flow: DeleteFlow }) {
   const [width, setWidth] = useState(() => {
     const stored = Number(localStorage.getItem(WIDTH_KEY));
     return Number.isFinite(stored) && stored >= MIN_WIDTH && stored <= MAX_WIDTH
@@ -573,7 +674,7 @@ function DockedSidebar(props: SidebarProps) {
         !resizing && "transition-[margin] duration-200 motion-reduce:transition-none",
       )}
     >
-      <SidebarPanel {...props} showCollapse />
+      <SidebarPanel {...props} flow={flow} showCollapse />
       <div
         role="separator"
         aria-orientation="vertical"
