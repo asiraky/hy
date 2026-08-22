@@ -243,6 +243,10 @@ export function App() {
       // a live delete would. The seenActive effect below can't: it only acts
       // on sessions it saw in a list first.
       if (sessions.some((s) => s.id === activeId && s.phase !== "closed")) return;
+      // Including the position the cache seeded: the prune below only drops
+      // sessions it saw in a list, and this one never made it into one.
+      delete scrollPositions.current[activeId];
+      goneSessions.current.add(activeId);
       setActiveId(null);
       setState(null);
       setResume(null);

@@ -787,6 +787,27 @@ describe("transcript scroll position", () => {
     expect(screen.queryByLabelText("Scroll to bottom")).toBeNull();
   });
 
+  it("forgets a resumed position when the list says that session is gone", async () => {
+    // The cache hydrates a position for "a" before any list exists, so the
+    // prune that follows the list has never seen the id — it has to be
+    // dropped here or an id coming back would inherit a dead offset.
+    localStorage.setItem("hy.lastSession", "a");
+    sessionStorage.setItem(
+      "hy.resume",
+      JSON.stringify({ build: "dev", state: state("a", "default"), scrollTop: 300, atBottom: false }),
+    );
+    viewport("desktop");
+    render(<App />);
+    await act(async () => {
+      events.onProjects([project]);
+      events.onHarnesses([harness], "/tmp/repo");
+      events.onSessions([session("b")]);
+    });
+    await act(async () => events.onSessions([session("a"), session("b")]));
+    await open("a");
+    expect(scroller().scrollTop).not.toBe(300);
+  });
+
   it("forgets the position of a session that goes away", async () => {
     await boot();
     await open("a");
