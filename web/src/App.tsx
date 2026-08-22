@@ -30,7 +30,19 @@ import {
 } from "./components/ui/select";
 import { loadResume } from "./resume";
 import { cn } from "./lib/utils";
-import { CoffeeIcon, FileDiffIcon, MessagesSquareIcon, PanelLeftIcon, PlusIcon, SettingsIcon, SparklesIcon } from "lucide-react";
+import { transcriptMarkdown } from "./lib/transcript";
+import { useCopy } from "./lib/clipboard";
+import {
+  CheckIcon,
+  CoffeeIcon,
+  CopyIcon,
+  FileDiffIcon,
+  MessagesSquareIcon,
+  PanelLeftIcon,
+  PlusIcon,
+  SettingsIcon,
+  SparklesIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 
 const LAST_SESSION = "hy.lastSession";
@@ -41,6 +53,7 @@ const LAST_SESSION = "hy.lastSession";
 const SHOW_MODE_SWITCHER = false;
 
 export function App() {
+  const { copied: transcriptCopied, copy: copyTranscript } = useCopy();
   // The snapshot a previous page of this tab saved as it went to background
   // (resume.ts). A mobile browser discards a backgrounded tab and reloads it
   // on return; hydrating from the cache paints the session as it was left —
@@ -784,6 +797,13 @@ export function App() {
 
               <IconButton label="Summarise this session" onClick={openSummary}>
                 <SparklesIcon />
+              </IconButton>
+
+              <IconButton
+                label={transcriptCopied ? "Transcript copied" : "Copy transcript"}
+                onClick={() => void copyTranscript(transcriptMarkdown(state.items, state.turns))}
+              >
+                {transcriptCopied ? <CheckIcon className="text-success" /> : <CopyIcon />}
               </IconButton>
 
               {activeProject && (
