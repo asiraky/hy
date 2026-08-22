@@ -322,6 +322,24 @@ export interface UserConfig {
   /** A JavaScript arrow function, issue in and branch name out, evaluated here. */
   branchFormat?: string;
   suggestIssues?: boolean;
+  /**
+   * The system prompt the session summariser runs under. Empty means the
+   * server's default, so clearing the box is how you go back to it.
+   */
+  summaryPrompt?: string;
+}
+
+/**
+ * One generated session summary. `seq` is the session head it was made from,
+ * so a client can tell a summary that still describes the session from one the
+ * session has since moved past.
+ */
+export interface SessionSummary {
+  text: string;
+  harness: string;
+  model: string;
+  seq: number;
+  generatedAt: number;
 }
 
 export interface SessionMeta {

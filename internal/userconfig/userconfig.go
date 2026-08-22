@@ -17,6 +17,23 @@ import (
 // is a string rather than Go code because the presenter is what evaluates it.
 const DefaultBranchFormat = "(issue) => `issue/${issue.number}-${issue.title.toLowerCase().replace(/[^a-z0-9]+/g, \"-\").replace(/^-+|-+$/g, \"\").slice(0, 40).replace(/-+$/, \"\")}`"
 
+// DefaultSummaryPrompt is the system prompt the summariser runs under when the
+// operator has not written one. It is deliberately shaped around the question
+// somebody actually has when they reopen a session they have forgotten: what
+// did I ask for, what happened, and is anything still owed. The transcript
+// arrives as a user turn, so this says nothing about how to parse it.
+const DefaultSummaryPrompt = `You are summarising a coding-agent session for the person who started it. They have forgotten what it was about and do not want to reread it.
+
+Write three short sections, using these exact headings:
+
+**Request** — what the user originally asked for, in one or two plain sentences. Their opening message may be long and rambling; state the actual intent, not their wording.
+
+**What happened** — what the agent did, and whether it changed any files. Name the files or areas it touched. Say plainly if it changed nothing, got stuck, or was interrupted.
+
+**Follow-ups** — anything still outstanding: unanswered questions, failing checks, work the agent said it would do but did not. Write "None." if there is nothing.
+
+Be brief and concrete — under 200 words in total. Report only what the transcript shows; never guess at intent or invent work that is not there. Address the user as "you". Do not add a preamble, a title, or a closing remark.`
+
 type Config struct {
 	Version int `json:"version"`
 	// BranchFormat is a JavaScript arrow function, object in and string out,
@@ -24,6 +41,11 @@ type Config struct {
 	BranchFormat string `json:"branchFormat,omitempty"`
 	// SuggestIssues disables the `gh` lookup for people who do not use it.
 	SuggestIssues *bool `json:"suggestIssues,omitempty"`
+	// SummaryPrompt is the system prompt the session summariser runs under.
+	// Empty means DefaultSummaryPrompt, so an operator who has never opened
+	// settings still gets a usable summary — and clearing the box is how you
+	// go back to the default rather than a separate stored flag.
+	SummaryPrompt string `json:"summaryPrompt,omitempty"`
 	// Providers declares provider instances — configured accounts for the
 	// harness adapters. Entries are held raw and written back verbatim: an
 	// entry naming a driver this build has never heard of must survive a
@@ -33,7 +55,7 @@ type Config struct {
 }
 
 func Default() Config {
-	return Config{Version: 1, BranchFormat: DefaultBranchFormat}
+	return Config{Version: 1, BranchFormat: DefaultBranchFormat, SummaryPrompt: DefaultSummaryPrompt}
 }
 
 // Path is ~/.hy/config.json, beside hy.db.
@@ -54,6 +76,9 @@ func Normalize(cfg Config) (Config, error) {
 	}
 	if strings.TrimSpace(cfg.BranchFormat) == "" {
 		cfg.BranchFormat = DefaultBranchFormat
+	}
+	if strings.TrimSpace(cfg.SummaryPrompt) == "" {
+		cfg.SummaryPrompt = DefaultSummaryPrompt
 	}
 	return cfg, nil
 }
