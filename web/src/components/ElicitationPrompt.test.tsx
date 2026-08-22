@@ -60,6 +60,33 @@ describe("AskUserQuestion elicitations", () => {
     expect(onResolve).toHaveBeenCalledWith("accept", { q0: ["Caching", "Batching"] });
   });
 
+  // The trigger is a one-line box; a rationale dragged into it by Radix's value
+  // echo used to spill out of the border. It belongs under the control.
+  it("keeps a chosen option's description out of the select trigger", () => {
+    const request: PendingElicitation = {
+      requestId: "r-single",
+      prompt: "Pick one",
+      schema: {
+        type: "object",
+        properties: {
+          q0: {
+            type: "string",
+            title: "Which cache?",
+            enum: ["Caching", "Metrics"],
+            default: "Caching",
+            "x-optionDescriptions": { Caching: "faster reads" },
+          },
+        },
+      },
+    };
+    render(<ElicitationPrompt request={request} onResolve={vi.fn()} />);
+
+    const description = screen.getByText("faster reads");
+    const trigger = screen.getByRole("combobox");
+    expect(trigger.contains(description)).toBe(false);
+    expect(trigger.textContent).not.toContain("faster reads");
+  });
+
   it("leaves a plain enum elicitation as a single-select with no checkboxes", () => {
     const request: PendingElicitation = {
       requestId: "r-plain",
