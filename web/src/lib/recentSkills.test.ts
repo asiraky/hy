@@ -70,3 +70,21 @@ describe("recentSkills", () => {
     expect(resolved.map((i) => i.insertText)).toEqual(["/model", "/alpha"]);
   });
 });
+
+describe("seeding prefers skills", () => {
+  it("puts skills ahead of plain commands when there is no history", () => {
+    const catalogue = [
+      item("compact", { kind: "command", insertText: "/compact" }),
+      item("review", { kind: "command", insertText: "/review" }),
+      item("work-issue"),
+    ];
+    const resolved = resolveRecentSkills([], catalogue, 2);
+    expect(resolved.map((i) => i.insertText)).toEqual(["/work-issue", "/compact"]);
+  });
+
+  it("keeps a remembered command above any seed", () => {
+    const catalogue = [item("alpha"), item("compact", { kind: "command", insertText: "/compact" })];
+    const resolved = resolveRecentSkills(["/compact"], catalogue, 2);
+    expect(resolved.map((i) => i.insertText)).toEqual(["/compact", "/alpha"]);
+  });
+});

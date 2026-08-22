@@ -272,6 +272,37 @@ describe("the workspace card leaving on its own", () => {
     expect(screen.getByText("Workspace needs attention")).toBeTruthy();
   });
 
+  it("comes back at full height when the workspace goes active mid-collapse", async () => {
+    const { container, rerender } = provisioner(empty());
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    // The collapse has started but not finished; cleanup begins.
+    await act(async () => {
+      rerender(
+        wrap(
+          <Transcript
+            state={empty({ phase: "cleaning", workspace: { phase: "cleaning" } })}
+            onRetryProvision={() => {}}
+            onCleanup={() => {}}
+            onForceDelete={() => {}}
+            onContinue={() => {}}
+            onOpenDiff={() => {}}
+            onFinish={() => {}}
+          />,
+        ),
+      );
+    });
+
+    expect(screen.getByText("Cleaning up workspace")).toBeTruthy();
+    // Flat and transparent would be the same as gone, taking any failure
+    // controls with it.
+    const wrapper = container.querySelector<HTMLElement>(".transition-\\[max-height\\,opacity\\]")!;
+    expect(wrapper.style.maxHeight).toBe("");
+    expect(wrapper.style.opacity).toBe("");
+  });
+
   it("stays while the reader has its output open", async () => {
     provisioner(empty());
     fireEvent.click(screen.getByText("Workspace ready"));

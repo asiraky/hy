@@ -81,11 +81,19 @@ export function resolveRecentSkills(
     picked.push(item);
     taken.add(item.insertText);
   }
-  for (const item of catalogue) {
-    if (picked.length >= limit) break;
-    if (taken.has(item.insertText) || item.behavior === "client-action") continue;
-    picked.push(item);
-    taken.add(item.insertText);
+  // Skills first when there is nothing to remember: a catalogue is mostly
+  // built-in commands (`/compact`, `/review`), and filling the list with those
+  // would make the first-run nudge point at the harness rather than at the
+  // work. Commands still get the leftover slots — they are legitimate first
+  // tokens, and a remembered one is offered above either way.
+  for (const pass of ["skill", "command"] as const) {
+    for (const item of catalogue) {
+      if (picked.length >= limit) break;
+      if (item.kind !== pass) continue;
+      if (taken.has(item.insertText) || item.behavior === "client-action") continue;
+      picked.push(item);
+      taken.add(item.insertText);
+    }
   }
   return picked;
 }

@@ -258,8 +258,13 @@ export function Composer({
     // Recorded on submit rather than on completion: choosing from the menu is
     // browsing, sending is the use. The token is reported whatever the message
     // turns out to do — a prompt, a client action, an adapter action — because
-    // all three are things the user reached for.
-    if (t.startsWith("/")) onCommandUsed?.(t.split(/\s/, 1)[0] ?? "");
+    // all three are things the user reached for. Matched against the catalogue
+    // rather than assumed to start with a slash: Codex's own skills trigger on
+    // `$`, and a message beginning with a word that is not a command at all is
+    // not a use of anything.
+    const leading = t.split(/\s/, 1)[0] ?? "";
+    const used = items.find((item) => item.insertText === leading);
+    if (used) onCommandUsed?.(used.insertText);
     const intercepted = submittedComposerAction(t, items);
     if (intercepted?.item.behavior === "client-action") {
       changeDraft("");

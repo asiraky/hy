@@ -486,16 +486,24 @@ function WorkspaceCard({
       return;
     }
     el.style.maxHeight = `${el.scrollHeight}px`;
-    const frame = requestAnimationFrame(() =>
-      requestAnimationFrame(() => {
+    let inner = 0;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => {
         el.style.maxHeight = "0px";
         el.style.opacity = "0";
-      }),
-    );
+      });
+    });
     const timer = setTimeout(() => setDismissed(true), COLLAPSE_MS);
     return () => {
-      cancelAnimationFrame(frame);
+      cancelAnimationFrame(outer);
+      cancelAnimationFrame(inner);
       clearTimeout(timer);
+      // A workspace that goes active again mid-collapse cancels the exit, and
+      // the card has to come back at full height — the inline styles the
+      // collapse wrote would otherwise leave it flat and invisible, taking any
+      // failure controls with it.
+      el.style.maxHeight = "";
+      el.style.opacity = "";
     };
   }, [leaving]);
 
