@@ -81,6 +81,26 @@ export function App() {
   // the map is pruned as sessions go away (see below).
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [composerRevision, setComposerRevision] = useState(0);
+  // Where each session's transcript was scrolled, kept up here for the same
+  // reason as the drafts: switching sessions unmounts the Transcript, so a
+  // position it owned would be lost every time — you would come back to a
+  // session you were reading half-way up and find yourself at the bottom.
+  // A ref rather than state: the transcript reports every scroll, and nothing
+  // on the page renders from this, so re-rendering the app on each one would
+  // be pure cost. Seeded from the resume cache so the boot restore and the
+  // switch restore are one path. Session scope only, pruned with the drafts.
+  const scrollPositions = useRef<Record<string, { top: number; atBottom: boolean }>>(
+    resume ? { [resume.state.sessionId]: { top: resume.scrollTop, atBottom: resume.atBottom } } : {},
+  );
+  // Sessions the list has taken away. A deleted session's transcript reports
+  // one last position as it unmounts, and that unmount happens after the prune
+  // below has already dropped it — so the id is refused outright rather than
+  // being written straight back in.
+  const goneSessions = useRef<Set<string>>(new Set());
+  const recordScroll = useCallback((id: string, top: number, atBottom: boolean) => {
+    if (goneSessions.current.has(id)) return;
+    scrollPositions.current[id] = { top, atBottom };
+  }, []);
   const setDraft = useCallback(
     (id: string, text: string) =>
       setDrafts((d) => (d[id] === text ? d : { ...d, [id]: text })),
@@ -550,6 +570,15 @@ export function App() {
   const seenSessions = useRef<Set<string>>(new Set());
   useEffect(() => {
     for (const s of sessions) seenSessions.current.add(s.id);
+    // The scroll positions go the same way, and for the same reason: a
+    // deleted session's offset means nothing, and a new id reusing it would
+    // be handed a stranger's place in the transcript.
+    for (const s of sessions) goneSessions.current.delete(s.id);
+    for (const id of Object.keys(scrollPositions.current)) {
+      if (sessions.some((s) => s.id === id) || !seenSessions.current.has(id)) continue;
+      delete scrollPositions.current[id];
+      goneSessions.current.add(id);
+    }
     setDrafts((d) => {
       const live = new Set(sessions.map((s) => s.id));
       const next: Record<string, string> = {};
@@ -570,10 +599,10 @@ export function App() {
   // visibly rises: it reads as the composer pushing the transcript up, even
   // though it is floating.
   const hasSession = state != null;
-  // The resume cache is one boot's worth of help. The Transcript captures the
-  // restored scroll as it mounts, so once a session is on screen the blob has
-  // done its job — and holding it longer would hand a stale position to the
-  // next transcript that mounts for the same session.
+  // The resume cache is one boot's worth of help. Its scroll position moved
+  // into the per-session map above as the page hydrated, and the transcript
+  // takes over reporting from there, so once a session is on screen the blob
+  // has done its job.
   useEffect(() => {
     if (resume && hasSession) setResume(null);
   }, [resume, hasSession]);
@@ -701,7 +730,7 @@ export function App() {
             <div className="from-background pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-gradient-to-b to-transparent" />
 
             <OpenPathContext.Provider value={openPath}>
-              <Transcript state={state} initialScroll={resume && activeId === resume.state.sessionId ? { top: resume.scrollTop, atBottom: resume.atBottom } : undefined} onContinue={()=>activeId&&clientRef.current?.command("continue_session",{sessionId:activeId})} onRetryProvision={()=>activeId&&clientRef.current?.command("retry_provision",{sessionId:activeId})} onCleanup={()=>activeId&&clientRef.current?.command("cleanup_session",{sessionId:activeId})} onForceDelete={()=>activeId&&forceDelete(activeId)} onOpenDiff={openDiff} />
+              <Transcript key={activeId} state={state} initialScroll={activeId ? scrollPositions.current[activeId] : undefined} onScrollChange={recordScroll} onContinue={()=>activeId&&clientRef.current?.command("continue_session",{sessionId:activeId})} onRetryProvision={()=>activeId&&clientRef.current?.command("retry_provision",{sessionId:activeId})} onCleanup={()=>activeId&&clientRef.current?.command("cleanup_session",{sessionId:activeId})} onForceDelete={()=>activeId&&forceDelete(activeId)} onOpenDiff={openDiff} />
             </OpenPathContext.Provider>
 
             {/* The mirror of the header fade: content dissolves into the
