@@ -408,6 +408,7 @@ func (m *Manager) cleanup(meta store.SessionMeta, p project.Project, a *Actor, p
 		if err := m.store.DeleteSession(ctx, meta.ID); err != nil {
 			m.logf("delete cleaned session %s: %v", meta.ID, err)
 		}
+		m.purgeAttachments(meta.ID)
 	}
 	m.notifyList()
 }
