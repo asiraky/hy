@@ -242,6 +242,19 @@ func (c *conn) command(f clientFrame) {
 		f.CommandID = uuid.NewString()
 	}
 
+	// The command ledger exists so that retrying a dropped mutation cannot
+	// run it twice — it is a record of user operations. A poll is not one:
+	// nothing is mutated, replaying it would return a stale answer rather
+	// than protect anything, and a row per poll would grow the table for as
+	// long as the tab stayed open. So a poll executes without a ledger entry.
+	if pollingCommand(f.Command) {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		result, err := c.execute(ctx, f)
+		c.ack(f.CommandID, result, err)
+		return
+	}
+
 	// A command belongs to the user operation, not to the socket that happened
 	// to carry it. Let it finish and persist its result after a disconnect so a
 	// reconnect can recover the acknowledgement with the same command id.
@@ -285,6 +298,12 @@ claimed:
 	}
 	c.ack(f.CommandID, result, nil)
 }
+
+// pollingCommand reports whether a command is a pure read the client issues on
+// a timer rather than a user issuing it once. Kept to exactly the commands that
+// are polled: everything else, including every read a user's own click causes,
+// keeps the replay guarantee it has always had.
+func pollingCommand(name string) bool { return name == "session_pr" }
 
 func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 	switch f.Command {
@@ -498,6 +517,17 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 		}
 		issues, issuesErr := c.srv.mgr.ListIssues(ctx, a.ProjectID)
 		return map[string]any{"issues": issues, "issuesError": issuesErr}, nil
+
+	case "session_pr":
+		var a sessionArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		// Shaped like list_issues: the pull request is advisory, `gh` can take
+		// seconds to answer, and not knowing is an ordinary answer rather than
+		// a failure — so the reason travels beside the result, not as an error.
+		pr, prErr := c.srv.mgr.SessionPR(ctx, a.SessionID)
+		return map[string]any{"pr": pr, "prError": prErr}, nil
 
 	case "session_changes":
 		var a sessionArgs

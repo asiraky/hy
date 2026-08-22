@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Client, wsURL, type ConnectionStatus } from "./client";
 import { useIsDesktop } from "./useMediaQuery";
-import type { Access, ComposerItem, FileContent, FileDiff, FileTree, HarnessMeta, Project, ProjectConfig, SessionChanges, SessionMeta, SessionState, UserConfig, Workspace } from "./protocol";
+import { useSessionPR } from "./useSessionPR";
+import type { Access, ComposerItem, FileContent, FileDiff, FileTree, HarnessMeta, Project, ProjectConfig, SessionChanges, SessionMeta, SessionState, PullRequest, UserConfig, Workspace } from "./protocol";
 import { AccessPanel } from "./components/Access";
 import { Panel, type PanelRequest } from "./components/panel/Panel";
 import { liveAgentCount } from "./components/panel/AgentsSurface";
@@ -12,6 +13,7 @@ import type { NewSessionInput } from "./components/NewSession";
 import { ProjectSettings } from "./components/ProjectSettings";
 import { PermissionPrompt } from "./components/PermissionPrompt";
 import { ElicitationPrompt } from "./components/ElicitationPrompt";
+import { DeleteSessionDialog, useDeleteSession } from "./components/DeleteSessionDialog";
 import { Sidebar } from "./components/Sidebar";
 import { Transcript } from "./components/Transcript";
 import { IconButton } from "./components/IconButton";
@@ -480,6 +482,26 @@ export function App() {
 
   const meta = useMemo(() => sessions.find((s) => s.id === activeId), [sessions, activeId]);
 
+  // Whether the work in this session has landed, and the confirmation the
+  // transcript's prompt opens. The dialog and its guards are the sidebar's
+  // own, so "finish with this session" and the row's X are the same action
+  // reached from two places; only the sidebar's row animation is not shared,
+  // because the transcript has no row.
+  const deleteFlow = useDeleteSession({
+    sessions,
+    onDelete: remove,
+    projectRoot: (id) => projects.find((p) => p.id === id)?.root,
+  });
+  const fetchPR = useCallback(async (sessionId: string): Promise<PullRequest | null> => {
+    const res = await clientRef.current!.command("session_pr", { sessionId });
+    return (res.pr ?? null) as PullRequest | null;
+  }, []);
+  // The server checks this too and is the authority; asking here only spares
+  // a subprocess for the sessions that plainly have nothing to report.
+  const prEligible =
+    (meta?.workspaceMode === "managed" || meta?.workspaceMode === "borrowed") && !!meta?.branch;
+  const pr = useSessionPR(activeId, prEligible, fetchPR);
+
   // The permission modes for the attached session's harness. Everything the UI
   // knows about them came from the adapter via the server; ids stay opaque.
   const modeOptions = useMemo(
@@ -650,6 +672,8 @@ export function App() {
         projectRoot={(id)=>projects.find(p=>p.id===id)?.root}
       />
 
+      <DeleteSessionDialog flow={deleteFlow} />
+
       <main
         className={cn(
           "flex min-h-0 min-w-0 flex-1 flex-col",
@@ -734,7 +758,7 @@ export function App() {
             <div className="from-background pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-gradient-to-b to-transparent" />
 
             <OpenPathContext.Provider value={openPath}>
-              <Transcript key={activeId} state={state} initialScroll={activeId ? scrollPositions.current[activeId] : undefined} onScrollChange={recordScroll} onContinue={()=>activeId&&clientRef.current?.command("continue_session",{sessionId:activeId})} onRetryProvision={()=>activeId&&clientRef.current?.command("retry_provision",{sessionId:activeId})} onCleanup={()=>activeId&&clientRef.current?.command("cleanup_session",{sessionId:activeId})} onForceDelete={()=>activeId&&forceDelete(activeId)} onOpenDiff={openDiff} />
+              <Transcript key={activeId} state={state} initialScroll={activeId ? scrollPositions.current[activeId] : undefined} onScrollChange={recordScroll} onContinue={()=>activeId&&clientRef.current?.command("continue_session",{sessionId:activeId})} onRetryProvision={()=>activeId&&clientRef.current?.command("retry_provision",{sessionId:activeId})} onCleanup={()=>activeId&&clientRef.current?.command("cleanup_session",{sessionId:activeId})} onForceDelete={()=>activeId&&forceDelete(activeId)} onOpenDiff={openDiff} pr={pr} onFinish={()=>meta&&deleteFlow.ask(meta)} />
             </OpenPathContext.Provider>
 
             {/* The mirror of the header fade: content dissolves into the

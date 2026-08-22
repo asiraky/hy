@@ -3,7 +3,8 @@ import { fireEvent, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Transcript } from "./Transcript";
-import { render, wrap } from "~/test/harness";
+import { render, viewport, wrap } from "~/test/harness";
+import type { PullRequest } from "~/protocol";
 
 const state = (text: string): any => ({
   sessionId: "a",
@@ -34,6 +35,7 @@ function transcript(text: string) {
       onForceDelete={() => {}}
       onContinue={() => {}}
       onOpenDiff={() => {}}
+      onFinish={() => {}}
     />,
   );
 }
@@ -94,6 +96,7 @@ function view(s: any) {
   return (
     <Transcript
       state={s}
+      onFinish={() => {}}
       onRetryProvision={() => {}}
       onCleanup={() => {}}
       onForceDelete={() => {}}
@@ -160,5 +163,62 @@ describe("lifting a just-sent prompt", () => {
     rerender(wrap(view(prompts(["p9"], "b"))));
 
     expect(reserve(container)).toBe("");
+  });
+});
+
+// A worktree session whose branch has landed is offered a way out of the
+// transcript it is being read in.
+function merged(pr: PullRequest | null, onFinish = () => {}) {
+  return render(
+    <Transcript
+      state={state("done")}
+      onRetryProvision={() => {}}
+      onCleanup={() => {}}
+      onForceDelete={() => {}}
+      onContinue={() => {}}
+      onOpenDiff={() => {}}
+      pr={pr}
+      onFinish={onFinish}
+    />,
+  );
+}
+
+const MERGED: PullRequest = {
+  number: 75,
+  state: "MERGED",
+  merged: true,
+  mergedAt: "2026-08-20T01:02:03Z",
+};
+
+describe("the merged-pull-request prompt", () => {
+  it("offers to finish the session once the branch has landed", () => {
+    merged(MERGED);
+    expect(screen.getByRole("button", { name: /finish with this session/i })).toBeTruthy();
+    expect(screen.getByText("PR #75 merged")).toBeTruthy();
+  });
+
+  it("says nothing while the pull request is still open", () => {
+    merged({ number: 75, state: "OPEN", merged: false });
+    expect(screen.queryByRole("button", { name: /finish with this session/i })).toBeNull();
+  });
+
+  it("says nothing when there is no pull request to speak of", () => {
+    merged(null);
+    expect(screen.queryByRole("button", { name: /finish with this session/i })).toBeNull();
+  });
+
+  it("opens the confirmation rather than deleting anything itself", () => {
+    const onFinish = vi.fn();
+    merged(MERGED, onFinish);
+    fireEvent.click(screen.getByRole("button", { name: /finish with this session/i }));
+    expect(onFinish).toHaveBeenCalledTimes(1);
+  });
+
+  it("still names the offer on a phone, where there is no hover to explain it", () => {
+    viewport("phone");
+    merged(MERGED);
+    // The tooltip does not render on a coarse pointer, so the accessible name
+    // is the whole explanation and has to carry it alone.
+    expect(screen.getByRole("button", { name: /finish with this session/i })).toBeTruthy();
   });
 });

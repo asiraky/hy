@@ -296,6 +296,24 @@ export interface Issue {
 }
 
 /**
+ * The pull request for a session's branch, as `gh pr view` reports it. Fetched
+ * on demand and never stored: it stops being true the moment someone merges.
+ */
+export interface PullRequest {
+  number: number;
+  title?: string;
+  url?: string;
+  /** gh's own word: OPEN, MERGED or CLOSED. */
+  state?: string;
+  /** Both a merged state and a merge timestamp; neither alone is trusted. */
+  merged?: boolean;
+  mergedAt?: string;
+  /** The commit the branch pointed at when it merged; a branch that has moved
+   *  past it has unmerged work, and is not reported as merged. */
+  headRefOid?: string;
+}
+
+/**
  * Per-machine preferences, kept in ~/.hy/config.json rather than the repo:
  * branchFormat is the operator's own naming habit, not the project's.
  */

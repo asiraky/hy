@@ -8,6 +8,7 @@ import {
   CopyIcon,
   DownloadIcon,
   FileTextIcon,
+  GitMergeIcon,
   PencilIcon,
   SearchIcon,
   TerminalIcon,
@@ -30,10 +31,11 @@ import { IconButton } from "~/components/IconButton";
 import { Markdown } from "~/components/Markdown";
 import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { useCopy } from "~/lib/clipboard";
 import { fmtTokens } from "~/lib/format";
 import { cn } from "~/lib/utils";
-import type { Item, SessionState, ToolStatus, Turn } from "~/protocol";
+import type { Item, PullRequest, SessionState, ToolStatus, Turn } from "~/protocol";
 import { saveResume } from "~/resume";
 import { buildRows, foldLabel, rowTurnID, summarise } from "~/rows";
 import { atBottom, useAutoScroll } from "~/useAutoScroll";
@@ -540,6 +542,39 @@ function WorkspaceCard({
   );
 }
 
+// MergedCard is the whole of the "you are probably done here" affordance: one
+// quiet pill at the foot of the transcript, where the reader already is when
+// the news arrives. It is not a banner and it does not nag — the transcript is
+// the thing being read, so the offer sits in it and is either taken or
+// scrolled past. Clicking opens the ordinary delete confirmation, which is
+// where the worktree question is actually asked and answered.
+function MergedCard({ pr, onFinish }: { pr: PullRequest; onFinish: () => void }) {
+  // The tooltip is the explanation, and a touch screen has none — so the
+  // label states the fact and the aria-label states the offer, leaving the
+  // pill legible without a hover and safe without one too: nothing is
+  // destroyed until the confirmation says so.
+  const offer = `Pull request #${pr.number} was merged — finish with this session`;
+  return (
+    <div className="fade-in flex justify-center pt-1 pb-2">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={offer}
+            onClick={onFinish}
+            className="text-muted-foreground hover:text-foreground h-11 rounded-full border border-dashed px-3 text-[12px] font-normal md:h-7"
+          >
+            <GitMergeIcon aria-hidden className="text-success size-3.5" />
+            PR #{pr.number} merged
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Done with this session? Delete it and its worktree.</TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
 // InterruptedCard is what a turn that died looks like. A cross on the last
 // tool call is not an explanation: it says something stopped, not that the
 // work is unfinished and nobody is coming back for it. The server retries by
@@ -588,6 +623,8 @@ export function Transcript({
   onForceDelete,
   onContinue,
   onOpenDiff,
+  pr,
+  onFinish,
 }: {
   state: SessionState;
   /** Where this session was last scrolled — the position the parent kept from
@@ -603,6 +640,10 @@ export function Transcript({
   onForceDelete: () => void;
   onContinue: () => void;
   onOpenDiff: (path?: string) => void;
+  /** The session branch's pull request, when hy could find one. */
+  pr?: PullRequest | null;
+  /** Opens the delete confirmation for this session. */
+  onFinish: () => void;
 }) {
   // Follow the tail unless the reader has scrolled up; the button below is
   // how they get back. A restore that was scrolled up mounts unpinned, or the
@@ -834,6 +875,9 @@ export function Transcript({
             )}
 
           {interrupted && <InterruptedCard turn={interrupted} onContinue={onContinue} />}
+
+          {/* Last, because it is the latest news about the work above it. */}
+          {pr?.merged && <MergedCard pr={pr} onFinish={onFinish} />}
         </div>
       </div>
 
