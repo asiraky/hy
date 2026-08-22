@@ -53,6 +53,14 @@ func claudeConfigDirs() (map[string]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load user config: %w", err)
 	}
+	secrets, err := provider.OpenSecretStore()
+	if err != nil {
+		return nil, fmt.Errorf("open provider secrets: %w", err)
+	}
+	return claudeConfigDirsFrom(cfg, secrets)
+}
+
+func claudeConfigDirsFrom(cfg userconfig.Config, secrets *provider.SecretStore) (map[string]string, error) {
 	dirs := map[string]string{}
 	for _, raw := range cfg.Providers {
 		instance, err := provider.Parse(raw)
@@ -60,9 +68,18 @@ func claudeConfigDirs() (map[string]string, error) {
 			continue
 		}
 		for _, variable := range instance.Env {
-			if variable.Name == "CLAUDE_CONFIG_DIR" && !variable.Sensitive {
-				dirs[instance.ID] = variable.Value
+			if variable.Name != "CLAUDE_CONFIG_DIR" {
+				continue
 			}
+			if !variable.Sensitive {
+				dirs[instance.ID] = variable.Value
+				continue
+			}
+			configured, ok := secrets.Get(instance.ID, variable.Name)
+			if !ok {
+				return nil, fmt.Errorf("resolve provider instance %s: no stored secret for %s", instance.ID, variable.Name)
+			}
+			dirs[instance.ID] = configured
 		}
 	}
 	return dirs, nil

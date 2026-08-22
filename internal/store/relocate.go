@@ -20,10 +20,19 @@ type RelocateStats struct {
 	Commands  int
 }
 
+// RelocationPath is one equivalent old/new prefix pair. The first pair is the
+// path as recorded on the project; callers may add canonical forms for hosts
+// whose filesystem aliases paths (for example /var and /private/var on macOS).
+type RelocationPath struct {
+	Old string
+	New string
+}
+
 // RelocateProject atomically rewrites the path-bearing records for one project.
 // Callers are expected to run this offline: a live manager would retain the old
 // paths in its in-memory actors even though the database had changed beneath it.
-func (s *Store) RelocateProject(ctx context.Context, oldRoot, newRoot string) (RelocateStats, error) {
+func (s *Store) RelocateProject(ctx context.Context, oldRoot, newRoot string, aliases ...RelocationPath) (RelocateStats, error) {
+	mappings := append([]RelocationPath{{Old: oldRoot, New: newRoot}}, aliases...)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -45,10 +54,10 @@ func (s *Store) RelocateProject(ctx context.Context, oldRoot, newRoot string) (R
 	}
 
 	type sessionPath struct {
-		id, cwd string
-		changed bool
+		id, cwd, projectID string
+		changed            bool
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id, cwd FROM sessions WHERE project_id = ?`, projectID)
+	rows, err := tx.QueryContext(ctx, `SELECT id, cwd, project_id FROM sessions`)
 	if err != nil {
 		return RelocateStats{}, err
 	}
@@ -56,16 +65,19 @@ func (s *Store) RelocateProject(ctx context.Context, oldRoot, newRoot string) (R
 	changedSessions := 0
 	for rows.Next() {
 		var item sessionPath
-		if err := rows.Scan(&item.id, &item.cwd); err != nil {
+		if err := rows.Scan(&item.id, &item.cwd, &item.projectID); err != nil {
 			rows.Close()
 			return RelocateStats{}, err
 		}
-		if next, ok := relocatePath(item.cwd, oldRoot, newRoot); ok {
+		next, pathChanged := relocatePath(item.cwd, mappings)
+		if pathChanged {
 			item.cwd = next
 			item.changed = true
 			changedSessions++
 		}
-		projectSessions = append(projectSessions, item)
+		if item.projectID == projectID || pathChanged {
+			projectSessions = append(projectSessions, item)
+		}
 	}
 	if err := rows.Close(); err != nil {
 		return RelocateStats{}, err
@@ -90,16 +102,16 @@ func (s *Store) RelocateProject(ctx context.Context, oldRoot, newRoot string) (R
 		ids = append(ids, item.id)
 	}
 	if len(ids) > 0 {
-		if stats.Events, err = relocateJSONRows(ctx, tx, "events", "payload", "session_id", ids, oldRoot, newRoot); err != nil {
+		if stats.Events, err = relocateJSONRows(ctx, tx, "events", "payload", "session_id", ids, mappings); err != nil {
 			return RelocateStats{}, err
 		}
-		if stats.Snapshots, err = relocateJSONRows(ctx, tx, "snapshots", "state", "session_id", ids, oldRoot, newRoot); err != nil {
+		if stats.Snapshots, err = relocateJSONRows(ctx, tx, "snapshots", "state", "session_id", ids, mappings); err != nil {
 			return RelocateStats{}, err
 		}
-		if stats.Commands, err = relocateJSONRows(ctx, tx, "commands", "result", "session_id", ids, oldRoot, newRoot); err != nil {
+		if stats.Commands, err = relocateJSONRows(ctx, tx, "commands", "result", "session_id", ids, mappings); err != nil {
 			return RelocateStats{}, err
 		}
-		if _, err := relocateJSONRows(ctx, tx, "sessions", "provision_result", "id", ids, oldRoot, newRoot); err != nil {
+		if _, err := relocateJSONRows(ctx, tx, "sessions", "provision_result", "id", ids, mappings); err != nil {
 			return RelocateStats{}, err
 		}
 	}
@@ -110,7 +122,7 @@ func (s *Store) RelocateProject(ctx context.Context, oldRoot, newRoot string) (R
 	return stats, nil
 }
 
-func relocateJSONRows(ctx context.Context, tx *sql.Tx, table, column, key string, ids []string, oldRoot, newRoot string) (int, error) {
+func relocateJSONRows(ctx context.Context, tx *sql.Tx, table, column, key string, ids []string, mappings []RelocationPath) (int, error) {
 	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
 	args := make([]any, len(ids))
 	for i := range ids {
@@ -133,7 +145,7 @@ func relocateJSONRows(ctx context.Context, tx *sql.Tx, table, column, key string
 			rows.Close()
 			return 0, err
 		}
-		next, changed, err := relocateJSON(blob, oldRoot, newRoot)
+		next, changed, err := relocateJSON(blob, mappings)
 		if err != nil {
 			rows.Close()
 			return 0, fmt.Errorf("rewrite %s.%s row %d: %w", table, column, rowid, err)
@@ -157,7 +169,7 @@ func relocateJSONRows(ctx context.Context, tx *sql.Tx, table, column, key string
 	return len(changes), nil
 }
 
-func relocateJSON(blob []byte, oldRoot, newRoot string) ([]byte, bool, error) {
+func relocateJSON(blob []byte, mappings []RelocationPath) ([]byte, bool, error) {
 	decoder := json.NewDecoder(bytes.NewReader(blob))
 	decoder.UseNumber()
 	var value any
@@ -170,7 +182,7 @@ func relocateJSON(blob []byte, oldRoot, newRoot string) ([]byte, bool, error) {
 		}
 		return nil, false, err
 	}
-	changed := relocateJSONValue(&value, oldRoot, newRoot)
+	changed := relocateJSONValue(&value, mappings)
 	if !changed {
 		return blob, false, nil
 	}
@@ -178,23 +190,23 @@ func relocateJSON(blob []byte, oldRoot, newRoot string) ([]byte, bool, error) {
 	return next, true, err
 }
 
-func relocateJSONValue(value *any, oldRoot, newRoot string) bool {
+func relocateJSONValue(value *any, mappings []RelocationPath) bool {
 	switch current := (*value).(type) {
 	case string:
-		if next, ok := relocatePath(current, oldRoot, newRoot); ok {
+		if next, ok := relocatePath(current, mappings); ok {
 			*value = next
 			return true
 		}
 	case []any:
 		changed := false
 		for i := range current {
-			changed = relocateJSONValue(&current[i], oldRoot, newRoot) || changed
+			changed = relocateJSONValue(&current[i], mappings) || changed
 		}
 		return changed
 	case map[string]any:
 		changed := false
 		for key, item := range current {
-			if relocateJSONValue(&item, oldRoot, newRoot) {
+			if relocateJSONValue(&item, mappings) {
 				current[key] = item
 				changed = true
 			}
@@ -204,15 +216,17 @@ func relocateJSONValue(value *any, oldRoot, newRoot string) bool {
 	return false
 }
 
-func relocatePath(path, oldRoot, newRoot string) (string, bool) {
+func relocatePath(path string, mappings []RelocationPath) (string, bool) {
 	path = filepath.Clean(path)
-	oldRoot = filepath.Clean(oldRoot)
-	if path == oldRoot {
-		return newRoot, true
-	}
-	prefix := oldRoot + string(filepath.Separator)
-	if strings.HasPrefix(path, prefix) {
-		return filepath.Join(newRoot, strings.TrimPrefix(path, prefix)), true
+	for _, mapping := range mappings {
+		oldRoot := filepath.Clean(mapping.Old)
+		if path == oldRoot {
+			return mapping.New, true
+		}
+		prefix := oldRoot + string(filepath.Separator)
+		if strings.HasPrefix(path, prefix) {
+			return filepath.Join(mapping.New, strings.TrimPrefix(path, prefix)), true
+		}
 	}
 	return path, false
 }

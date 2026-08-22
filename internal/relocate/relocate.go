@@ -74,6 +74,10 @@ func Run(ctx context.Context, oldRoot, newRoot string, options Options) (Report,
 	} else if !os.IsNotExist(err) {
 		return Report{}, fmt.Errorf("inspect old root: %w", err)
 	}
+	mappings, err := relocationPaths(oldRoot, newRoot)
+	if err != nil {
+		return Report{}, err
+	}
 	if options.DBPath == "" {
 		return Report{}, errors.New("database path is required")
 	}
@@ -113,22 +117,23 @@ func Run(ctx context.Context, oldRoot, newRoot string, options Options) (Report,
 	}
 	var projectSessions []store.SessionMeta
 	for _, session := range sessions {
-		if session.ProjectID == projectID {
+		_, underOldRoot := replacePath(session.Cwd, mappings)
+		if session.ProjectID == projectID || underOldRoot {
 			projectSessions = append(projectSessions, session)
 		}
 	}
 
-	files, err := planWorkspaceFiles(options.HomeDir, projectSessions, oldRoot, newRoot)
+	files, err := planWorkspaceFiles(options.HomeDir, projectSessions, mappings)
 	if err != nil {
 		return Report{}, err
 	}
-	moves, err := planClaudeMoves(options, projectSessions, oldRoot, newRoot)
+	moves, err := planClaudeMoves(options, projectSessions, mappings)
 	if err != nil {
 		return Report{}, err
 	}
 
 	report := Report{}
-	if report.GitRepaired, err = repairGit(ctx, options.GitBin, newRoot, projectSessions, oldRoot, newRoot); err != nil {
+	if report.GitRepaired, err = repairGit(ctx, options.GitBin, newRoot, projectSessions, mappings); err != nil {
 		return Report{}, err
 	}
 
@@ -161,7 +166,7 @@ func Run(ctx context.Context, oldRoot, newRoot string, options Options) (Report,
 		moved = append(moved, change)
 	}
 
-	report.Database, err = st.RelocateProject(ctx, oldRoot, newRoot)
+	report.Database, err = st.RelocateProject(ctx, oldRoot, newRoot, mappings[1:]...)
 	if err != nil {
 		rollback()
 		return Report{}, fmt.Errorf("rewrite database: %w", err)
@@ -171,7 +176,7 @@ func Run(ctx context.Context, oldRoot, newRoot string, options Options) (Report,
 	return report, nil
 }
 
-func planWorkspaceFiles(home string, sessions []store.SessionMeta, oldRoot, newRoot string) ([]fileChange, error) {
+func planWorkspaceFiles(home string, sessions []store.SessionMeta, mappings []store.RelocationPath) ([]fileChange, error) {
 	var changes []fileChange
 	for _, session := range sessions {
 		dir := filepath.Join(home, ".omniplex", "workspaces", session.ID)
@@ -191,7 +196,7 @@ func planWorkspaceFiles(home string, sessions []store.SessionMeta, oldRoot, newR
 			if err != nil {
 				return nil, fmt.Errorf("read workspace state %s: %w", path, err)
 			}
-			next, changed, err := rewriteJSON(blob, oldRoot, newRoot)
+			next, changed, err := rewriteJSON(blob, mappings)
 			if err != nil {
 				return nil, fmt.Errorf("parse workspace state %s: %w", path, err)
 			}
@@ -209,7 +214,7 @@ func planWorkspaceFiles(home string, sessions []store.SessionMeta, oldRoot, newR
 	return changes, nil
 }
 
-func planClaudeMoves(options Options, sessions []store.SessionMeta, oldRoot, newRoot string) ([]move, error) {
+func planClaudeMoves(options Options, sessions []store.SessionMeta, mappings []store.RelocationPath) ([]move, error) {
 	seen := map[string]bool{}
 	var moves []move
 	for _, session := range sessions {
@@ -217,7 +222,7 @@ func planClaudeMoves(options Options, sessions []store.SessionMeta, oldRoot, new
 			continue
 		}
 		oldCwd := filepath.Clean(session.Cwd)
-		newCwd, ok := replacePath(oldCwd, oldRoot, newRoot)
+		newCwd, ok := replacePath(oldCwd, mappings)
 		if !ok {
 			continue
 		}
@@ -231,11 +236,11 @@ func planClaudeMoves(options Options, sessions []store.SessionMeta, oldRoot, new
 		}
 		oldConfig := claudeConfigDir(options.HomeDir, oldCwd, configured)
 		// A relative or in-project config directory moved with the checkout.
-		if relocated, ok := replacePath(oldConfig, oldRoot, newRoot); ok {
+		if relocated, ok := replacePath(oldConfig, mappings); ok {
 			oldConfig = relocated
 		}
 		newConfig := claudeConfigDir(options.HomeDir, newCwd, configured)
-		if relocated, ok := replacePath(newConfig, oldRoot, newRoot); ok {
+		if relocated, ok := replacePath(newConfig, mappings); ok {
 			newConfig = relocated
 		}
 		source := filepath.Join(oldConfig, "projects", claudeProjectKey(oldCwd))
@@ -261,7 +266,7 @@ func planClaudeMoves(options Options, sessions []store.SessionMeta, oldRoot, new
 	return moves, nil
 }
 
-func repairGit(ctx context.Context, gitBin, root string, sessions []store.SessionMeta, oldRoot, newRoot string) (bool, error) {
+func repairGit(ctx context.Context, gitBin, root string, sessions []store.SessionMeta, mappings []store.RelocationPath) (bool, error) {
 	if gitBin == "" {
 		gitBin = "git"
 	}
@@ -285,7 +290,7 @@ func repairGit(ctx context.Context, gitBin, root string, sessions []store.Sessio
 				continue
 			}
 			oldPath := filepath.Dir(strings.TrimSpace(string(gitdir)))
-			newPath, _ := replacePath(oldPath, oldRoot, newRoot)
+			newPath, _ := replacePath(oldPath, mappings)
 			if _, err := os.Stat(filepath.Join(newPath, ".git")); err == nil && !seen[newPath] {
 				args = append(args, newPath)
 				seen[newPath] = true
@@ -293,7 +298,7 @@ func repairGit(ctx context.Context, gitBin, root string, sessions []store.Sessio
 		}
 	}
 	for _, session := range sessions {
-		cwd, ok := replacePath(session.Cwd, oldRoot, newRoot)
+		cwd, ok := replacePath(session.Cwd, mappings)
 		if !ok || cwd == root || seen[cwd] {
 			continue
 		}
@@ -326,19 +331,67 @@ func claudeProjectKey(path string) string {
 	return nonAlphanumeric.ReplaceAllString(filepath.Clean(path), "-")
 }
 
-func replacePath(path, oldRoot, newRoot string) (string, bool) {
-	path, oldRoot = filepath.Clean(path), filepath.Clean(oldRoot)
-	if path == oldRoot {
-		return newRoot, true
+func relocationPaths(oldRoot, newRoot string) ([]store.RelocationPath, error) {
+	mappings := []store.RelocationPath{{Old: oldRoot, New: newRoot}}
+	canonicalOld, err := canonicalMissingPath(oldRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve old root aliases: %w", err)
 	}
-	prefix := oldRoot + string(filepath.Separator)
-	if strings.HasPrefix(path, prefix) {
-		return filepath.Join(newRoot, strings.TrimPrefix(path, prefix)), true
+	canonicalNew, err := filepath.EvalSymlinks(newRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve new root aliases: %w", err)
+	}
+	canonicalOld, canonicalNew = filepath.Clean(canonicalOld), filepath.Clean(canonicalNew)
+	if canonicalOld != oldRoot || canonicalNew != newRoot {
+		mappings = append(mappings, store.RelocationPath{Old: canonicalOld, New: canonicalNew})
+	}
+	return mappings, nil
+}
+
+// canonicalMissingPath resolves the longest existing ancestor, then restores
+// the absent suffix. This recovers the canonical spelling of a root after that
+// root itself has already been moved away.
+func canonicalMissingPath(path string) (string, error) {
+	current := filepath.Clean(path)
+	var suffix []string
+	for {
+		if _, err := os.Lstat(current); err == nil {
+			resolved, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				return "", err
+			}
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			return resolved, nil
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return path, nil
+		}
+		suffix = append(suffix, filepath.Base(current))
+		current = parent
+	}
+}
+
+func replacePath(path string, mappings []store.RelocationPath) (string, bool) {
+	path = filepath.Clean(path)
+	for _, mapping := range mappings {
+		oldRoot := filepath.Clean(mapping.Old)
+		if path == oldRoot {
+			return mapping.New, true
+		}
+		prefix := oldRoot + string(filepath.Separator)
+		if strings.HasPrefix(path, prefix) {
+			return filepath.Join(mapping.New, strings.TrimPrefix(path, prefix)), true
+		}
 	}
 	return path, false
 }
 
-func rewriteJSON(blob []byte, oldRoot, newRoot string) ([]byte, bool, error) {
+func rewriteJSON(blob []byte, mappings []store.RelocationPath) ([]byte, bool, error) {
 	decoder := json.NewDecoder(bytes.NewReader(blob))
 	decoder.UseNumber()
 	var value any
@@ -351,7 +404,7 @@ func rewriteJSON(blob []byte, oldRoot, newRoot string) ([]byte, bool, error) {
 		}
 		return nil, false, err
 	}
-	changed := rewriteValue(&value, oldRoot, newRoot)
+	changed := rewriteValue(&value, mappings)
 	if !changed {
 		return blob, false, nil
 	}
@@ -359,23 +412,23 @@ func rewriteJSON(blob []byte, oldRoot, newRoot string) ([]byte, bool, error) {
 	return next, true, err
 }
 
-func rewriteValue(value *any, oldRoot, newRoot string) bool {
+func rewriteValue(value *any, mappings []store.RelocationPath) bool {
 	switch current := (*value).(type) {
 	case string:
-		if next, ok := replacePath(current, oldRoot, newRoot); ok {
+		if next, ok := replacePath(current, mappings); ok {
 			*value = next
 			return true
 		}
 	case []any:
 		changed := false
 		for i := range current {
-			changed = rewriteValue(&current[i], oldRoot, newRoot) || changed
+			changed = rewriteValue(&current[i], mappings) || changed
 		}
 		return changed
 	case map[string]any:
 		changed := false
 		for key, item := range current {
-			if rewriteValue(&item, oldRoot, newRoot) {
+			if rewriteValue(&item, mappings) {
 				current[key] = item
 				changed = true
 			}

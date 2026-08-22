@@ -132,6 +132,51 @@ func TestRunRefusesTranscriptCollisionBeforeChangingState(t *testing.T) {
 	}
 }
 
+func TestRunRelocatesCanonicalizedSessionPath(t *testing.T) {
+	ctx := context.Background()
+	top, home := t.TempDir(), t.TempDir()
+	realParent := filepath.Join(top, "real")
+	aliasParent := filepath.Join(top, "alias")
+	if err := os.MkdirAll(realParent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realParent, aliasParent); err != nil {
+		t.Fatal(err)
+	}
+	oldRoot, newRoot := filepath.Join(aliasParent, "old"), filepath.Join(aliasParent, "new")
+	realOld, realNew := filepath.Join(realParent, "old"), filepath.Join(realParent, "new")
+	if err := os.MkdirAll(filepath.Join(realOld, "worktree"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(top, "hy.db")
+	st, _ := store.Open(dbPath)
+	p := project.Project{ID: "p1", Root: oldRoot, Config: project.DefaultConfig(oldRoot), CreatedAt: 1, UpdatedAt: 1}
+	_ = st.PutProject(ctx, p)
+	canonicalWorktree, err := filepath.EvalSymlinks(filepath.Join(oldRoot, "worktree"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := store.SessionMeta{ID: "s1", Cwd: canonicalWorktree, Harness: "codex", ProjectID: p.ID, Phase: "idle", CreatedAt: 1, UpdatedAt: 1}
+	_ = st.CreateSession(ctx, meta)
+	_ = st.Close()
+	if err := os.Rename(realOld, realNew); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(ctx, oldRoot, newRoot, Options{DBPath: dbPath, HomeDir: home}); err != nil {
+		t.Fatal(err)
+	}
+	st, _ = store.Open(dbPath)
+	defer st.Close()
+	got, _ := st.Session(ctx, meta.ID)
+	want, err := filepath.EvalSymlinks(filepath.Join(newRoot, "worktree"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Cwd != want {
+		t.Fatalf("canonical cwd = %q", got.Cwd)
+	}
+}
+
 func TestClaudeProjectKeyMatchesClaudeCodeSanitizing(t *testing.T) {
 	got := claudeProjectKey("/Users/ada/code/acme/.worktrees/one")
 	if got != "-Users-ada-code-acme--worktrees-one" {

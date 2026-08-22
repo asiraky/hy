@@ -51,12 +51,19 @@ func TestRelocateProjectRewritesEveryDurablePath(t *testing.T) {
 	if _, err := st.Append(ctx, outside.ID, proto.Emit(proto.WorkspaceRequested, proto.WorkspaceRequestedPayload{ProjectID: p.ID, ProjectRoot: oldRoot})); err != nil {
 		t.Fatal(err)
 	}
+	legacy := SessionMeta{ID: "legacy", Cwd: filepath.Join(oldRoot, "legacy"), Harness: "codex", Phase: "idle", CreatedAt: 1, UpdatedAt: 1}
+	if err := st.CreateSession(ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, legacy.ID, proto.Emit(proto.SessionCreated, proto.SessionCreatedPayload{Cwd: legacy.Cwd, Harness: "codex"})); err != nil {
+		t.Fatal(err)
+	}
 
 	stats, err := st.RelocateProject(ctx, oldRoot, newRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Sessions != 1 || stats.Events != 2 || stats.Snapshots != 1 || stats.Commands != 1 {
+	if stats.Sessions != 2 || stats.Events != 3 || stats.Snapshots != 1 || stats.Commands != 1 {
 		t.Fatalf("unexpected stats: %+v", stats)
 	}
 
@@ -91,6 +98,32 @@ func TestRelocateProjectRewritesEveryDurablePath(t *testing.T) {
 	outsideEvents, _ := st.ReadEvents(ctx, outside.ID, 0, 10)
 	if len(outsideEvents) != 1 || !containsJSONPath(outsideEvents[0].Payload, newRoot) {
 		t.Fatalf("outside-cwd session retained stale project state: %+v", outsideEvents)
+	}
+	legacySession, _ := st.Session(ctx, legacy.ID)
+	if legacySession.Cwd != filepath.Join(newRoot, "legacy") {
+		t.Fatalf("legacy session cwd = %q", legacySession.Cwd)
+	}
+}
+
+func TestRelocateProjectRewritesCanonicalAlias(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(filepath.Join(t.TempDir(), "hy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	oldRoot, newRoot := "/alias/project-old", "/alias/project-new"
+	p := project.Project{ID: "p1", Root: oldRoot, Config: project.DefaultConfig(oldRoot), CreatedAt: 1, UpdatedAt: 1}
+	_ = st.PutProject(ctx, p)
+	meta := SessionMeta{ID: "s1", Cwd: "/canonical/project-old/worktree", Harness: "claude", ProjectID: p.ID, Phase: "idle", CreatedAt: 1, UpdatedAt: 1}
+	_ = st.CreateSession(ctx, meta)
+	stats, err := st.RelocateProject(ctx, oldRoot, newRoot, RelocationPath{Old: "/canonical/project-old", New: "/canonical/project-new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.Session(ctx, meta.ID)
+	if stats.Sessions != 1 || got.Cwd != "/canonical/project-new/worktree" {
+		t.Fatalf("stats=%+v cwd=%q", stats, got.Cwd)
 	}
 }
 
