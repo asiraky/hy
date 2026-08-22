@@ -20,3 +20,11 @@ describe("documentTitle", () => {
     );
   });
 });
+
+// The list entry carries a title while the attachment snapshot is still in
+// flight, which on a slow link is exactly when the tab needs a name.
+describe("documentTitle during a switch", () => {
+  it("still names a session whose state has not arrived", () => {
+    expect(documentTitle({ title: undefined })).toBe("Untitled session — Omniplex");
+  });
+});

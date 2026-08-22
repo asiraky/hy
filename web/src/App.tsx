@@ -729,8 +729,14 @@ export function App() {
   // The tab is named after whatever is attached, so a phone with several
   // sessions open in several tabs can tell them apart without switching to
   // each one.
+  // The list entry, not just the attached state: switching sessions drops
+  // `state` until the snapshot lands, and on a slow connection that would
+  // leave every tab called "Omniplex" for exactly as long as it takes to
+  // reconnect — which is when telling them apart matters most.
   useDocumentTitle(
-    state && { title: state.title, needsAttention: Boolean(pending || elicitation) },
+    activeId
+      ? { title: state?.title ?? meta?.title, needsAttention: Boolean(pending || elicitation) }
+      : null,
   );
   const activeProject = projects.find((p) => p.id === meta?.projectId);
   const workspaceBusy = state ? ["creating","provisioning","cleaning"].includes(state.phase) : false;

@@ -9,12 +9,14 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
-    <!-- Matched to the two --background values in src/index.css, so the
-         browser chrome on a phone continues the page rather than sitting a
-         shade off it. A single value cannot do that: the app follows the
-         system theme. -->
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#121418" />
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fcfcfc" />
+    <!-- One element, deliberately: applyTheme in src/lib/theme.ts rewrites
+         this from the resolved --background, and the theme can be chosen in
+         the app rather than by the system. A media-conditional pair would let
+         the browser keep using the entry matching the *system* scheme after a
+         manual switch had repainted the page the other way. The content below
+         is only what the first paint uses; the script further down corrects it
+         before that paint. -->
+    <meta name="theme-color" content="#121418" />
     <meta name="color-scheme" content="dark light" />
     <meta name="description" content="Omniplex drives coding sessions across harnesses, and attaches to them from any device." />
     <!-- A personal server, not a site. Nothing here should ever be indexed. -->
@@ -51,6 +53,11 @@
             : window.matchMedia("(prefers-color-scheme: dark)").matches;
           document.documentElement.classList.toggle("dark", dark);
           document.documentElement.style.colorScheme = dark ? "dark" : "light";
+          // The two literals are the --background values of the two themes.
+          // applyTheme takes this over from the real computed value as soon
+          // as the bundle runs; this is only for the frame before that.
+          var chrome = document.querySelector('meta[name="theme-color"]');
+          if (chrome) chrome.setAttribute("content", dark ? "#121418" : "#fcfcfc");
         } catch (e) {
           /* Private-mode storage can throw. The default class stands. */
         }
