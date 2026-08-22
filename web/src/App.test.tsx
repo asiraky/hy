@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, viewport } from "~/test/harness";
@@ -597,11 +597,14 @@ describe("composer drafts", () => {
 
     fireEvent.focus(composer());
     fireEvent.change(composer(), { target: { value: "$al", selectionStart: 3 } });
-    expect(await screen.findByText("Commands")).toBeTruthy();
-    expect(screen.getByText("Run alpha workflow")).toBeTruthy();
+    const sheet = await screen.findByRole("dialog");
+    expect(within(sheet).getByText("Commands")).toBeTruthy();
+    // Scoped to the sheet: an empty transcript is also offering this command
+    // as a recent, so the bare text is no longer unique to the completion.
+    expect(within(sheet).getByText("Run alpha workflow")).toBeTruthy();
 
     fireEvent.keyDown(composer(), { key: "Escape" });
-    await waitFor(() => expect(screen.queryByText("Run alpha workflow")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(composer().value).toBe("$al");
   });
 
@@ -850,5 +853,86 @@ describe("transcript scroll position", () => {
     await act(async () => events.onSessions([session("a"), session("b")]));
     await open("a");
     expect(scroller().scrollTop).not.toBe(300);
+  });
+});
+
+// The empty transcript's nudge, end to end: what it offers comes from the
+// session's own catalogue and from what this project reached for before, and
+// picking one writes into the composer rather than sending anything.
+describe("recent skills on an empty transcript", () => {
+  const catalogue = [
+    {
+      id: "skill:alpha",
+      name: "alpha",
+      description: "Run alpha workflow",
+      kind: "skill",
+      trigger: "/",
+      insertText: "/alpha",
+      behavior: "prompt",
+      origin: "project",
+    },
+    {
+      id: "skill:beta",
+      name: "beta",
+      description: "Run beta workflow",
+      kind: "skill",
+      trigger: "/",
+      insertText: "/beta",
+      behavior: "prompt",
+      origin: "user",
+    },
+  ];
+
+  const boot = async (kind: "phone" | "desktop" = "desktop") => {
+    viewport(kind);
+    command.mockImplementation(async (name: string) =>
+      name === "list_composer_items" ? { items: catalogue } : ({} as any),
+    );
+    render(<App />);
+    await act(async () => {
+      events.onProjects([project]);
+      events.onHarnesses([harness], "/tmp/repo");
+      events.onSessions([session("a")]);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Session a"));
+      events.onState("a", state("a", "default"));
+    });
+  };
+
+  const composer = () => screen.getByLabelText("Message") as HTMLTextAreaElement;
+
+  it("writes the token and a space into the composer, without sending", async () => {
+    await boot();
+    await act(async () => fireEvent.click(await screen.findByText("/beta")));
+
+    expect(composer().value).toBe("/beta ");
+    expect(command).not.toHaveBeenCalledWith("prompt", expect.anything());
+  });
+
+  it("takes the cursor with it on a desktop", async () => {
+    await boot();
+    await act(async () => fireEvent.click(await screen.findByText("/beta")));
+    await waitFor(() => expect(document.activeElement).toBe(composer()));
+  });
+
+  it("leaves the keyboard down on a phone", async () => {
+    await boot("phone");
+    await act(async () => fireEvent.click(await screen.findByText("/beta")));
+
+    expect(composer().value).toBe("/beta ");
+    // Focusing here would raise the keyboard over the button just tapped.
+    expect(document.activeElement).not.toBe(composer());
+  });
+
+  it("remembers what was sent, per project, and offers it first next time", async () => {
+    await boot();
+    await act(async () => {
+      fireEvent.change(composer(), { target: { value: "/beta go" } });
+      fireEvent.keyDown(composer(), { key: "Enter" });
+    });
+
+    expect(JSON.parse(localStorage.getItem("hy.recentSkills.v1:p1")!)).toEqual(["/beta"]);
+    expect(localStorage.getItem("hy.recentSkills.v1:other")).toBeNull();
   });
 });

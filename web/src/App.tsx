@@ -8,7 +8,7 @@ import { SessionSummaryPanel } from "./components/SessionSummary";
 import { Panel, type PanelRequest } from "./components/panel/Panel";
 import { liveAgentCount } from "./components/panel/AgentsSurface";
 import { OpenPathContext } from "./lib/openPath";
-import { Composer } from "./components/Composer";
+import { Composer, type ComposerHandle } from "./components/Composer";
 import { NewSession } from "./components/NewSession";
 import type { NewSessionInput } from "./components/NewSession";
 import { ProjectSettings } from "./components/ProjectSettings";
@@ -28,6 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "./components/ui/select";
+import { loadRecentSkills, recordRecentSkill, resolveRecentSkills } from "./lib/recentSkills";
 import { loadResume } from "./resume";
 import { cn } from "./lib/utils";
 import { transcriptMarkdown } from "./lib/transcript";
@@ -543,6 +544,68 @@ export function App() {
 
   const meta = useMemo(() => sessions.find((s) => s.id === activeId), [sessions, activeId]);
 
+  // The empty transcript's list of skills to reach for, and the composer it
+  // writes into. Both live up here for the same reason the drafts do: the
+  // Transcript and the Composer are siblings remounted per session, and this
+  // is the one place that can see the catalogue, the project, and the input at
+  // once.
+  const composerRef = useRef<ComposerHandle>(null);
+  const [recents, setRecents] = useState<{ items: ComposerItem[]; seeded: boolean }>({
+    items: [],
+    seeded: false,
+  });
+  const projectId = meta?.projectId;
+  // Only an empty transcript asks for this, so only an empty transcript pays
+  // for the catalogue fetch — and the moment anything arrives in the session
+  // the list is dropped rather than lingering behind the conversation.
+  const transcriptEmpty = !!state && state.items.length === 0;
+  useEffect(() => {
+    if (!activeId || !transcriptEmpty) {
+      setRecents((prev) => (prev.items.length === 0 ? prev : { items: [], seeded: false }));
+      return;
+    }
+    let cancelled = false;
+    loadComposerItems()
+      .then((catalogue) => {
+        if (cancelled) return;
+        const history = loadRecentSkills(projectId);
+        const items = resolveRecentSkills(history, catalogue);
+        // Seeded means none of what is being shown was actually remembered —
+        // a first run, or a project whose history no longer resolves.
+        const seeded = !items.some((item) => history.includes(item.insertText));
+        setRecents({ items, seeded });
+      })
+      .catch(() => {
+        // No catalogue, no suggestions. The empty state still reads fine.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeId, transcriptEmpty, loadComposerItems, projectId]);
+
+  // Clicking a suggestion writes the token and a space into the draft, and
+  // nothing else: what happens next — an argument, or straight to submit — is
+  // the user's to decide. Desktop takes the cursor with it, because the next
+  // keystroke almost always belongs in the input. A phone deliberately does
+  // not: focusing raises the keyboard over the very button just tapped, and
+  // submit is one tap away without it.
+  const pickRecent = useCallback(
+    (item: ComposerItem) => {
+      if (!activeId) return;
+      const current = drafts[activeId] ?? "";
+      const prefix = current && !/\s$/.test(current) ? `${current} ` : current;
+      const next = `${prefix}${item.insertText} `;
+      setDraft(activeId, next);
+      if (isDesktop) composerRef.current?.focusEnd(next.length);
+    },
+    [activeId, drafts, isDesktop, setDraft],
+  );
+
+  const noteSkillUsed = useCallback(
+    (insertText: string) => recordRecentSkill(projectId, insertText),
+    [projectId],
+  );
+
   // Whether the work in this session has landed, and the confirmation the
   // transcript's prompt opens. The dialog and its guards are the sidebar's
   // own, so "finish with this session" and the row's X are the same action
@@ -830,7 +893,7 @@ export function App() {
             <div className="from-background pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-gradient-to-b to-transparent" />
 
             <OpenPathContext.Provider value={openPath}>
-              <Transcript key={activeId} state={state} initialScroll={activeId ? scrollPositions.current[activeId] : undefined} onScrollChange={recordScroll} onContinue={()=>activeId&&clientRef.current?.command("continue_session",{sessionId:activeId})} onRetryProvision={()=>activeId&&clientRef.current?.command("retry_provision",{sessionId:activeId})} onCleanup={()=>activeId&&clientRef.current?.command("cleanup_session",{sessionId:activeId})} onForceDelete={()=>activeId&&forceDelete(activeId)} onOpenDiff={openDiff} pr={pr} onFinish={()=>meta&&deleteFlow.ask(meta)} />
+              <Transcript key={activeId} state={state} initialScroll={activeId ? scrollPositions.current[activeId] : undefined} onScrollChange={recordScroll} onContinue={()=>activeId&&clientRef.current?.command("continue_session",{sessionId:activeId})} onRetryProvision={()=>activeId&&clientRef.current?.command("retry_provision",{sessionId:activeId})} onCleanup={()=>activeId&&clientRef.current?.command("cleanup_session",{sessionId:activeId})} onForceDelete={()=>activeId&&forceDelete(activeId)} onOpenDiff={openDiff} pr={pr} onFinish={()=>meta&&deleteFlow.ask(meta)} recents={recents.items} recentsSeeded={recents.seeded} onPickRecent={pickRecent} />
             </OpenPathContext.Provider>
 
             {/* The mirror of the header fade: content dissolves into the
@@ -864,6 +927,7 @@ export function App() {
 
               <Composer
                 key={activeId}
+                ref={composerRef}
                 draft={activeId ? (drafts[activeId] ?? "") : ""}
                 onDraftChange={(text) => activeId && setDraft(activeId, text)}
                 disabled={state.closed || workspaceBusy || workspaceFailed}
@@ -882,6 +946,7 @@ export function App() {
                 loadComposerItems={loadComposerItems}
                 onRunClientAction={runClientComposerAction}
                 onRunComposerAction={runComposerAction}
+                onCommandUsed={noteSkillUsed}
               />
             </div>
           </div>
