@@ -38,7 +38,7 @@ import { cn } from "~/lib/utils";
 import type { FileContent, FileDiff, FileTree, Item, SessionChanges } from "~/protocol";
 import { useIsDesktop } from "~/useMediaQuery";
 
-const WIDTH_KEY = "hy.changesWidth";
+const WIDTH_KEY = "omniplex.changesWidth";
 const MIN_WIDTH = 320;
 const DEFAULT_WIDTH = 460;
 

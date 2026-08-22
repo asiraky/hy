@@ -16,9 +16,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/asiraky/hy/internal/project"
-	"github.com/asiraky/hy/internal/proto"
-	"github.com/asiraky/hy/internal/store"
+	"github.com/asiraky/omniplex/internal/project"
+	"github.com/asiraky/omniplex/internal/proto"
+	"github.com/asiraky/omniplex/internal/store"
 )
 
 const maxHookOutput = 4 << 20
@@ -44,7 +44,7 @@ func lifecycleDir(sessionID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(home, ".hy", "workspaces", sessionID)
+	dir := filepath.Join(home, ".omniplex", "workspaces", sessionID)
 	return dir, os.MkdirAll(dir, 0o700)
 }
 
@@ -148,7 +148,7 @@ func (m *Manager) runProvisionHook(ctx context.Context, meta store.SessionMeta, 
 		if compatibility && os.IsNotExist(err) {
 			return compatibleResult, nil
 		}
-		return provisionResult{}, fmt.Errorf("provision did not write HY_RESULT_FILE: %w", err)
+		return provisionResult{}, fmt.Errorf("provision did not write OMNIPLEX_RESULT_FILE: %w", err)
 	}
 	var result provisionResult
 	if err := json.Unmarshal(b, &result); err != nil {
@@ -177,7 +177,7 @@ func (m *Manager) runHook(parent context.Context, a *Actor, meta store.SessionMe
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(), "HY_LIFECYCLE_VERSION=1", "HY_HOOK="+kind, "HY_SESSION_ID="+meta.ID, "HY_PROJECT_ROOT="+cwd, "HY_CONTEXT_FILE="+contextPath, "HY_RESULT_FILE="+resultPath, "HY_STATE_DIR="+stateDir)
+	cmd.Env = append(os.Environ(), "OMNIPLEX_LIFECYCLE_VERSION=2", "OMNIPLEX_HOOK="+kind, "OMNIPLEX_SESSION_ID="+meta.ID, "OMNIPLEX_PROJECT_ROOT="+cwd, "OMNIPLEX_CONTEXT_FILE="+contextPath, "OMNIPLEX_RESULT_FILE="+resultPath, "OMNIPLEX_STATE_DIR="+stateDir)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -220,7 +220,7 @@ func (m *Manager) runHook(parent context.Context, a *Actor, meta store.SessionMe
 	err = cmd.Wait()
 	wg.Wait()
 	if truncated {
-		_ = a.Emit(parent, proto.Emit(proto.WorkspaceHookOutput, proto.WorkspaceHookOutputPayload{RunID: runID, Hook: kind, Stream: "stdout", Chunk: "\n[output truncated by hy]\n"}))
+		_ = a.Emit(parent, proto.Emit(proto.WorkspaceHookOutput, proto.WorkspaceHookOutputPayload{RunID: runID, Hook: kind, Stream: "stdout", Chunk: "\n[output truncated by omniplex]\n"}))
 	}
 	exit := 0
 	if err != nil {
@@ -295,7 +295,7 @@ func checkBaseRef(ctx context.Context, root, base string) error {
 func workspaceTarget(meta store.SessionMeta, p project.Project) (string, string) {
 	branch := meta.Branch
 	if branch == "" {
-		branch = "feature/hy-" + strings.ReplaceAll(meta.ID, "-", "")[:8]
+		branch = "feature/omniplex-" + strings.ReplaceAll(meta.ID, "-", "")[:8]
 	}
 	dir := strings.ReplaceAll(branch, "/", "-")
 	return branch, filepath.Join(p.Root, p.Config.Workspace.SuggestedRoot, dir)
@@ -373,7 +373,7 @@ func (m *Manager) cleanup(meta store.SessionMeta, p project.Project, a *Actor, p
 	// clean up, and its checkout is the one the user keeps.
 	purgeCheckpoints(ctx, meta.Cwd, meta.ID, m.logf)
 
-	// The main checkout is never hy's to remove however the caller asks, and
+	// The main checkout is never omniplex's to remove however the caller asks, and
 	// the mode is checked before the script rather than after it. A session
 	// created by an earlier build can be local and still carry a deprovision
 	// script; running that script would be running a worktree-teardown hook

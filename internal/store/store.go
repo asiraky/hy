@@ -13,8 +13,8 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/asiraky/hy/internal/project"
-	"github.com/asiraky/hy/internal/proto"
+	"github.com/asiraky/omniplex/internal/project"
+	"github.com/asiraky/omniplex/internal/proto"
 )
 
 const schema = `

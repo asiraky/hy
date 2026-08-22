@@ -33,13 +33,13 @@ describe("panel persistence", () => {
     savePanel("s1", p);
     expect(loadPanel("s1")).toEqual(p);
 
-    localStorage.setItem("hy.panel.v1:s2", JSON.stringify({ surfaces: [{ id: "file:y", kind: "file" }], active: "file:y" }));
+    localStorage.setItem("omniplex.panel.v1:s2", JSON.stringify({ surfaces: [{ id: "file:y", kind: "file" }], active: "file:y" }));
     // A file surface without a path is unusable and dropped; empty falls back.
     expect(loadPanel("s2")).toEqual(defaultPanel());
   });
 
   it("falls back cleanly on garbage", () => {
-    localStorage.setItem("hy.panel.v1:s3", "not json");
+    localStorage.setItem("omniplex.panel.v1:s3", "not json");
     expect(loadPanel("s3")).toEqual(defaultPanel());
   });
 });

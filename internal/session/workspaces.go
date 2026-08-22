@@ -13,8 +13,8 @@ import (
 )
 
 // Workspace is one checkout a session could run in: the project root, or any
-// worktree Git already knows about. hy does not care who created them — a
-// worktree made by hand months ago is as attachable as one hy provisioned.
+// worktree Git already knows about. omniplex does not care who created them — a
+// worktree made by hand months ago is as attachable as one omniplex provisioned.
 type Workspace struct {
 	Path   string `json:"path"`
 	Branch string `json:"branch,omitempty"`

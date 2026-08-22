@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import type { PullRequest } from "~/protocol";
 
 /**
- * How often hy re-asks whether the session's branch has landed. A merge is not
+ * How often omniplex re-asks whether the session's branch has landed. A merge is not
  * urgent news — the offer it unlocks is a cleanup the user could do any time —
  * and `gh` is a network call per poll, so this is deliberately unhurried.
  */
@@ -17,7 +17,7 @@ export const PR_POLL_MS = 120_000;
  * that the affordance stays hidden, and that is cheaper than asking the
  * network about every session in the sidebar.
  *
- * Polling stops for good once a merge is seen. Nothing hy asks later can
+ * Polling stops for good once a merge is seen. Nothing omniplex asks later can
  * un-merge it, so continuing to ask would be spending a subprocess every two
  * minutes to be told the same thing.
  */

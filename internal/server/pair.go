@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/asiraky/hy/internal/auth"
+	"github.com/asiraky/omniplex/internal/auth"
 )
 
 // pairPage is served by Go rather than the React bundle on purpose. It is the
@@ -25,7 +25,7 @@ const pairPage = `<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
-<title>Pair this device — hy</title>
+<title>Pair this device — omniplex</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -66,7 +66,7 @@ const pairPage = `<!doctype html>
 <body>
 <div class="card">
   <h1>Pair this device</h1>
-  <p>Enter the code shown in the terminal where hy is running. You only do this once per device.</p>
+  <p>Enter the code shown in the terminal where omniplex is running. You only do this once per device.</p>
 
   <div class="spin" id="spin">Pairing…</div>
 

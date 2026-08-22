@@ -22,7 +22,7 @@ import (
 // checkpointRefPrefix keeps snapshots out of `git branch`, `git log` and every
 // other place a person looks, while still being ordinary refs that `git diff`
 // and `git restore` understand.
-const checkpointRefPrefix = "refs/hy/checkpoints"
+const checkpointRefPrefix = "refs/omniplex/checkpoints"
 
 // A turn diff is bounded like any other: a diff nobody can read is not worth
 // the memory to hold it.
@@ -49,7 +49,7 @@ func checkpointRef(sessionID, turnID, edge string) string {
 // index instead of the person's own. Staging into the real index would make a
 // snapshot visible as staged work, which is a side effect no one asked for.
 func captureCheckpoint(ctx context.Context, root, ref string) (string, error) {
-	index, err := os.CreateTemp("", "hy-checkpoint-index-*")
+	index, err := os.CreateTemp("", "omniplex-checkpoint-index-*")
 	if err != nil {
 		return "", err
 	}
@@ -65,10 +65,10 @@ func captureCheckpoint(ctx context.Context, root, ref string) (string, error) {
 		// A snapshot is the server's own bookkeeping. Borrowing the person's
 		// identity for it would put their name on commits they never made,
 		// and a repository with no configured user would fail outright.
-		"GIT_AUTHOR_NAME=hy",
-		"GIT_AUTHOR_EMAIL=hy@localhost",
-		"GIT_COMMITTER_NAME=hy",
-		"GIT_COMMITTER_EMAIL=hy@localhost",
+		"GIT_AUTHOR_NAME=omniplex",
+		"GIT_AUTHOR_EMAIL=omniplex@localhost",
+		"GIT_COMMITTER_NAME=omniplex",
+		"GIT_COMMITTER_EMAIL=omniplex@localhost",
 	)
 
 	// A repository with no commits yet has nothing to seed the index from, and
@@ -86,7 +86,7 @@ func captureCheckpoint(ctx context.Context, root, ref string) (string, error) {
 		return "", err
 	}
 	commit, err := runGitEnv(ctx, root, env, "commit-tree", strings.TrimSpace(string(tree)),
-		"-m", "hy checkpoint "+ref)
+		"-m", "omniplex checkpoint "+ref)
 	if err != nil {
 		return "", err
 	}

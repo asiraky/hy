@@ -1,7 +1,7 @@
 // Package netinfo works out where the server should listen and how it can be
 // reached.
 //
-// The guiding rule is that hy should need no flags to be useful: it binds
+// The guiding rule is that omniplex should need no flags to be useful: it binds
 // everything a device you own could plausibly reach — loopback, your LAN, an
 // overlay network like Tailscale — and deliberately does not bind globally
 // routable addresses, because a public IP means the open internet and that is
@@ -171,7 +171,7 @@ func Plan(o Options) (BindPlan, error) {
 		// The unspecified address means "everything", which we express as the
 		// automatic plan so the banner can still enumerate real addresses.
 		// Public addresses stay behind their own flag even here: there is one
-		// rule for exposing hy to the internet, and it is not a side effect of
+		// rule for exposing omniplex to the internet, and it is not a side effect of
 		// asking for a wildcard bind.
 		if host == "" || host == "0.0.0.0" || host == "::" {
 			return automatic(port, o.IncludePublic)

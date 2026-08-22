@@ -5,13 +5,13 @@ package server
 import (
 	"encoding/json"
 
-	"github.com/asiraky/hy/internal/endpoints"
-	"github.com/asiraky/hy/internal/project"
-	"github.com/asiraky/hy/internal/projection"
-	"github.com/asiraky/hy/internal/proto"
-	"github.com/asiraky/hy/internal/session"
-	"github.com/asiraky/hy/internal/store"
-	"github.com/asiraky/hy/internal/userconfig"
+	"github.com/asiraky/omniplex/internal/endpoints"
+	"github.com/asiraky/omniplex/internal/project"
+	"github.com/asiraky/omniplex/internal/projection"
+	"github.com/asiraky/omniplex/internal/proto"
+	"github.com/asiraky/omniplex/internal/session"
+	"github.com/asiraky/omniplex/internal/store"
+	"github.com/asiraky/omniplex/internal/userconfig"
 )
 
 // ProtocolVersion is bumped when the wire format changes incompatibly.

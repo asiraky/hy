@@ -1,13 +1,13 @@
-# hy — harness multiplexer
+# Omniplex — harness multiplexer
 
-[![CI](https://github.com/asiraky/hy/actions/workflows/ci.yml/badge.svg)](https://github.com/asiraky/hy/actions/workflows/ci.yml)
+[![CI](https://github.com/asiraky/omniplex/actions/workflows/ci.yml/badge.svg)](https://github.com/asiraky/omniplex/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A Go server that drives multiple coding harnesses (Claude Code, Codex) behind one
 canonical event protocol, plus a standalone web UI that attaches to live or
 closed session transcripts from another paired device.
 
-This implements the architecture in `harness-multiplexer-spec.md`, milestones 1–5
+This implements the architecture in `omniplex-spec.md`, milestones 1–5
 and 9: the event log, the session actor and fanout, the sync protocol, the Claude
 adapter, the web UI, and the Codex adapter.
 
@@ -36,13 +36,17 @@ Two builds, for two different audiences:
 
 - **`npm run build`** (~18 MB) — the local build. Smaller and quicker because it
   skips compiling the Claude bridge, which means Claude needs Node 18+ or Bun on
-  the host. This is what you build while working on hy.
+  the host. This is what you build while working on Omniplex.
 - **`npm run build:bundled`** (~79 MB) — the distribution build. The bridge
   carries its own JS runtime, so whoever runs it needs neither Node nor Bun.
-  This is what you hand to someone else: installing hy should never mean
+  This is what you hand to someone else: installing Omniplex should never mean
   installing Node first.
 
 Both drive your own Claude Code install; neither ships Claude Code.
+
+Every build also installs `omni` as a symlink beside the `omniplex` binary, so
+either `./omniplex` or `./omni` starts the same server. Documentation uses the
+full product name.
 
 ### Scripts
 
@@ -63,9 +67,9 @@ everywhere else. Nothing else in the repo requires Bun.
 
 Open the URL, click **New session**, choose Claude or Codex, and prompt. The
 harness runs as a subprocess of the server and uses the auth you already have
-locally (`claude` and `codex` login state); hy never sees a token.
+locally (`claude` and `codex` login state); Omniplex never sees a token.
 
-By default hy binds loopback plus every private LAN and running overlay address
+By default Omniplex binds loopback plus every private LAN and running overlay address
 it can safely identify. Open one of the printed URLs on another device and enter
 the one-time pairing code from the terminal. Use `-addr` only when you need to
 pin one specific interface.
@@ -121,13 +125,26 @@ weakened.
 |---|---|---|
 | `-addr` | auto | Bind one specific address instead of discovered private/overlay addresses |
 | `-port` | `8787` | Port used for automatically selected addresses |
-| `-bind-public` | off | Also bind globally routable addresses; explicit because this exposes hy to the internet |
-| `-db` | `~/.hy/hy.db` | Event log |
+| `-bind-public` | off | Also bind globally routable addresses; explicit because this exposes Omniplex to the internet |
+| `-db` | `~/.omniplex/omniplex.db` | Event log |
 | `-cwd` | current directory | Default working directory for new sessions |
 | `-claude-path` | discovered | Claude Code executable to drive |
 | `-codex` | `codex` | Codex CLI |
 | `-dev` | off | Serve the UI from the Vite dev server instead of the embedded bundle |
 | `-vite-port` | 5199 | Where the Vite dev server listens (with `-dev`) |
+
+## Relocating a project
+
+If a configured project directory has been moved or renamed, stop Omniplex and run:
+
+```bash
+omniplex relocate <old-root> <new-root>
+```
+
+Use `-db path` after `relocate` when the server uses a non-default database.
+The command repairs stored project and session paths, lifecycle state, Git
+worktree links, and Claude Code transcript directories. It refuses to overwrite
+an existing transcript directory.
 
 ## Harnesses are optional
 
@@ -198,7 +215,7 @@ this adapter spawns and speaks to over stdio. The bridge relays SDK messages
 and permission decisions and holds no canonical-event logic, so upgrading the
 SDK is `npm install`, not a rewrite.
 
-**hy never ships Claude Code.** The SDK is pointed at the install you already
+**Omniplex never ships Claude Code.** The SDK is pointed at the install you already
 have (`pathToClaudeCodeExecutable`), discovered automatically or pinned with
 `-claude-path`.
 
@@ -255,4 +272,4 @@ as described in [SECURITY.md](SECURITY.md), not filed as public issues.
 
 ## License
 
-hy is available under the [MIT License](LICENSE).
+Omniplex is available under the [MIT License](LICENSE).

@@ -16,7 +16,7 @@
 import { currentBuild } from "./boot";
 import type { SessionState } from "./protocol";
 
-const KEY = "hy.resume";
+const KEY = "omniplex.resume";
 
 export interface ResumeSnapshot {
   /** The bundle that wrote this. A different bundle may disagree about the

@@ -1,4 +1,4 @@
-Adversarial review of the current branch (feature/hy-bdc60144) against base main.
+Adversarial review of the current branch (feature/omniplex-bdc60144) against base main.
 The change is committed — inspect it with 'git diff main...HEAD'.
 
 Intent, as the user stated it: in the chat composer, the reasoning-effort and

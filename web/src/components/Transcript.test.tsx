@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, screen } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Transcript } from "./Transcript";
@@ -59,7 +59,7 @@ describe("copying an agent message", () => {
     expect(writeText).toHaveBeenCalledWith("# Title\n\n**bold** and `code`");
   });
 
-  // hy is routinely reached over plain http on a LAN address, which is not a
+  // omniplex is routinely reached over plain http on a LAN address, which is not a
   // secure context: there is no `navigator.clipboard` there at all. The copy
   // has to happen anyway rather than dying silently under a thumb.
   it("still copies with no clipboard API — an http origin on a phone", () => {
@@ -71,6 +71,22 @@ describe("copying an agent message", () => {
     fireEvent.click(screen.getByLabelText("Copy message"));
 
     expect(exec).toHaveBeenCalledWith("copy");
+  });
+});
+
+describe("copying a user message", () => {
+  it("copies the entire raw prompt from its footer", () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const userState = state("");
+    userState.items = [
+      { id: "u1", kind: "message", role: "user", text: "A long **raw** prompt", receivedAt: 1 },
+    ];
+
+    render(view(userState));
+    fireEvent.click(screen.getByLabelText("Copy message"));
+
+    expect(writeText).toHaveBeenCalledWith("A long **raw** prompt");
   });
 });
 
@@ -220,5 +236,144 @@ describe("the merged-pull-request prompt", () => {
     // The tooltip does not render on a coarse pointer, so the accessible name
     // is the whole explanation and has to carry it alone.
     expect(screen.getByRole("button", { name: /finish with this session/i })).toBeTruthy();
+  });
+});
+
+// The provisioner's card is a receipt, not a task. It says "ready" and then
+// leaves on its own, so the empty transcript it was sitting on top of is free
+// for the affordance the user actually needs.
+const empty = (over: any = {}): any => ({ ...state(""), items: [], ...over });
+
+function provisioner(s: any) {
+  return render(
+    <Transcript
+      state={s}
+      onRetryProvision={() => {}}
+      onCleanup={() => {}}
+      onForceDelete={() => {}}
+      onContinue={() => {}}
+      onOpenDiff={() => {}}
+      onFinish={() => {}}
+    />,
+  );
+}
+
+describe("the workspace card leaving on its own", () => {
+  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+  afterEach(() => vi.useRealTimers());
+
+  it("dismisses itself once the workspace is ready", async () => {
+    provisioner(empty());
+    expect(screen.getByText("Workspace ready")).toBeTruthy();
+
+    // Twice: the first pass starts the collapse, the second lets it finish —
+    // the unmount timer is only scheduled once the card is on its way out.
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    expect(screen.queryByText("Workspace ready")).toBeNull();
+  });
+
+  it("keeps a failed workspace on screen — it is asking a question", async () => {
+    provisioner(empty({ phase: "provision_failed", workspace: { phase: "provision_failed" } }));
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    expect(screen.getByText("Workspace needs attention")).toBeTruthy();
+  });
+
+  it("comes back at full height when the workspace goes active mid-collapse", async () => {
+    const { container, rerender } = provisioner(empty());
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    // The collapse has started but not finished; cleanup begins.
+    await act(async () => {
+      rerender(
+        wrap(
+          <Transcript
+            state={empty({ phase: "cleaning", workspace: { phase: "cleaning" } })}
+            onRetryProvision={() => {}}
+            onCleanup={() => {}}
+            onForceDelete={() => {}}
+            onContinue={() => {}}
+            onOpenDiff={() => {}}
+            onFinish={() => {}}
+          />,
+        ),
+      );
+    });
+
+    expect(screen.getByText("Cleaning up workspace")).toBeTruthy();
+    // Flat and transparent would be the same as gone, taking any failure
+    // controls with it.
+    const wrapper = container.querySelector<HTMLElement>(".transition-\\[max-height\\,opacity\\]")!;
+    expect(wrapper.style.maxHeight).toBe("");
+    expect(wrapper.style.opacity).toBe("");
+  });
+
+  it("stays while the reader has its output open", async () => {
+    provisioner(empty());
+    fireEvent.click(screen.getByText("Workspace ready"));
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    expect(screen.getByText("Workspace ready")).toBeTruthy();
+  });
+});
+
+// The first-run affordance: an empty transcript offers the skills this user
+// reaches for, and hands the chosen one to the composer rather than running it.
+const RECENTS: any[] = [
+  { id: "s1", name: "work-issue", kind: "skill", trigger: "/", insertText: "/work-issue", behavior: "prompt" },
+  { id: "s2", name: "review", kind: "skill", trigger: "/", insertText: "/review", behavior: "prompt" },
+];
+
+function withRecents(s: any, onPick = () => {}) {
+  return render(
+    <Transcript
+      state={s}
+      onRetryProvision={() => {}}
+      onCleanup={() => {}}
+      onForceDelete={() => {}}
+      onContinue={() => {}}
+      onOpenDiff={() => {}}
+      onFinish={() => {}}
+      recents={RECENTS}
+      onPickRecent={onPick}
+    />,
+  );
+}
+
+describe("recent skills on an empty transcript", () => {
+  it("offers them when there is nothing in the session yet", () => {
+    withRecents(empty());
+    expect(screen.getByText("/work-issue")).toBeTruthy();
+  });
+
+  it("hands the picked skill back rather than running it", () => {
+    const onPick = vi.fn();
+    withRecents(empty(), onPick);
+    fireEvent.click(screen.getByText("/review"));
+    expect(onPick).toHaveBeenCalledWith(expect.objectContaining({ insertText: "/review" }));
+  });
+
+  it("is gone the moment the transcript has anything in it", () => {
+    withRecents(state("hello"));
+    expect(screen.queryByText("/work-issue")).toBeNull();
+  });
+
+  it("stands aside while the workspace is still being provisioned", () => {
+    withRecents(empty({ phase: "provisioning", workspace: { phase: "provisioning" } }));
+    expect(screen.queryByText("/work-issue")).toBeNull();
   });
 });

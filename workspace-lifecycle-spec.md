@@ -2,7 +2,7 @@
 
 ## The solution
 
-Each project has a `.hy/project.json` file and can define two executable hooks:
+Each project has a `.omniplex/project.json` file and can define two executable hooks:
 
 ```json
 {
@@ -16,24 +16,24 @@ Each project has a `.hy/project.json` file and can define two executable hooks:
     "baseBranch": "staging"
   },
   "workspace": {
-    "provision": "./scripts/hy-provision",
-    "deprovision": "./scripts/hy-deprovision"
+    "provision": "./scripts/omniplex-provision",
+    "deprovision": "./scripts/omniplex-deprovision"
   }
 }
 ```
 
-Hy runs `provision` when the session is created and **waits for it to exit**.
+Omniplex runs `provision` when the session is created and **waits for it to exit**.
 The script can create a worktree wherever it wants, clone databases, allocate
 Redis, copy env files, install dependencies, and rewrite `AGENTS.md`. It returns
-the directory in which the agent should run. Only after that does hy start
+the directory in which the agent should run. Only after that does Omniplex start
 Claude or Codex.
 
-When the session is closed, hy runs `deprovision` and waits for it to exit. That
+When the session is closed, Omniplex runs `deprovision` and waits for it to exit. That
 script receives the same session context plus the saved result of `provision`,
 so it can drop databases, release Redis/ports, and remove the exact worktree it
 created.
 
-The hooks own project-specific behavior. Hy only owns when to call them,
+The hooks own project-specific behavior. Omniplex only owns when to call them,
 waiting for completion, streaming their output, persisting their result, and
 retrying/reporting failure.
 
@@ -44,10 +44,10 @@ That should be replaced by a first-class project:
 
 ```text
 Project
-  id                  stable ID in hy's database
+  id                  stable ID in Omniplex's database
   root                main checkout / working-directory root
   name                display name
-  config              parsed .hy/project.json
+  config              parsed .omniplex/project.json
   defaults            harness, model, effort, mode, base branch
   lifecycle hooks     provision and deprovision paths
 
@@ -58,8 +58,8 @@ Session
   provisionResult     saved output needed by deprovision
 ```
 
-Hy keeps a local project registry in its existing database so the user adds a
-directory only once. `.hy/project.json` is the portable, project-owned
+Omniplex keeps a local project registry in its existing database so the user adds a
+directory only once. `.omniplex/project.json` is the portable, project-owned
 configuration. The UI edits that file; the database indexes it and holds
 machine-local state such as last-used time. Sessions reference `projectId`
 instead of treating an arbitrary cwd as the whole identity.
@@ -72,8 +72,8 @@ path, so moving or cloning the project does not break its configuration.
 
 ### Add a project once
 
-The first time, the user chooses **Add project** and picks a directory. Hy finds
-the main Git checkout, registers it, and reads `.hy/project.json` if present.
+The first time, the user chooses **Add project** and picks a directory. Omniplex finds
+the main Git checkout, registers it, and reads `.omniplex/project.json` if present.
 Thereafter the project appears in the new-session picker; the user never browses
 to that directory again.
 
@@ -100,14 +100,14 @@ Workspace
   New sessions use             Managed worktree
   Base branch                  staging
   Suggested worktree folder    .worktrees
-  Provision script             scripts/hy-provision       [Choose...]
-  Deprovision script           scripts/hy-deprovision     [Choose...]
+  Provision script             scripts/omniplex-provision       [Choose...]
+  Deprovision script           scripts/omniplex-deprovision     [Choose...]
 ```
 
 **Choose...** opens a server-side file picker rooted at the project. Selecting a
-file fills the field. **Save** writes `.hy/project.json` immediately and updates
+file fills the field. **Save** writes `.omniplex/project.json` immediately and updates
 the in-memory project. There is no import step, no first dummy chat, and no
-separate command to teach hy that the hook should run next time.
+separate command to teach Omniplex that the hook should run next time.
 
 The app validates that each configured script exists and is executable. It does
 not run provision as a “test,” because testing it would create real resources.
@@ -128,7 +128,7 @@ Base         staging           (from project default, overridable per session)
 
 The workspace row is a list rather than a text field that means different
 things depending on what is typed into it. Its options are: the main checkout,
-a new worktree from an issue or a branch name, a new scratch worktree hy names
+a new worktree from an issue or a branch name, a new scratch worktree Omniplex names
 itself, and attaching to a worktree that already exists. **Base** applies to
 the two that create a branch, which is what makes a session stackable on
 another worktree's unmerged work.
@@ -139,15 +139,15 @@ advanced fields can stay collapsed in the common case, making creation roughly
 
 When the user starts:
 
-1. Hy navigates straight into the normal session/chat screen. The header,
+1. Omniplex navigates straight into the normal session/chat screen. The header,
    transcript, and composer are all in their usual places.
 2. The transcript contains a system-style **Preparing workspace** message. It
-   is clearly from hy's workspace provisioner, not fabricated model output.
+   is clearly from Omniplex's workspace provisioner, not fabricated model output.
 3. The composer remains visible but disabled, with `Preparing workspace...` in
    place of its normal placeholder. No prompt can be submitted or queued yet.
-4. Hy automatically runs the project's provision hook. Its stdout and stderr
+4. Omniplex automatically runs the project's provision hook. Its stdout and stderr
    stream live into an expandable console area inside the system message.
-5. When the hook exits successfully, hy starts the selected harness in the cwd
+5. When the hook exits successfully, Omniplex starts the selected harness in the cwd
    returned by the hook, enables and focuses the composer, and collapses the
    message to a compact **Workspace ready** row.
 6. If provision fails, the message remains expanded with the command, exit
@@ -206,7 +206,7 @@ project (main checkout)
 
 A session can use one of three workspace modes:
 
-| Mode | Created by hy | Setup hook | Teardown hook | Git removal |
+| Mode | Created by Omniplex | Setup hook | Teardown hook | Git removal |
 |---|---:|---:|---:|---:|
 | `local` | no | never | never | never |
 | `borrowed` | no | never | never | never |
@@ -214,7 +214,7 @@ A session can use one of three workspace modes:
 
 Ownership is recorded when the lease is created and never inferred later from
 the path, and `local` never reaches teardown however it is asked to: the
-project directory is not hy's to remove. For the other two, ownership decides
+project directory is not Omniplex's to remove. For the other two, ownership decides
 the *default* answer and not the answer — removing a worktree is the user's
 explicit choice in the delete dialog, ticked by default for `managed` and
 unticked for `borrowed`. Both non-managed modes still have their hook paths
@@ -350,7 +350,7 @@ metadata such as `project_root`, `workspace_path`, `branch`, `base_ref`,
 
 ## Project configuration and hook contract
 
-Use one checked-in file at the main checkout, `.hy/project.json`:
+Use one checked-in file at the main checkout, `.omniplex/project.json`:
 
 ```json
 {
@@ -365,15 +365,15 @@ Use one checked-in file at the main checkout, `.hy/project.json`:
   },
   "workspace": {
     "suggestedRoot": ".worktrees",
-    "provision": "./scripts/hy-provision",
-    "deprovision": "./scripts/hy-deprovision",
+    "provision": "./scripts/omniplex-provision",
+    "deprovision": "./scripts/omniplex-deprovision",
     "provisionTimeoutSeconds": 1800,
     "deprovisionTimeoutSeconds": 600
   }
 }
 ```
 
-Hooks can be executable files using any language via their shebang. Hy also
+Hooks can be executable files using any language via their shebang. Omniplex also
 recognises `.ts`/`.mts`, `.js`/`.mjs`/`.cjs`, and `.sh` files and launches them
 with Bun, Node, or `sh` respectively, so an existing project script does not
 have to be made executable. A shell script can simply delegate to an existing
@@ -381,11 +381,11 @@ TypeScript implementation:
 
 ```sh
 #!/bin/sh
-exec bun run scripts/worktree-setup.ts --hy-context "$HY_CONTEXT_FILE"
+exec bun run scripts/worktree-setup.ts --Omniplex-context "$OMNIPLEX_CONTEXT_FILE"
 ```
 
-Hooks run with the main checkout as their cwd. Hy writes an input JSON file and
-provides its location as `HY_CONTEXT_FILE`. The input contains:
+Hooks run with the main checkout as their cwd. Omniplex writes an input JSON file and
+provides its location as `OMNIPLEX_CONTEXT_FILE`. The input contains:
 
 ```json
 {
@@ -399,7 +399,7 @@ provides its location as `HY_CONTEXT_FILE`. The input contains:
 ```
 
 The suggested path is only a default. The provision hook may create the
-worktree somewhere else. It writes its result atomically to `HY_RESULT_FILE`:
+worktree somewhere else. It writes its result atomically to `OMNIPLEX_RESULT_FILE`:
 
 ```json
 {
@@ -414,8 +414,8 @@ worktree somewhere else. It writes its result atomically to `HY_RESULT_FILE`:
 }
 ```
 
-`cwd` is the only required result. It is the directory hy gives to the harness.
-Hy verifies that it exists, saves the complete result, and starts the agent
+`cwd` is the only required result. It is the directory Omniplex gives to the harness.
+Omniplex verifies that it exists, saves the complete result, and starts the agent
 there only after the provision process exits zero.
 
 Deprovision receives the original context and provision result in its context
@@ -427,17 +427,21 @@ button.
 The process environment is deliberately small:
 
 ```text
-HY_LIFECYCLE_VERSION=1
-HY_HOOK=provision | deprovision
-HY_SESSION_ID=<stable UUID>
-HY_PROJECT_ROOT=<absolute main checkout>
-HY_CONTEXT_FILE=<absolute JSON input path>
-HY_STATE_DIR=<durable per-session directory outside the worktree>
-HY_RESULT_FILE=<path for an atomic JSON result>
+OMNIPLEX_LIFECYCLE_VERSION=2
+OMNIPLEX_HOOK=provision | deprovision
+OMNIPLEX_SESSION_ID=<stable UUID>
+OMNIPLEX_PROJECT_ROOT=<absolute main checkout>
+OMNIPLEX_CONTEXT_FILE=<absolute JSON input path>
+OMNIPLEX_STATE_DIR=<durable per-session directory outside the worktree>
+OMNIPLEX_RESULT_FILE=<path for an atomic JSON result>
 ```
 
-The durable `HY_STATE_DIR` is available to both hooks and survives removal of
+The durable `OMNIPLEX_STATE_DIR` is available to both hooks and survives removal of
 the worktree.
+
+Version 2 is the clean-break Omniplex contract. Every lifecycle variable now
+uses the `OMNIPLEX_` prefix; hooks written for version 1 must be updated rather
+than expecting compatibility variables.
 
 Hooks must be idempotent:
 
@@ -447,7 +451,7 @@ Hooks must be idempotent:
 - deprovision must use the saved provision result and durable state to clean up
   even after a partially completed provision.
 
-Hy should also provide a zero-configuration compatibility resolver for the
+Omniplex should also provide a zero-configuration compatibility resolver for the
 existing `clawd` conventions:
 
 ```text
@@ -465,7 +469,7 @@ New projects should use the context/result files above.
 
 Lifecycle hooks are trusted host code. They can intentionally reach Docker,
 databases, env files, and other resources that the harness itself may not be
-allowed to manage. Hy should show the resolved hook commands and require trust
+allowed to manage. Omniplex should show the resolved hook commands and require trust
 once per project/config hash before executing them.
 
 Resolve configuration and hook paths from the persisted main checkout, never
@@ -494,7 +498,7 @@ actor appends workspace.ready
 actor changes phase to ready
 ```
 
-On provision failure, hy keeps the output and invokes deprovision only when the
+On provision failure, Omniplex keeps the output and invokes deprovision only when the
 user chooses **Clean up**. The user can instead inspect the failure and retry
 the idempotent provision hook.
 
@@ -507,19 +511,19 @@ On restart, reconcile by durable phase:
 | `cleaning` / `cleanup_failed` | retry deprovision with the same context |
 | `closed` | no process or workspace action |
 
-Hook children must belong to a process group owned by hy. Normal shutdown
+Hook children must belong to a process group owned by Omniplex. Normal shutdown
 terminates and reaps them, then leaves the durable phase interrupted for the
 next reconciliation pass. A startup reaper also checks stale managed leases so
 a hard kill cannot leak resources forever.
 
 ## Safe default when a project has no hooks
 
-Hooks are optional. Without them, hy can provide a basic built-in worktree
+Hooks are optional. Without them, Omniplex can provide a basic built-in worktree
 implementation using the suggested `.worktrees/<branch>` location. That default
 only creates and removes Git worktrees; it does not guess how to clone env
 files, databases, Redis state, or other project resources.
 
-Before the built-in implementation removes a path, hy must verify:
+Before the built-in implementation removes a path, Omniplex must verify:
 
 1. the lease says `owned: true`;
 2. the resolved target equals the persisted path (no fresh template expansion);
@@ -528,7 +532,7 @@ Before the built-in implementation removes a path, hy must verify:
 5. the target is neither the project root nor an ancestor of it.
 
 Then it runs `git worktree remove --force <exact-path>` without a shell and
-`git worktree prune`. Hy does not perform Git removal after a custom
+`git worktree prune`. Omniplex does not perform Git removal after a custom
 deprovision hook—the hook owns the complete operation.
 
 ## User-facing behaviour
@@ -541,7 +545,7 @@ Workspace provisioner
 Preparing workspace...
 
   Creating worktree                     done
-  Running scripts/hy-provision
+  Running scripts/omniplex-provision
     Allocated API 8104 / app 8204
     Installed dependencies
     Cloning zero8 -> zero8_feature_...   running
@@ -573,20 +577,20 @@ parts correctly: they accept an externally-created worktree path, allocate
 stable resources, clone env/DB state, write agent instructions, and are mostly
 idempotent. The immediate migration is:
 
-1. add tiny `hy-provision` and `hy-deprovision` wrappers around the existing
+1. add tiny `omniplex-provision` and `omniplex-deprovision` wrappers around the existing
    setup/teardown scripts;
 2. make provision write its selected cwd and optional display metadata to
-   `HY_RESULT_FILE`; and
-3. add `.hy/project.json`, or rely initially on the compatibility resolver.
+   `OMNIPLEX_RESULT_FILE`; and
+3. add `.omniplex/project.json`, or rely initially on the compatibility resolver.
 
 This removes the current T3-specific dispatcher from the correctness path.
-The same repository hooks then work from `clawd`, hy, CI, or another launcher
+The same repository hooks then work from `clawd`, Omniplex, CI, or another launcher
 because the project-specific logic remains in the project and the lifecycle
 contract belongs to the orchestrator.
 
 ## Implementation slices
 
-1. **Projects:** add the project registry/table, `.hy/project.json` loading and
+1. **Projects:** add the project registry/table, `.omniplex/project.json` loading and
    saving, Project Settings, and a project picker in place of the cwd field.
 2. **Provision barrier:** add lifecycle events/phases, create an actor without a
    harness, stream the project hook, persist its result, and start the harness

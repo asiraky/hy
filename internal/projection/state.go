@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"strconv"
 
-	"github.com/asiraky/hy/internal/proto"
+	"github.com/asiraky/omniplex/internal/proto"
 )
 
 // Attention is the derived answer to "whose turn is it?" — the one signal a

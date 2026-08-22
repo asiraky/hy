@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/asiraky/hy/internal/adapter"
+	"github.com/asiraky/omniplex/internal/adapter"
 )
 
 type claudeCommand struct {

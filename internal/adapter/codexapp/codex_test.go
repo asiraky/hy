@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/asiraky/hy/internal/adapter"
-	"github.com/asiraky/hy/internal/jsonrpc"
+	"github.com/asiraky/omniplex/internal/adapter"
+	"github.com/asiraky/omniplex/internal/jsonrpc"
 )
 
 // serverConn pairs a client jsonrpc.Conn with an in-memory server whose handler
@@ -64,7 +64,7 @@ func TestPromptCapturesServerTurnIDForCancel(t *testing.T) {
 	})
 	s := &session{conn: conn, threadID: "thread-1"}
 
-	if err := s.Prompt(context.Background(), adapter.PromptInput{TurnID: "hy-turn", Text: "hi"}); err != nil {
+	if err := s.Prompt(context.Background(), adapter.PromptInput{TurnID: "omniplex-turn", Text: "hi"}); err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}
 	if s.serverTurnID != "codex-turn-42" {

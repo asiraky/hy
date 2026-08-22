@@ -14,12 +14,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/asiraky/hy/internal/adapter"
-	"github.com/asiraky/hy/internal/project"
-	"github.com/asiraky/hy/internal/projection"
-	"github.com/asiraky/hy/internal/proto"
-	"github.com/asiraky/hy/internal/provider"
-	"github.com/asiraky/hy/internal/store"
+	"github.com/asiraky/omniplex/internal/adapter"
+	"github.com/asiraky/omniplex/internal/project"
+	"github.com/asiraky/omniplex/internal/projection"
+	"github.com/asiraky/omniplex/internal/proto"
+	"github.com/asiraky/omniplex/internal/provider"
+	"github.com/asiraky/omniplex/internal/store"
 )
 
 // registered pairs a provider instance with the adapter that serves its
@@ -609,14 +609,14 @@ func (m *Manager) CreateProject(ctx context.Context, o CreateProjectOptions) (*A
 		if holder, ok := m.cleaningSessionIn(ctx, w.Path); ok {
 			return nil, fmt.Errorf("%s is being cleaned up by %q", filepath.Base(w.Path), holder)
 		}
-		// hy did not create this checkout, so it must never destroy it: the
+		// omniplex did not create this checkout, so it must never destroy it: the
 		// borrowed mode skips both hooks and the managed worktree teardown.
 		cwd, o.Workspace = w.Path, "borrowed"
 		if o.Branch == "" {
 			o.Branch = w.Branch
 		}
 	case o.Workspace == "local":
-		// The main checkout, which hy did not create and must not clean up.
+		// The main checkout, which omniplex did not create and must not clean up.
 		// Resolving it as a workspace still reuses the attach guard — the path
 		// has to be a checkout Git reports for this project — but a checkout
 		// another session already holds is no longer refused. The presenter
@@ -802,8 +802,8 @@ func (m *Manager) Cleanup(ctx context.Context, id string) error {
 		return err
 	}
 	m.adopt(a)
-	// "Clean up workspace" asks for exactly that, so a lease hy provisioned is
-	// released; a checkout it merely borrowed still is not hy's to delete.
+	// "Clean up workspace" asks for exactly that, so a lease omniplex provisioned is
+	// released; a checkout it merely borrowed still is not omniplex's to delete.
 	go m.cleanup(meta, p, a, false, meta.WorkspaceMode == "managed")
 	return nil
 }
@@ -994,7 +994,7 @@ func (m *Manager) Delete(ctx context.Context, id string, removeWorktree bool) er
 	}
 	if removeWorktree {
 		if meta.WorkspaceMode == "local" {
-			return errors.New("the main checkout is not hy's to remove")
+			return errors.New("the main checkout is not omniplex's to remove")
 		}
 		// Sessions may share a checkout, so the last one out is the only one
 		// that may take it with them. The dialog hides the checkbox in this
@@ -1063,7 +1063,7 @@ func (m *Manager) Delete(ctx context.Context, id string, removeWorktree bool) er
 // directory. It is the "somebody else is still in here" test that guards
 // worktree removal now that sharing is allowed. A closed session counts: it
 // still names that path, its transcript still refers to it, and it can be
-// resumed — "the last session hy knows of" is the question, not "the last one
+// resumed — "the last session omniplex knows of" is the question, not "the last one
 // still running".
 func (m *Manager) otherSessionIn(ctx context.Context, id, cwd string) (string, bool) {
 	if strings.TrimSpace(cwd) == "" {
@@ -1126,7 +1126,7 @@ func (m *Manager) ForceDelete(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	// Only a managed worktree is hy's to destroy. A borrowed checkout belongs
+	// Only a managed worktree is omniplex's to destroy. A borrowed checkout belongs
 	// to whoever made it and a local session is the user's own working
 	// directory; forcing either session away must not touch their files.
 	if meta.WorkspaceMode == "managed" {

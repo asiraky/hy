@@ -178,7 +178,7 @@ export function NewSession({
   const branch = kind === "branch" ? choice.branch.trim() : "";
   const workspace = kind === "main" ? "local" : kind === "attach" ? "" : "managed";
   const workspacePath = kind === "attach" ? choice.attachPath : "";
-  // A base only means anything where hy is the one creating the branch.
+  // A base only means anything where omniplex is the one creating the branch.
   const sentBase = kind === "branch" ? baseRef.trim() : "";
   // Branches already on disk are the useful bases — stacking on another
   // worktree's work is exactly what this field exists for. The project default
@@ -187,7 +187,7 @@ export function NewSession({
   const baseChoices = Array.from(
     new Set(workspaces.map((w) => w.branch).filter((b): b is string => !!b)),
   ).filter((b) => b !== project?.config.defaults.baseBranch);
-  // "branch" can start with an empty name: that is the scratch case, and hy
+  // "branch" can start with an empty name: that is the scratch case, and omniplex
   // makes the name up. Only attach needs a concrete answer before it can go.
   const canStart = kind === "attach" ? !!choice.attachPath : true;
   const ready =
@@ -283,7 +283,7 @@ export function NewSession({
         <DialogHeader className="px-6 py-4 pt-[calc(1rem+env(safe-area-inset-top))] pr-16 text-left md:pt-4 md:pr-6">
           <DialogTitle>New session</DialogTitle>
           <DialogDescription>
-            Pick a project. Hy prepares its workspace before starting the agent.
+            Pick a project. Omniplex prepares its workspace before starting the agent.
           </DialogDescription>
         </DialogHeader>
 

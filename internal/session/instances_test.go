@@ -6,9 +6,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/asiraky/hy/internal/adapter"
-	"github.com/asiraky/hy/internal/provider"
-	"github.com/asiraky/hy/internal/store"
+	"github.com/asiraky/omniplex/internal/adapter"
+	"github.com/asiraky/omniplex/internal/provider"
+	"github.com/asiraky/omniplex/internal/store"
 )
 
 // instAdapter is a fakeAdapter that records the env overlay it is given and

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/asiraky/hy/internal/proto"
-	"github.com/asiraky/hy/internal/store"
+	"github.com/asiraky/omniplex/internal/proto"
+	"github.com/asiraky/omniplex/internal/store"
 )
 
 func gitOut(t *testing.T, dir string, args ...string) string {
@@ -235,11 +235,11 @@ func TestCaptureCheckpointCleansUpItsScratchIndex(t *testing.T) {
 	ctx := context.Background()
 	_, worktree, _ := gitRepo(t)
 
-	before, _ := filepath.Glob(filepath.Join(os.TempDir(), "hy-checkpoint-index-*"))
+	before, _ := filepath.Glob(filepath.Join(os.TempDir(), "omniplex-checkpoint-index-*"))
 	if _, err := captureCheckpoint(ctx, worktree, checkpointRef("s1", "t1", "base")); err != nil {
 		t.Fatal(err)
 	}
-	after, _ := filepath.Glob(filepath.Join(os.TempDir(), "hy-checkpoint-index-*"))
+	after, _ := filepath.Glob(filepath.Join(os.TempDir(), "omniplex-checkpoint-index-*"))
 
 	if len(after) > len(before) {
 		t.Errorf("left %d scratch index files behind", len(after)-len(before))

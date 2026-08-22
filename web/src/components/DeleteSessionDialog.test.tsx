@@ -56,7 +56,7 @@ function open(sessions: SessionMeta[], target = sessions[0]) {
 const checkbox = () => document.querySelector("#delete-remove-worktree");
 
 describe("the delete confirmation, opened from outside the sidebar", () => {
-  it("carries the worktree guards with it, ticked for one hy provisioned", () => {
+  it("carries the worktree guards with it, ticked for one omniplex provisioned", () => {
     const onDelete = open([
       session("a", { workspaceMode: "managed", cwd: "/tmp/repo/.worktrees/a" }),
     ]);

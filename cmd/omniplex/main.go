@@ -1,4 +1,4 @@
-// Command hy runs the harness multiplexer: one server driving Claude Code and
+// Command omniplex runs the harness multiplexer: one server driving Claude Code and
 // Codex behind a single canonical protocol, with any number of UIs attached.
 package main
 
@@ -18,18 +18,18 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/asiraky/hy/internal/adapter/claudecode"
-	"github.com/asiraky/hy/internal/adapter/codexapp"
-	"github.com/asiraky/hy/internal/auth"
-	"github.com/asiraky/hy/internal/banner"
-	"github.com/asiraky/hy/internal/endpoints"
-	"github.com/asiraky/hy/internal/netinfo"
-	"github.com/asiraky/hy/internal/overlay"
-	"github.com/asiraky/hy/internal/provider"
-	"github.com/asiraky/hy/internal/server"
-	"github.com/asiraky/hy/internal/session"
-	"github.com/asiraky/hy/internal/store"
-	"github.com/asiraky/hy/internal/userconfig"
+	"github.com/asiraky/omniplex/internal/adapter/claudecode"
+	"github.com/asiraky/omniplex/internal/adapter/codexapp"
+	"github.com/asiraky/omniplex/internal/auth"
+	"github.com/asiraky/omniplex/internal/banner"
+	"github.com/asiraky/omniplex/internal/endpoints"
+	"github.com/asiraky/omniplex/internal/netinfo"
+	"github.com/asiraky/omniplex/internal/overlay"
+	"github.com/asiraky/omniplex/internal/provider"
+	"github.com/asiraky/omniplex/internal/server"
+	"github.com/asiraky/omniplex/internal/session"
+	"github.com/asiraky/omniplex/internal/store"
+	"github.com/asiraky/omniplex/internal/userconfig"
 )
 
 // web/dist is embedded when it has been built. The directory always contains a
@@ -39,16 +39,22 @@ import (
 var webdist embed.FS
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "relocate" {
+		if err := runRelocateCommand(context.Background(), os.Args[2:], os.Stdout); err != nil {
+			log.Fatalf("relocate project: %v", err)
+		}
+		return
+	}
 	var (
 		addr       = flag.String("addr", "", "bind one specific address, e.g. 192.168.1.20:8787 (default: every private and overlay address)")
-		port       = flag.Int("port", envInt("HY_PORT", 8787), "port to listen on")
-		bindPublic = flag.Bool("bind-public", false, "also bind globally routable addresses, exposing hy to the internet")
-		dbPath     = flag.String("db", envStr("HY_DB", defaultDB()), "path to the event log database")
+		port       = flag.Int("port", envInt("OMNIPLEX_PORT", 8787), "port to listen on")
+		bindPublic = flag.Bool("bind-public", false, "also bind globally routable addresses, exposing omniplex to the internet")
+		dbPath     = flag.String("db", envStr("OMNIPLEX_DB", defaultDB()), "path to the event log database")
 		cwd        = flag.String("cwd", mustCwd(), "default working directory for new sessions")
 		claudePath = flag.String("claude-path", "", "path to the Claude Code executable (default: discover it)")
 		codexBin   = flag.String("codex", "codex", "path to the codex CLI")
 		dev        = flag.Bool("dev", false, "development mode: serve the UI from the Vite dev server instead of the embedded bundle")
-		vitePort   = flag.Int("vite-port", envInt("HY_VITE_PORT", 5199), "port the Vite dev server listens on (with -dev)")
+		vitePort   = flag.Int("vite-port", envInt("OMNIPLEX_VITE_PORT", 5199), "port the Vite dev server listens on (with -dev)")
 	)
 	flag.Parse()
 
@@ -90,7 +96,7 @@ func main() {
 	configureProviders(mgr, logf)
 
 	// The config stored against a project is a cache of the file in the repo,
-	// so the file wins on startup: pulling a branch that changes .hy/project.json
+	// so the file wins on startup: pulling a branch that changes .omniplex/project.json
 	// should take effect without re-adding the project.
 	if err := mgr.ReloadProjects(context.Background()); err != nil {
 		logf("reload project config: %v", err)
@@ -317,9 +323,9 @@ func envStr(name, fallback string) string {
 func defaultDB() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "hy.db"
+		return "omniplex.db"
 	}
-	return filepath.Join(home, ".hy", "hy.db")
+	return filepath.Join(home, ".omniplex", "omniplex.db")
 }
 
 func mustCwd() string {

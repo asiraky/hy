@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/asiraky/hy/internal/proto"
+	"github.com/asiraky/omniplex/internal/proto"
 )
 
 // CreateOptions configures a new harness session.
@@ -86,7 +86,7 @@ type HarnessMeta struct {
 
 // ModelMeta is a selectable model, as the harness itself describes it.
 //
-// Everything but Group is the harness's own answer: hy does not know what
+// Everything but Group is the harness's own answer: omniplex does not know what
 // models exist, what they are called, or which one is the default. Group is
 // the adapter's one presentation call — which of its models a UI should fold
 // away as superseded — because no harness reports that today.

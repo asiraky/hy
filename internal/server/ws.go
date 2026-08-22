@@ -11,11 +11,11 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
-	"github.com/asiraky/hy/internal/adapter"
-	"github.com/asiraky/hy/internal/proto"
-	"github.com/asiraky/hy/internal/session"
-	"github.com/asiraky/hy/internal/store"
-	"github.com/asiraky/hy/internal/userconfig"
+	"github.com/asiraky/omniplex/internal/adapter"
+	"github.com/asiraky/omniplex/internal/proto"
+	"github.com/asiraky/omniplex/internal/session"
+	"github.com/asiraky/omniplex/internal/store"
+	"github.com/asiraky/omniplex/internal/userconfig"
 )
 
 // conn is one presenter connection. It holds no session state of its own —

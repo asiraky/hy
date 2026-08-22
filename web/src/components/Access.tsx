@@ -230,7 +230,7 @@ export function AccessPanel({
 }) {
   const isDesktop = useIsDesktop();
   const title = "Reaching this server";
-  const description = "Every address hy is currently listening on.";
+  const description = "Every address Omniplex is currently listening on.";
   const body: ReactNode = (
     <AccessBody access={access} onEnableHTTPS={onEnableHTTPS} onDisableHTTPS={onDisableHTTPS} />
   );

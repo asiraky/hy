@@ -9,7 +9,7 @@ import (
 
 // SecretStore holds credential bytes on disk, one file per secret, keyed by
 // instance id plus variable name. It is deliberately a directory rather than
-// the OS keychain: hy runs headless over SSH, where a keychain is awkward or
+// the OS keychain: omniplex runs headless over SSH, where a keychain is awkward or
 // absent. The directory is mode 0700 and every file 0600.
 //
 // The config file records that a sensitive variable exists; this store holds
@@ -18,13 +18,13 @@ type SecretStore struct {
 	root string
 }
 
-// OpenSecretStore opens (creating if needed) ~/.hy/secrets.
+// OpenSecretStore opens (creating if needed) ~/.omniplex/secrets.
 func OpenSecretStore() (*SecretStore, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
-	return OpenSecretStoreAt(filepath.Join(home, ".hy", "secrets"))
+	return OpenSecretStoreAt(filepath.Join(home, ".omniplex", "secrets"))
 }
 
 // OpenSecretStoreAt opens a store rooted at an explicit directory; tests use it.

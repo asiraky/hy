@@ -4,7 +4,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/asiraky/hy/internal/netinfo"
+	"github.com/asiraky/omniplex/internal/netinfo"
 )
 
 func planWith(kinds ...netinfo.Kind) netinfo.BindPlan {

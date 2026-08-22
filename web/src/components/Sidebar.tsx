@@ -58,11 +58,11 @@ function ago(ms: number) {
   return `${Math.floor(s / 86400)}d`;
 }
 
-const WIDTH_KEY = "hy.sidebarWidth";
+const WIDTH_KEY = "omniplex.sidebarWidth";
 // Which label groups this device has folded shut. Deliberately device-local,
 // like the width: only the per-label "collapsed by default" flag syncs, so a
 // phone and a desktop can hold different groups open.
-const COLLAPSE_KEY = "hy.labelCollapse";
+const COLLAPSE_KEY = "omniplex.labelCollapse";
 // The default group's key in the collapse map. Label ids are uuids, so this
 // cannot collide with one.
 const UNLABELLED_KEY = "~unlabelled";
@@ -98,7 +98,7 @@ interface SidebarProps {
   // Supplied by the server via the adapter; the sidebar knows no harness names.
   accentOf: (harness: string) => string | undefined;
   projectName: (id?: string) => string | undefined;
-  /** The project's own checkout, which is never a worktree hy may remove. */
+  /** The project's own checkout, which is never a worktree omniplex may remove. */
   projectRoot: (id?: string) => string | undefined;
   /**
    * The user's label definitions, in their chosen order. Empty means the
@@ -471,7 +471,7 @@ function SidebarPanel({
           offers. Branding and the status dot earn no space up here — the dot
           lives in the footer, still one click from the access panel. */}
       <div className="flex items-center gap-2 px-3 pt-[calc(0.5rem+env(safe-area-inset-top))] pb-1.5">
-        <span className="flex-1 px-1.5 font-mono text-sm font-semibold tracking-tight">hy</span>
+        <span className="flex-1 px-1.5 font-mono text-sm font-semibold tracking-tight">Omniplex</span>
         <IconButton
           label="Labels"
           onClick={props.onManageLabels}

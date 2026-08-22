@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 
 // Ports are shared with the Go server through the environment so the two
 // cannot disagree; the root development script sets them.
-const vitePort = Number(process.env.HY_VITE_PORT ?? 5199);
-const serverPort = Number(process.env.HY_PORT ?? 8787);
+const vitePort = Number(process.env.OMNIPLEX_VITE_PORT ?? 5199);
+const serverPort = Number(process.env.OMNIPLEX_PORT ?? 8787);
 
 // The Go server fronts the app in development as well as in production: it
 // proxies anything that is not the API through to this dev server. So there is
@@ -19,7 +19,7 @@ export default defineConfig({
     tailwindcss(),
     {
       name: "preserve-webdist-placeholder",
-      closeBundle: () => writeFile(new URL("../cmd/hy/webdist/.gitkeep", import.meta.url), ""),
+      closeBundle: () => writeFile(new URL("../cmd/omniplex/webdist/.gitkeep", import.meta.url), ""),
     },
   ],
   resolve: {
@@ -50,7 +50,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: "../cmd/hy/webdist",
+    outDir: "../cmd/omniplex/webdist",
     emptyOutDir: true,
   },
 });

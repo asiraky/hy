@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// PullRequest is the little hy knows about the pull request for a session's
+// PullRequest is the little omniplex knows about the pull request for a session's
 // branch: enough to say "this landed" and link to it, and nothing more. It is
 // never persisted — the answer is only true until someone merges something, so
 // it is fetched on demand and thrown away.
@@ -47,7 +47,7 @@ func (m *Manager) SessionPR(ctx context.Context, sessionID string) (*PullRequest
 		return nil, err.Error()
 	}
 	// A local session runs in the user's own checkout. There is no worktree to
-	// reclaim, so a merged pull request tells hy nothing it should act on.
+	// reclaim, so a merged pull request tells omniplex nothing it should act on.
 	if meta.WorkspaceMode != "managed" && meta.WorkspaceMode != "borrowed" {
 		return nil, "not a worktree session"
 	}
@@ -88,7 +88,7 @@ func (m *Manager) SessionPR(ctx context.Context, sessionID string) (*PullRequest
 	}
 	// A branch that has moved on since its pull request merged is not finished
 	// work: the worktree holds commits the merge never contained. Keeping the
-	// branch and carrying on is an ordinary way to work, and hy offering to
+	// branch and carrying on is an ordinary way to work, and omniplex offering to
 	// delete that worktree would be offering to delete those commits.
 	if pr.Merged && pr.HeadRefOid != "" {
 		if head, headErr := runGit(ctx, meta.Cwd, "rev-parse", "HEAD"); headErr == nil {

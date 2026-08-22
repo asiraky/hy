@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/asiraky/hy/internal/adapter"
+	"github.com/asiraky/omniplex/internal/adapter"
 )
 
 // summaryModel is the model a summary prefers: Codex's small, fast tier.
@@ -58,7 +58,7 @@ func (a *Adapter) summarizeWith(ctx context.Context, env map[string]string, req 
 	// Codex writes its final message to a file rather than to stdout, which
 	// is interleaved with progress output. The directory is also the cwd for
 	// the run, keeping it away from any real checkout.
-	dir, err := os.MkdirTemp("", "hy-summary-*")
+	dir, err := os.MkdirTemp("", "omniplex-summary-*")
 	if err != nil {
 		return out, err
 	}

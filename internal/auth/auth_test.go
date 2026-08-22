@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/asiraky/hy/internal/store"
+	"github.com/asiraky/omniplex/internal/store"
 )
 
 func testGuard(t *testing.T, reachable bool) (*Guard, *store.Store) {
@@ -302,12 +302,12 @@ func TestTokenTransports(t *testing.T) {
 
 	t.Run("websocket subprotocol", func(t *testing.T) {
 		r := remoteRequest("/ws")
-		r.Header.Set("Sec-WebSocket-Protocol", "hy.sync, hy.token."+token)
+		r.Header.Set("Sec-WebSocket-Protocol", "omniplex.sync, omniplex.token."+token)
 		if _, ok := g.Authorize(r); !ok {
 			t.Fatal("a subprotocol token was refused")
 		}
 		proto, ok := TokenSubprotocol(r)
-		if !ok || proto != "hy.token."+token {
+		if !ok || proto != "omniplex.token."+token {
 			t.Fatalf("TokenSubprotocol = %q, %v; the server must echo the offered protocol", proto, ok)
 		}
 	})

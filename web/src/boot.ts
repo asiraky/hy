@@ -8,13 +8,13 @@
 
 /** The bundle this page was built from, or "dev" under the Vite dev server. */
 export function currentBuild(): string {
-  return document.querySelector<HTMLMetaElement>('meta[name="hy-build"]')?.content ?? "dev";
+  return document.querySelector<HTMLMetaElement>('meta[name="omniplex-build"]')?.content ?? "dev";
 }
 
 // Records which server build we last reloaded for. Keyed by build rather than
 // set once, so a second rebuild in the same session still reloads, while a
 // reload that fails to resolve a given build is never retried for it.
-const RELOADED_FOR = "hy.reloadedFor";
+const RELOADED_FOR = "omniplex.reloadedFor";
 
 /**
  * Reloads when the server reports a bundle other than the one this page is
