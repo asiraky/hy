@@ -15,12 +15,13 @@ describe("transcriptMarkdown", () => {
     );
   });
 
-  it("omits thoughts, tools, notices, empty messages, and recovery prompts", () => {
+  it("omits thoughts, tools, notices, subagents, empty messages, and recovery prompts", () => {
     const items: Item[] = [
       { id: "u1", kind: "message", role: "user", text: "Question" },
       { id: "thought", kind: "message", role: "agent", contentKind: "thought", text: "Private" },
       { id: "tool", kind: "tool", title: "Read" },
       { id: "notice", kind: "notice", noticeKind: "compaction" },
+      { id: "child", kind: "message", role: "agent", parentId: "tool", text: "Subagent" },
       { id: "empty", kind: "message", role: "agent", contentKind: "text", text: "  " },
       { id: "recovery", kind: "message", role: "user", turnId: "t2", text: "Continue" },
       { id: "a1", kind: "message", role: "agent", contentKind: "text", text: "Answer" },

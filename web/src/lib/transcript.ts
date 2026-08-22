@@ -12,6 +12,7 @@ export function transcriptMarkdown(items: Item[], turns: Turn[]): string {
     .filter(
       (item) =>
         item.kind === "message" &&
+        item.parentId === undefined &&
         (item.role === "user" || item.role === "agent") &&
         item.contentKind !== "thought" &&
         (item.text ?? "").trim() !== "" &&
