@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Client, wsURL, type ConnectionStatus } from "./client";
+import { Client, uuid, wsURL, type ConnectionStatus } from "./client";
 import { useIsDesktop } from "./useMediaQuery";
 import { useSessionPR } from "./useSessionPR";
 import type { Access, ComposerItem, FileContent, FileDiff, FileTree, HarnessMeta, Label, Project, ProjectConfig, SessionChanges, SessionMeta, SessionState, SessionSummary, PullRequest, UserConfig, Workspace } from "./protocol";
@@ -31,7 +31,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "./components/ui/select";
-import { isSupportedImage, MAX_IMAGE_BYTES, uploadAttachment, type Attachment } from "./lib/attachments";
+import { isSupportedImage, MAX_IMAGE_BYTES, prepareImage, uploadAttachment, type Attachment } from "./lib/attachments";
 import { loadRecentSkills, recordRecentSkill, resolveRecentSkills } from "./lib/recentSkills";
 import { loadResume } from "./resume";
 import { cn } from "./lib/utils";
@@ -148,6 +148,9 @@ export function App() {
   // Picked, dropped, or pasted images. Each is uploaded on its own the moment
   // it arrives: the composer stays usable, and a slow picture on a slow
   // connection never blocks typing the question that goes with it.
+  // The in-flight upload behind each staged image, so removing one can stop it.
+  const uploadsInFlight = useRef<Map<string, AbortController>>(new Map());
+
   const attachImages = useCallback(
     (files: File[]) => {
       const sessionId = activeId;
@@ -159,13 +162,9 @@ export function App() {
           });
           continue;
         }
-        if (file.size > MAX_IMAGE_BYTES) {
-          toast.error(`${file.name} is too large`, {
-            description: `The limit is ${MAX_IMAGE_BYTES / (1024 * 1024)} MB.`,
-          });
-          continue;
-        }
-        const key = crypto.randomUUID();
+        // Not `crypto.randomUUID`: that exists only in a secure context, and
+        // the origins a phone reaches this server on are not one.
+        const key = uuid();
         const staged: Attachment = {
           key,
           name: file.name || "pasted image",
@@ -173,15 +172,30 @@ export function App() {
           status: "uploading",
         };
         setAttachments((all) => ({ ...all, [sessionId]: [...(all[sessionId] ?? []), staged] }));
-        uploadAttachment(sessionId, file)
+        // Shrunk before it is sent, not after: a phone camera's 4 MB frame is
+        // more picture than any model looks at, and the upload is the slow
+        // part of attaching it.
+        const abort = new AbortController();
+        uploadsInFlight.current.set(key, abort);
+        prepareImage(file)
+          .then((ready) => {
+            if (ready.size > MAX_IMAGE_BYTES) throw new Error("This image is too large to send.");
+            return uploadAttachment(sessionId, ready, abort.signal);
+          })
           .then((up) => patchAttachment(sessionId, key, { status: "ready", id: up.id }))
-          .catch((e: Error) => patchAttachment(sessionId, key, { status: "error", error: e.message }));
+          .catch((e: Error) => {
+            // An abort means the picture was taken back; there is nothing left
+            // to report it to.
+            if (e.name !== "AbortError") patchAttachment(sessionId, key, { status: "error", error: e.message });
+          })
+          .finally(() => uploadsInFlight.current.delete(key));
       }
     },
     [activeId, patchAttachment],
   );
 
   const removeAttachment = useCallback((sessionId: string, key: string) => {
+    uploadsInFlight.current.get(key)?.abort();
     setAttachments((all) => {
       const list = all[sessionId] ?? [];
       const going = list.find((a) => a.key === key);

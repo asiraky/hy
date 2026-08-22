@@ -28,12 +28,20 @@ import (
 	"github.com/google/uuid"
 )
 
-// MaxBytes bounds one image. Comfortably more than a phone screenshot, far
-// less than a video someone dragged in by mistake.
-const MaxBytes = 10 << 20
+// MaxBytes bounds one image. Set by what the far end will take rather than by
+// what a disk can hold: the Claude sidecar base64s the file into a content
+// block, which inflates it by a third, and the API refuses an encoded image
+// over 5 MB. 3.75 MB of raw bytes is exactly that limit encoded. The UI shrinks
+// anything bigger before it uploads, so this is the backstop, not the rule.
+const MaxBytes = 3_750_000
+
+// MaxPerPrompt bounds how many images one message may carry. The sidecar holds
+// every image of a prompt in memory, base64-expanded, at once; without a cap a
+// bulk selection is a way to run Node out of heap.
+const MaxPerPrompt = 12
 
 // ErrTooLarge is returned when an upload exceeds MaxBytes.
-var ErrTooLarge = fmt.Errorf("image is larger than %d MB", MaxBytes>>20)
+var ErrTooLarge = errors.New("image is larger than 3.75 MB")
 
 // ErrUnsupported is returned when the bytes are not an image this store keeps.
 var ErrUnsupported = errors.New("only PNG, JPEG, GIF and WebP images are supported")
@@ -64,7 +72,17 @@ type Store struct{ dir string }
 
 // New returns a store rooted at dir. The directory is created lazily, on the
 // first upload: a server nobody attaches an image to leaves nothing behind.
-func New(dir string) *Store { return &Store{dir: dir} }
+//
+// The root is made absolute here, because the paths this hands out are read by
+// a harness process running in the session's checkout, not in the server's
+// working directory. A relative -db path would otherwise produce paths that
+// resolve for the server and for nobody else.
+func New(dir string) *Store {
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	return &Store{dir: dir}
+}
 
 func (s *Store) sessionDir(sessionID string) (string, error) {
 	if !safeID.MatchString(sessionID) {

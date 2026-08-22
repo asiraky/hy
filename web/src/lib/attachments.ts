@@ -15,9 +15,19 @@ export const ACCEPTED_IMAGE_TYPES = [
   "image/webp",
 ];
 
-/** Matches internal/attachment.MaxBytes. Rejected here so the phone finds out
-    before it spends the upload rather than after. */
-export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+/** Matches internal/attachment.MaxBytes, which is itself the largest image the
+    Claude API will take once base64 has inflated it by a third. Checked here so
+    the phone finds out before it spends the upload rather than after. */
+export const MAX_IMAGE_BYTES = 3_750_000;
+
+/** The longest edge worth sending. Anthropic resizes anything larger than this
+    before the model ever sees it, so uploading more is paying 4G for pixels
+    that get thrown away. */
+const MAX_EDGE = 1568;
+
+/** Below this a picture is left exactly as it was picked: re-encoding a small
+    screenshot only costs it sharpness. */
+const REENCODE_OVER = 400 * 1024;
 
 /** The `accept` attribute for a file input. Deliberately the same list the
     server enforces: offering a HEIC that will be refused is worse than not
@@ -57,6 +67,7 @@ export function attachmentUrl(sessionId: string, id: string): string {
 export async function uploadAttachment(
   sessionId: string,
   file: File,
+  signal?: AbortSignal,
 ): Promise<UploadedImage> {
   const res = await fetch(
     `/api/sessions/${encodeURIComponent(sessionId)}/attachments`,
@@ -64,6 +75,9 @@ export async function uploadAttachment(
       method: "POST",
       headers: { "Content-Type": file.type || "application/octet-stream" },
       body: file,
+      // Removing a half-uploaded picture stops the upload: on a slow link the
+      // rest of it is bandwidth spent on something already taken back.
+      signal,
     },
   );
   if (!res.ok) {
@@ -92,4 +106,46 @@ export function imageFilesFrom(data: DataTransfer | null): File[] {
     should light up as a drop target. */
 export function dragHasFiles(data: DataTransfer | null): boolean {
   return Array.from(data?.types ?? []).includes("Files");
+}
+
+/**
+ * Shrinks a picture to something worth sending.
+ *
+ * A phone camera produces several megabytes of image whose long edge is four
+ * times what the model will look at, and the upload is the slow half of
+ * attaching it. Anything oversized or heavy is redrawn at MAX_EDGE and
+ * re-encoded as JPEG; anything already small, or a GIF (whose animation a
+ * canvas would flatten), is handed back untouched.
+ *
+ * Best effort by design: a browser that cannot decode the file, or a canvas
+ * that refuses, gives the original back and lets the server have the last word.
+ */
+export async function prepareImage(file: File): Promise<File> {
+  if (file.type === "image/gif") return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const longest = Math.max(bitmap.width, bitmap.height);
+    const scale = Math.min(1, MAX_EDGE / longest);
+    if (scale === 1 && file.size <= REENCODE_OVER) {
+      bitmap.close();
+      return file;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return file;
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", 0.85),
+    );
+    // A picture that got bigger is not an improvement, and a flat colour PNG
+    // often does exactly that.
+    if (!blob || blob.size >= file.size) return file;
+    const name = file.name.replace(/\.[^.]+$/, "") || "image";
+    return new File([blob], `${name}.jpg`, { type: "image/jpeg" });
+  } catch {
+    return file;
+  }
 }
