@@ -35,10 +35,19 @@ import { TooltipProvider } from "~/components/ui/tooltip";
  * test wiring its own was three copies of the same tree.
  */
 export function render(ui: ReactElement) {
-  return rtlRender(
+  return rtlRender(wrap(ui));
+}
+
+/**
+ * The same providers, for a re-render: Testing Library's `rerender` replaces
+ * the whole tree it was given, so a test that re-renders has to hand back the
+ * wrapper too or the second render loses its context.
+ */
+export function wrap(ui: ReactElement) {
+  return (
     <ThemeProvider>
       <TooltipProvider>{ui}</TooltipProvider>
-    </ThemeProvider>,
+    </ThemeProvider>
   );
 }
 

@@ -45,6 +45,9 @@ import { useSmoothText } from "~/useSmoothText";
 // pinned to its top edge. The 9rem fallback matches the collapsed composer for
 // the first frame, before the measurement lands.
 const TAIL_RESERVE = "calc(var(--composer-h, 9rem) + 6rem)";
+// The tail's room plus whatever extra the scroll hook is asking for to lift a
+// just-sent prompt clear of the composer (`--anchor-reserve`, 0 when it is not).
+const CONTENT_RESERVE = `calc(${TAIL_RESERVE} + var(--anchor-reserve, 0px))`;
 
 // One icon per tool kind the protocol defines. Anything new falls through to
 // the neutral dot rather than rendering nothing.
@@ -333,7 +336,7 @@ function UserMessage({ item }: { item: Item }) {
   };
 
   return (
-    <div ref={wrapRef} className="fade-in flex flex-col items-end">
+    <div ref={wrapRef} data-msg-id={item.id} className="fade-in flex flex-col items-end">
       <div
         ref={bodyRef}
         style={
@@ -604,7 +607,7 @@ export function Transcript({
   // Follow the tail unless the reader has scrolled up; the button below is
   // how they get back. A restore that was scrolled up mounts unpinned, or the
   // first stick would snap it to the bottom over the restored position.
-  const { scrollerRef, contentRef, pinned, stick, scrollToBottom } = useAutoScroll<
+  const { scrollerRef, contentRef, pinned, stick, scrollToBottom, anchorTo } = useAutoScroll<
     HTMLDivElement,
     HTMLDivElement
   >(initialScroll?.atBottom ?? true);
@@ -700,6 +703,38 @@ export function Transcript({
     return undefined;
   }, [ownItems, state.turns]);
 
+  // Sending a prompt should not leave it jammed against the composer with the
+  // answer arriving in the sliver below. The newest prompt is lifted to the top
+  // of the view instead, so the reply streams into the open space under it and
+  // its first lines are readable the moment they land.
+  const lastPromptID = useMemo(() => {
+    for (let i = ownItems.length - 1; i >= 0; i--) {
+      const it = ownItems[i];
+      if (it.kind === "message" && it.role === "user") return it.id;
+    }
+    return undefined;
+  }, [ownItems]);
+
+  // Only a prompt that arrived while this session was already on screen is one
+  // the reader just sent. Opening a session, or switching between two, also
+  // changes the newest prompt — the whole transcript arrives at once — and
+  // yanking the view then would be moving a transcript nobody asked to move.
+  // Which is why the session is remembered separately from the prompt: a
+  // session first seen with no prompt in it at all still anchors the first one
+  // it gets.
+  const seenSession = useRef<string>(undefined);
+  const seenPrompt = useRef<string>(undefined);
+  useLayoutEffect(() => {
+    const fresh = seenSession.current !== state.sessionId;
+    const prev = seenPrompt.current;
+    seenSession.current = state.sessionId;
+    seenPrompt.current = lastPromptID;
+    if (fresh || !lastPromptID || lastPromptID === prev) return;
+    anchorTo(
+      scrollerRef.current?.querySelector<HTMLElement>(`[data-msg-id="${lastPromptID}"]`) ?? null,
+    );
+  }, [state.sessionId, lastPromptID, anchorTo, scrollerRef]);
+
   const rows = useMemo(
     () => buildRows(ownItems, state.turns, state.phase),
     [ownItems, state.turns, state.phase],
@@ -742,7 +777,7 @@ export function Transcript({
         <div
           ref={contentRef}
           className="mx-auto flex max-w-3xl flex-col gap-3.5 px-4 pt-6 md:px-5"
-          style={{ paddingBottom: TAIL_RESERVE }}
+          style={{ paddingBottom: CONTENT_RESERVE }}
         >
           <WorkspaceCard
             state={state}
