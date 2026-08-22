@@ -26,6 +26,10 @@ const summaryModel = "haiku"
 var summaryDeniedTools = strings.Join([]string{
 	"Bash", "Read", "Write", "Edit", "NotebookEdit", "Glob", "Grep",
 	"WebFetch", "WebSearch", "Task", "TodoWrite",
+	// Anything an MCP server contributes, whatever this machine happens to
+	// have configured. Naming the built-ins alone would leave the operator's
+	// own servers reachable from text the summariser was told to describe.
+	"mcp__*",
 }, ",")
 
 // Summarize answers one question about a transcript and exits.
@@ -53,6 +57,10 @@ func (a *Adapter) Summarize(ctx context.Context, env map[string]string, req adap
 		// costs both latency and tokens on every call.
 		"--system-prompt", req.System,
 		"--disallowed-tools", summaryDeniedTools,
+		// Load no MCP servers at all: with no --mcp-config to go with it,
+		// strict mode means the configured ones are never started. Denying
+		// them by name is the second lock; this is the first.
+		"--strict-mcp-config",
 	}
 
 	cmd := exec.CommandContext(ctx, claudePath, args...)

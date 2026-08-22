@@ -205,6 +205,7 @@ function PromptEditor({
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(value);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Track the saved value while the editor is closed. Reopening should show
   // what is on disk, not a draft abandoned three summaries ago — but typing
@@ -216,11 +217,16 @@ function PromptEditor({
 
   const dirty = draft !== value;
 
+  // A save that fails must not be followed by a re-summarise: that would run
+  // against the old prompt and read as success.
   const save = async (next: string) => {
     setSaving(true);
+    setSaveError(null);
     try {
       await onSave(next);
       onSaved();
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
@@ -262,6 +268,11 @@ function PromptEditor({
             Reset to default
           </Button>
         </div>
+        {saveError && (
+          <Alert variant="destructive">
+            <AlertDescription className="text-[12px]">{saveError}</AlertDescription>
+          </Alert>
+        )}
       </CollapsibleContent>
     </Collapsible>
   );

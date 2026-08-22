@@ -38,12 +38,16 @@ func summaryFixture() *projection.State {
 			{ID: "t2", Prompt: "now add a test", Done: false},
 		},
 		Items: []projection.Item{
+			// TurnStarted logs the prompt as an item as well as on the turn
+			// record; a fixture without it would not be a real transcript.
+			{ID: "prompt:t1", Kind: projection.ItemMessage, TurnID: "t1", Role: "user", ContentKind: "text", Text: "the login page bounces me back, please fix it"},
 			{ID: "i1", Kind: projection.ItemMessage, TurnID: "t1", Role: "agent", ContentKind: "thought", Text: "PRIVATE REASONING"},
 			{ID: "i2", Kind: projection.ItemMessage, TurnID: "t1", Role: "agent", ContentKind: "text", Text: "Found it — the cookie was scoped wrong."},
 			{ID: "i3", Kind: projection.ItemTool, TurnID: "t1", ToolKind: proto.KindEdit, Status: proto.StatusCompleted, Title: "Edit auth/session.go",
 				Content: []proto.ToolContent{{Type: "diff", Path: "auth/session.go", Text: "@@ -1 +1 @@"}}},
 			{ID: "i4", Kind: projection.ItemMessage, TurnID: "t1", ParentID: "i3", Role: "agent", ContentKind: "text", Text: "SUBAGENT CHATTER"},
 			{ID: "i5", Kind: projection.ItemMessage, TurnID: "t1", Role: "agent", ContentKind: "text", Text: "   "},
+			{ID: "prompt:t2", Kind: projection.ItemMessage, TurnID: "t2", Role: "user", ContentKind: "text", Text: "now add a test"},
 			{ID: "i6", Kind: projection.ItemMessage, TurnID: "t2", Role: "agent", ContentKind: "text", Text: "Adding a test now."},
 		},
 	}
@@ -157,5 +161,48 @@ func TestClipMiddleLeavesAShortTranscriptAlone(t *testing.T) {
 func TestRenderTranscriptOfNothingIsEmpty(t *testing.T) {
 	if got := renderTranscript(nil); got != "" {
 		t.Errorf("got %q, want empty", got)
+	}
+}
+
+// A turn whose changes could not be measured must not be summarised as a turn
+// that changed nothing: the checkpointer emits exactly that shape — an empty
+// file list carrying an error — when a snapshot fails.
+func TestRenderTranscriptDoesNotCallAFailedMeasurementACleanTurn(t *testing.T) {
+	state := &projection.State{
+		SessionID: "s1",
+		Harness:   "claude",
+		Turns: []projection.Turn{{
+			ID: "t1", Prompt: "refactor it", Done: true,
+			Diff: &proto.TurnDiffPayload{TurnID: "t1", Files: []proto.ChangedFile{}, Error: "git snapshot failed"},
+		}},
+		Items: []projection.Item{{ID: "i1", Kind: projection.ItemMessage, TurnID: "t1", Role: "agent", ContentKind: "text", Text: "Done."}},
+	}
+	got := renderTranscript(state)
+	if strings.Contains(got, "changed no files") {
+		t.Errorf("an unmeasurable turn was reported as clean\n\n%s", got)
+	}
+	if !strings.Contains(got, "could not be measured") {
+		t.Errorf("a failed measurement must say so\n\n%s", got)
+	}
+}
+
+// A user message that is not the turn prompt — a mid-turn steer, say — is
+// still worth carrying; only the duplicate of the prompt is dropped.
+func TestRenderTranscriptKeepsUserMessagesThatAreNotThePrompt(t *testing.T) {
+	state := &projection.State{
+		SessionID: "s1",
+		Harness:   "claude",
+		Turns:     []projection.Turn{{ID: "t1", Prompt: "fix the bug", Done: true}},
+		Items: []projection.Item{
+			{ID: "prompt:t1", Kind: projection.ItemMessage, TurnID: "t1", Role: "user", ContentKind: "text", Text: "fix the bug"},
+			{ID: "i2", Kind: projection.ItemMessage, TurnID: "t1", Role: "user", ContentKind: "text", Text: "actually, do it in the other file"},
+		},
+	}
+	got := renderTranscript(state)
+	if n := strings.Count(got, "fix the bug"); n != 1 {
+		t.Errorf("prompt appears %d times, want 1\n\n%s", n, got)
+	}
+	if !strings.Contains(got, "actually, do it in the other file") {
+		t.Errorf("a mid-turn steer was dropped\n\n%s", got)
 	}
 }

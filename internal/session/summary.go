@@ -190,6 +190,13 @@ func renderTranscript(state *projection.State) string {
 				continue
 			}
 			if it.Role == "user" {
+				// TurnStarted logs the prompt as an item as well as on the
+				// turn record, and the turn record is where this renderer
+				// takes it from. Printing both would spend the budget saying
+				// the same thing twice.
+				if text == strings.TrimSpace(prompts[it.TurnID]) {
+					continue
+				}
 				fmt.Fprintf(&b, "## User\n%s\n\n", text)
 				continue
 			}
@@ -228,13 +235,23 @@ func renderTranscript(state *projection.State) string {
 		default:
 			line += ": completed"
 		}
-		if t.Diff != nil && len(t.Diff.Files) > 0 {
+		switch {
+		case t.Diff == nil:
+			// No diff card at all. A turn that changed nothing is not
+			// reported, and neither is one outside a git checkout, so silence
+			// here means "not measured" and must not be read as "no changes".
+		case t.Diff.Error != "":
+			// An empty file list with an error is a failed measurement, not a
+			// clean turn. Saying "changed no files" here would turn "could not
+			// tell" into a claim.
+			line += "; file changes could not be measured: " + t.Diff.Error
+		case len(t.Diff.Files) > 0:
 			names := make([]string, 0, len(t.Diff.Files))
 			for _, f := range t.Diff.Files {
 				names = append(names, fmt.Sprintf("%s (%s +%d/-%d)", f.Path, f.Status, f.Additions, f.Deletions))
 			}
 			line += fmt.Sprintf("; changed %d file(s): %s", len(t.Diff.Files), strings.Join(names, ", "))
-		} else if t.Diff != nil {
+		default:
 			line += "; changed no files"
 		}
 		ledger.WriteString(line + "\n")
@@ -245,7 +262,9 @@ func renderTranscript(state *projection.State) string {
 		// The ledger is appended after clipping so it always survives: it is
 		// small, and it is the part that answers "did the agent change
 		// anything" outright.
-		body += "\n## Turn outcomes\n" + ledger.String()
+		body += "\n## Turn outcomes\n" +
+			"(File changes are listed only where they were measured; a turn with no note about files was not measured, which is not the same as having changed nothing.)\n" +
+			ledger.String()
 	}
 	return body
 }

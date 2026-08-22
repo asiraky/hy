@@ -73,6 +73,16 @@ func (a *Adapter) summarizeWith(ctx context.Context, env map[string]string, req 
 		"--color", "never",
 		"--output-last-message", answer,
 		"-c", "model_reasoning_effort=" + summaryEffort,
+		// Start no MCP servers. A transcript is untrusted text — it can quote
+		// anything the agent read — and the fenced markers around it are a
+		// hint to the model, not a boundary. Whatever tools this machine has
+		// configured should not be within reach of a summary.
+		"-c", "mcp_servers={}",
+		// A shell the model does manage to run inherits nothing: the sandbox
+		// already denies writes and the network, and this keeps the tokens in
+		// the environment out of the one thing it could still do, which is
+		// read and repeat them.
+		"-c", "shell_environment_policy.inherit=none",
 		"-C", dir,
 	}
 	if model != "" {

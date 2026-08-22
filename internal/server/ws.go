@@ -250,12 +250,34 @@ func commandTimeout(command string) time.Duration {
 	return 60 * time.Second
 }
 
+// sessionOfArgs reads the session a command is about out of its arguments.
+//
+// Clients address a session inside args rather than on the frame, so the
+// stored command row would otherwise have no session and survive that
+// session's deletion. That matters most for a summary, whose stored result is
+// model-written prose about the transcript.
+func sessionOfArgs(args json.RawMessage) string {
+	if len(args) == 0 {
+		return ""
+	}
+	var a struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return ""
+	}
+	return a.SessionID
+}
+
 // command executes an idempotent command. A repeated commandId replays the
 // stored result rather than re-executing, so a retry after a dropped
 // connection cannot double-send a prompt.
 func (c *conn) command(f clientFrame) {
 	if f.CommandID == "" {
 		f.CommandID = uuid.NewString()
+	}
+	if f.SessionID == "" {
+		f.SessionID = sessionOfArgs(f.Args)
 	}
 
 	// A command belongs to the user operation, not to the socket that happened

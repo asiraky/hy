@@ -104,6 +104,21 @@ describe("the session summary panel", () => {
       expect(screen.getByText("Save and summarise again").closest("button")?.disabled).toBe(true);
     });
 
+    // A save that fails must not look like one that worked: reporting the
+    // failure and not re-summarising is the whole difference.
+    it("reports a save that failed instead of summarising again", async () => {
+      const onSavePrompt = vi.fn().mockRejectedValue(new Error("settings are still loading"));
+      const onRegenerate = vi.fn();
+      render(panel({ onSavePrompt, onRegenerate }));
+
+      fireEvent.click(screen.getByText("Summarisation prompt"));
+      fireEvent.change(screen.getByLabelText("Summarisation prompt"), { target: { value: "Be terse." } });
+      fireEvent.click(screen.getByText("Save and summarise again"));
+
+      await waitFor(() => expect(screen.getByText(/settings are still loading/)).toBeTruthy());
+      expect(onRegenerate).not.toHaveBeenCalled();
+    });
+
     // Clearing the field is the reset: the server substitutes its own default
     // for an empty value, so the default text lives in exactly one place.
     it("resets by saving an empty prompt", async () => {

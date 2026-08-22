@@ -125,8 +125,11 @@ export function App() {
   // worse than no summary at all.
   const [showSummary, setShowSummary] = useState(false);
   const [summaries, setSummaries] = useState<Record<string, SessionSummary>>({});
-  const [summarizing, setSummarizing] = useState(false);
-  const [summaryError, setSummaryError] = useState<string | null>(null);
+  // Progress and failure are per session too, not global: a summary started
+  // for one session must not clear the spinner — or show its error — in
+  // another one the user has since switched to.
+  const [summarizing, setSummarizing] = useState<Record<string, boolean>>({});
+  const [summaryErrors, setSummaryErrors] = useState<Record<string, string>>({});
   const [access, setAccess] = useState<Access | null>(null);
   const [showAccess, setShowAccess] = useState(false);
   const [showChanges, setShowChanges] = useState(false);
@@ -301,15 +304,16 @@ export function App() {
   // reopened, or another session visited and come back to, without paying for
   // the same answer twice.
   const summarize = useCallback(async (id: string) => {
-    setSummarizing(true);
-    setSummaryError(null);
+    setSummarizing((prev) => ({ ...prev, [id]: true }));
+    setSummaryErrors((prev) => { const { [id]: _gone, ...rest } = prev; return rest; });
     try {
       const res = await clientRef.current!.command("summarize_session", { sessionId: id });
       setSummaries((prev) => ({ ...prev, [id]: res.summary as SessionSummary }));
     } catch (e) {
-      setSummaryError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      setSummaryErrors((prev) => ({ ...prev, [id]: message }));
     } finally {
-      setSummarizing(false);
+      setSummarizing((prev) => { const { [id]: _gone, ...rest } = prev; return rest; });
     }
   }, []);
 
@@ -318,14 +322,15 @@ export function App() {
   const openSummary = useCallback(() => {
     if (!activeId) return;
     setShowSummary(true);
-    setSummaryError(null);
     if (!summaries[activeId]) void summarize(activeId);
   }, [activeId, summaries, summarize]);
 
   // A saved prompt invalidates every summary: they were all written to
   // different instructions and would otherwise sit there looking current.
   const saveSummaryPrompt = useCallback(async (summaryPrompt: string) => {
-    if (!userConfig) return;
+    // Refusing loudly rather than returning: a silent no-op here would save
+    // nothing, re-run against the old prompt, and look like it had worked.
+    if (!userConfig) throw new Error("settings are still loading — try again in a moment");
     await saveUserConfig({ ...userConfig, summaryPrompt });
     setSummaries({});
   }, [userConfig, saveUserConfig]);
@@ -835,8 +840,8 @@ export function App() {
       {showSummary && activeId && (
         <SessionSummaryPanel
           summary={summaries[activeId] ?? null}
-          loading={summarizing}
-          error={summaryError}
+          loading={!!summarizing[activeId]}
+          error={summaryErrors[activeId] ?? null}
           // A summary made before the latest events is still worth reading —
           // it just should not claim to be the whole story.
           stale={!!state && !!summaries[activeId] && summaries[activeId].seq < state.seq}
