@@ -683,7 +683,12 @@ func (s *session) handleSDKMessage(msg map[string]json.RawMessage) {
 	case "user":
 		s.handleUser(msg)
 	case "result":
-		s.handleResult(msg)
+		// A result carrying a parent_tool_use_id is a subagent finishing, not
+		// the conversation. Letting it through would close the top-level turn
+		// — and report "user's turn" — while the main agent is still working.
+		if str(msg["parent_tool_use_id"]) == "" {
+			s.handleResult(msg)
+		}
 	case "context_usage":
 		s.handleContextUsage(msg)
 	}
@@ -972,6 +977,11 @@ func (s *session) handleAssistant(msg map[string]json.RawMessage) {
 		if c.Type != "tool_use" {
 			continue
 		}
+		// A tool going active is a turn running. Resumed work does not always
+		// lead with streaming text (the only other place a harness-initiated
+		// turn is opened), so open one here too — otherwise the session reads
+		// idle while the harness is invoking tools.
+		s.ensureTurn()
 		s.emit(proto.Emit(proto.ToolCallUpdated, proto.ToolCallUpdatedPayload{
 			ToolCallID:       c.ID,
 			Status:           proto.StatusInProgress,

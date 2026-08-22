@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/asiraky/hy/internal/adapter"
 	"github.com/asiraky/hy/internal/jsonrpc"
@@ -269,6 +272,16 @@ func (s *session) Events() <-chan proto.Emission { return s.events }
 
 func (s *session) Prompt(ctx context.Context, in adapter.PromptInput) error {
 	s.mu.Lock()
+	// The actor believed the session was idle when it accepted this prompt,
+	// but codex may have started work by itself in the meantime — see
+	// ensureTurn. Overwriting that turn's id would label the in-flight work
+	// with this prompt's turn and leave the open turn unfinished forever.
+	// Refuse instead; the caller can retry when idle. Mirrors the claude
+	// adapter's guard.
+	if s.turnID != "" && s.turnID != in.TurnID {
+		s.mu.Unlock()
+		return errors.New("the harness resumed work on its own; wait for it to finish")
+	}
 	s.turnID = in.TurnID
 	s.mu.Unlock()
 
@@ -419,6 +432,26 @@ func (s *session) currentTurn() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.turnID
+}
+
+// ensureTurn returns the active turn id, opening a harness-initiated turn if
+// none is open. Codex can produce work hy never prompted — a queued follow-up,
+// an auto-continuation — and that work is a real turn: without a turn.started
+// the session list and restart recovery both read the session as idle while
+// it is working. Mirrors the claude adapter's ensureTurn.
+func (s *session) ensureTurn() string {
+	s.mu.Lock()
+	if s.turnID != "" {
+		id := s.turnID
+		s.mu.Unlock()
+		return id
+	}
+	id := uuid.NewString()
+	s.turnID = id
+	s.mu.Unlock()
+
+	s.emit(proto.Emit(proto.TurnStarted, proto.TurnStartedPayload{TurnID: id}))
+	return id
 }
 
 // ---- server → client requests (approvals) ----
@@ -630,6 +663,12 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 		s.emitContextCompacted(p.TurnID)
 
 	case "item/started", "item/completed":
+		// An item starting is work running: open a harness-initiated turn if
+		// the log says idle. An item completing is not — a straggling
+		// completion after the turn ended must not reopen it.
+		if method == "item/started" && turn == "" {
+			turn = s.ensureTurn()
+		}
 		s.handleItem(method == "item/completed", turn, params)
 
 	case "item/agentMessage/delta":
@@ -638,6 +677,10 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 			Delta  string `json:"delta"`
 		}
 		_ = json.Unmarshal(params, &p)
+		// Streaming while idle is a harness-initiated turn; see ensureTurn.
+		if turn == "" {
+			turn = s.ensureTurn()
+		}
 		s.mu.Lock()
 		s.streamed[p.ItemID] = true
 		s.mu.Unlock()
@@ -651,6 +694,10 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 			Delta  string `json:"delta"`
 		}
 		_ = json.Unmarshal(params, &p)
+		// Streaming while idle is a harness-initiated turn; see ensureTurn.
+		if turn == "" {
+			turn = s.ensureTurn()
+		}
 		s.emit(proto.Emit(proto.MessageChunk, proto.MessageChunkPayload{
 			TurnID: turn, Role: "agent", Kind: "thought", BlockID: p.ItemID + ":reasoning", Delta: p.Delta,
 		}))
@@ -729,6 +776,16 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 		s.serverTurnID = ""
 		s.interrupting = false
 		s.mu.Unlock()
+
+		// A completion for a turn that was never started — a compact or review
+		// already closed by the composer path, a duplicate turn/completed —
+		// has nothing to finish. Emitting a turn.finished with an empty id
+		// would take the projection idle while the actor's busy guard holds a
+		// different turn, splitting the two forever. Mirrors the claude
+		// adapter's guard on a promptless result.
+		if done == "" {
+			return
+		}
 
 		s.emit(proto.Emit(proto.TurnFinished, proto.TurnFinishedPayload{
 			TurnID: done, StopReason: stop, Error: errMsg,

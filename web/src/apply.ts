@@ -105,21 +105,34 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
           : s.items,
       };
 
-    case "turn.finished":
+    case "turn.finished": {
+      // Only the finish of the turn that is actually open may take the
+      // session idle: a stale or duplicate finish must not report "user's
+      // turn" while different work is running. Mirrors
+      // internal/projection/state.go.
+      const open = s.turns.reduce<string>((acc, t) => (t.done ? acc : t.id), "");
+      const match = open === "" || p.turnId === open;
       return {
         ...s,
-        phase: "idle",
+        phase: match ? "idle" : s.phase,
         turns: s.turns.map((t) =>
           t.id === p.turnId
             ? { ...t, done: true, stopReason: p.stopReason, error: p.error, finishedAt: ev.timestamp }
             : t,
         ),
-        items: s.items.map((it) =>
-          it.kind === "tool" && (it.status === "in_progress" || it.status === "pending")
-            ? { ...it, status: "failed" as const }
-            : it,
-        ),
+        // Any tool of this turn left mid-flight is no longer running; tools
+        // of other turns are left alone.
+        items: match
+          ? s.items.map((it) =>
+              it.kind === "tool" &&
+              (it.status === "in_progress" || it.status === "pending") &&
+              (it.turnId === p.turnId || !it.turnId)
+                ? { ...it, status: "failed" as const }
+                : it,
+            )
+          : s.items,
       };
+    }
 
     case "turn.diff":
       // What the turn changed, measured by the server once the harness had
@@ -168,6 +181,10 @@ export function applyEvent(state: SessionState, ev: Event): SessionState {
     case "tool_call.updated":
       return {
         ...s,
+        // Same defence as message.chunk, but only for a tool going active: a
+        // background tool's result straggling in after the turn ended must
+        // not reopen "working". Mirrors internal/projection/state.go.
+        phase: s.phase === "idle" && p.status === "in_progress" ? "turn" : s.phase,
         items: upsert(s, p.toolCallId, (it) => {
           it.kind = "tool";
           it.receivedAt ??= ev.timestamp;

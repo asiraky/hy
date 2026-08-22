@@ -27,6 +27,19 @@ import { useIsDesktop } from "~/useMediaQuery";
 const BUSY_PHASES = ["turn", "provisioning", "creating", "cleaning"];
 const FAILED_PHASES = ["provision_failed", "cleanup_failed"];
 
+// The server derives attention from the live projection, which knows about
+// pending permissions and questions; phase alone does not. The phase sets
+// above remain only as a fallback for a server that predates attention.
+function working(s: SessionMeta) {
+  return s.attention ? s.attention === "working" : BUSY_PHASES.includes(s.phase);
+}
+function needsInput(s: SessionMeta) {
+  return s.attention === "needs_permission" || s.attention === "needs_answer";
+}
+function failed(s: SessionMeta) {
+  return s.attention ? s.attention === "failed" : FAILED_PHASES.includes(s.phase);
+}
+
 function ago(ms: number) {
   const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
   if (s < 60) return "now";
@@ -143,14 +156,21 @@ function SessionList({
                 <span className="min-w-0 flex-1 truncate text-[13px]">
                   {s.title || "Untitled"}
                 </span>
-                {BUSY_PHASES.includes(s.phase) && (
+                {working(s) && (
                   <span
                     role="status"
                     aria-label="Working"
                     className="bg-primary size-1.5 shrink-0 animate-pulse rounded-full motion-reduce:animate-none"
                   />
                 )}
-                {FAILED_PHASES.includes(s.phase) && (
+                {needsInput(s) && (
+                  <span
+                    role="status"
+                    aria-label="Waiting for your input"
+                    className="bg-attention size-1.5 shrink-0 animate-pulse rounded-full motion-reduce:animate-none"
+                  />
+                )}
+                {failed(s) && (
                   <CircleAlertIcon
                     aria-label="Needs attention"
                     className="text-destructive size-3 shrink-0"
