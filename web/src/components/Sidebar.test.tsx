@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { fireEvent, screen } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Sidebar } from "./Sidebar";
@@ -42,6 +43,51 @@ function renderSidebar(over: Partial<React.ComponentProps<typeof Sidebar>> = {})
   render(<Sidebar {...props} />);
   return props;
 }
+
+/**
+ * The same sidebar, but with a sessions list the test can change the way the
+ * server would — which is the only way to watch a delete finish, because a
+ * delete finishes when the session leaves that list.
+ */
+function renderLive(sessions: SessionMeta[], over: Partial<React.ComponentProps<typeof Sidebar>> = {}) {
+  let set: (s: SessionMeta[]) => void = () => {};
+  const props = {
+    activeId: null as string | null,
+    status: "online" as const,
+    open: true,
+    onOpenChange: vi.fn(),
+    onSelect: vi.fn(),
+    onNew: vi.fn(),
+    onDelete: vi.fn(() => Promise.resolve()),
+    onShowAccess: vi.fn(),
+    accentOf: () => undefined,
+    projectName: () => "repo",
+    projectRoot: () => "/tmp/repo",
+    ...over,
+  };
+  let setOpen: (open: boolean) => void = () => {};
+  function Live() {
+    const [list, setList] = useState(sessions);
+    const [open, setPanelOpen] = useState(true);
+    set = setList;
+    setOpen = setPanelOpen;
+    return <Sidebar {...props} sessions={list} open={open} />;
+  }
+  render(<Live />);
+  return {
+    props,
+    serverSays: (next: SessionMeta[]) => act(() => set(next)),
+    setSidebarOpen: (open: boolean) => act(() => setOpen(open)),
+  };
+}
+
+// Radix marks the rest of the document aria-hidden while a dialog is open, so
+// role queries cannot see the rows behind it. The order of the rows is exactly
+// what these tests are about, so they read the DOM directly.
+const rowOrder = () =>
+  Array.from(document.querySelectorAll('[aria-label^="Delete session"]')).map((el) =>
+    el.getAttribute("aria-label")!.replace("Delete session ", ""),
+  );
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -203,5 +249,133 @@ describe("Sidebar", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(props.onDelete).toHaveBeenCalledWith("a", false);
+  });
+  it("keeps the dialog open, and says so, until the delete actually finishes", () => {
+    const { props, serverSays } = renderLive([session("a"), session("b")]);
+
+    confirmDelete("a");
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(props.onDelete).toHaveBeenCalledWith("a", false);
+
+    // The server has only accepted the request; the workspace is still coming
+    // down. Closing here would be claiming the session is already gone.
+    expect(screen.getByRole("button", { name: /Deleting/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(true);
+
+    serverSays([session("b")]);
+    expect(screen.queryByRole("button", { name: /Deleting/ })).toBeNull();
+  });
+
+  it("leaves the row where it is when the server bumps it while it cleans up", () => {
+    const { serverSays } = renderLive([session("a"), session("b"), session("c")]);
+    expect(rowOrder()).toEqual(["Session a", "Session b", "Session c"]);
+
+    confirmDelete("b");
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    // Entering "cleaning" restamps the session, and the list is newest-first,
+    // so the server now sends it back at the top. The row does not move.
+    serverSays([
+      session("b", { phase: "cleaning", updatedAt: Date.now() + 1000 }),
+      session("a"),
+      session("c"),
+    ]);
+    expect(rowOrder()).toEqual(["Session a", "Session b", "Session c"]);
+  });
+
+  it("holds the row in place for its exit animation, then drops it", () => {
+    vi.useFakeTimers();
+    try {
+      const { serverSays } = renderLive([session("a"), session("b"), session("c")]);
+
+      confirmDelete("b");
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+      serverSays([session("a"), session("c")]);
+
+      // Still there, in its own place, collapsing.
+      expect(rowOrder()).toEqual(["Session a", "Session b", "Session c"]);
+      const row = document.querySelector('[aria-label="Delete session Session b"]')!;
+      expect(row.closest(".grid")!.className).toContain("grid-rows-[0fr]");
+
+      act(() => vi.advanceTimersByTime(500));
+      expect(rowOrder()).toEqual(["Session a", "Session c"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops waiting when the teardown fails, so the force-delete prompt is reachable", () => {
+    const { serverSays } = renderLive([session("a"), session("b")]);
+
+    confirmDelete("a");
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    serverSays([session("a", { phase: "cleanup_failed" }), session("b")]);
+
+    expect(screen.queryByRole("button", { name: /Deleting/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+  });
+
+  it("closes the dialog when the server refuses the delete", async () => {
+    const onDelete = vi.fn(() => Promise.reject(new Error("nope")));
+    renderLive([session("a")], { onDelete });
+
+    confirmDelete("a");
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await act(async () => {});
+
+    expect(screen.queryByRole("button", { name: /Deleting/ })).toBeNull();
+    expect(rowOrder()).toEqual(["Session a"]);
+  });
+
+  it("holds the window while the delete runs, and lets go once the wait is abnormal", () => {
+    vi.useFakeTimers();
+    try {
+      renderLive([session("a"), session("b")]);
+      confirmDelete("a");
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+      // Escape would otherwise close it over a delete the user cannot see the
+      // progress of anywhere else.
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+      expect(screen.getByRole("button", { name: /Deleting/ })).toBeTruthy();
+
+      // A deprovision hook can hang forever; the dialog admits it and offers
+      // the way out it was withholding.
+      act(() => vi.advanceTimersByTime(11_000));
+      expect(screen.getByText(/taking longer than usual/)).toBeTruthy();
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+      expect(screen.queryByRole("button", { name: /Deleting/ })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles the worktree answer once it has been sent", () => {
+    const managed = session("a", { workspaceMode: "managed", cwd: "/tmp/repo/.worktrees/a" });
+    renderLive([managed, session("b")]);
+
+    confirmDelete("a");
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    // The request has already gone with the box ticked; unticking it now would
+    // only make the dialog lie about what is happening on disk.
+    expect(checkbox()!.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: /Deleting worktree/ })).toBeTruthy();
+  });
+
+  it("keeps the delete on screen when the sidebar closes under it", () => {
+    // On a phone, deleting a row selects it, and selecting closes the sheet —
+    // which used to take the dialog, the pinned order and the animation with
+    // it, because they lived inside the list.
+    viewport("phone");
+    const { serverSays, setSidebarOpen } = renderLive([session("a"), session("b")]);
+
+    confirmDelete("a");
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    setSidebarOpen(false);
+    expect(screen.getByRole("button", { name: /Deleting/ })).toBeTruthy();
+
+    serverSays([session("b")]);
+    expect(screen.queryByRole("button", { name: /Deleting/ })).toBeNull();
   });
 });
