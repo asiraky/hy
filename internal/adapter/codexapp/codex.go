@@ -309,6 +309,15 @@ func (s *session) Prompt(ctx context.Context, in adapter.PromptInput) error {
 		} `json:"turn"`
 	}
 	if err := s.conn.Call(ctx, "turn/start", params, &startRes); err != nil {
+		// The turn never started, so no turn/completed will ever clear this
+		// id. Leaving it set would make the collision guard above reject every
+		// later prompt forever. Guarded: the read loop may have cleared or
+		// replaced it already.
+		s.mu.Lock()
+		if s.turnID == in.TurnID {
+			s.turnID = ""
+		}
+		s.mu.Unlock()
 		return err
 	}
 	// Only record the id if this turn is still the active one. turn/completed is
@@ -439,15 +448,24 @@ func (s *session) currentTurn() string {
 // an auto-continuation — and that work is a real turn: without a turn.started
 // the session list and restart recovery both read the session as idle while
 // it is working. Mirrors the claude adapter's ensureTurn.
-func (s *session) ensureTurn() string {
+// serverTurn is the codex-side turn id from the triggering notification, when
+// it carries one; recording it is what lets Cancel interrupt a turn hy never
+// started. Empty is fine — the turn still opens, it just cannot be interrupted.
+func (s *session) ensureTurn(serverTurn string) string {
 	s.mu.Lock()
 	if s.turnID != "" {
 		id := s.turnID
+		// Backfill the server id if the turn opened from a notification that
+		// did not carry one; Cancel needs it.
+		if s.serverTurnID == "" && serverTurn != "" {
+			s.serverTurnID = serverTurn
+		}
 		s.mu.Unlock()
 		return id
 	}
 	id := uuid.NewString()
 	s.turnID = id
+	s.serverTurnID = serverTurn
 	s.mu.Unlock()
 
 	s.emit(proto.Emit(proto.TurnStarted, proto.TurnStartedPayload{TurnID: id}))
@@ -667,19 +685,24 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 		// the log says idle. An item completing is not — a straggling
 		// completion after the turn ended must not reopen it.
 		if method == "item/started" && turn == "" {
-			turn = s.ensureTurn()
+			var p struct {
+				TurnID string `json:"turnId"`
+			}
+			_ = json.Unmarshal(params, &p)
+			turn = s.ensureTurn(p.TurnID)
 		}
 		s.handleItem(method == "item/completed", turn, params)
 
 	case "item/agentMessage/delta":
 		var p struct {
 			ItemID string `json:"itemId"`
+			TurnID string `json:"turnId"`
 			Delta  string `json:"delta"`
 		}
 		_ = json.Unmarshal(params, &p)
 		// Streaming while idle is a harness-initiated turn; see ensureTurn.
 		if turn == "" {
-			turn = s.ensureTurn()
+			turn = s.ensureTurn(p.TurnID)
 		}
 		s.mu.Lock()
 		s.streamed[p.ItemID] = true
@@ -691,12 +714,13 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 	case "item/reasoning/summaryTextDelta", "item/reasoning/textDelta":
 		var p struct {
 			ItemID string `json:"itemId"`
+			TurnID string `json:"turnId"`
 			Delta  string `json:"delta"`
 		}
 		_ = json.Unmarshal(params, &p)
 		// Streaming while idle is a harness-initiated turn; see ensureTurn.
 		if turn == "" {
-			turn = s.ensureTurn()
+			turn = s.ensureTurn(p.TurnID)
 		}
 		s.emit(proto.Emit(proto.MessageChunk, proto.MessageChunkPayload{
 			TurnID: turn, Role: "agent", Kind: "thought", BlockID: p.ItemID + ":reasoning", Delta: p.Delta,
@@ -752,6 +776,7 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 	case "turn/completed", "turn/failed":
 		var p struct {
 			Turn struct {
+				ID     string `json:"id"`
 				Status string `json:"status"`
 				Error  *struct {
 					Message string `json:"message"`
@@ -759,6 +784,19 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 			} `json:"turn"`
 		}
 		_ = json.Unmarshal(params, &p)
+
+		// A completion naming a different codex turn than the one we know is
+		// running is stale — a duplicate of an earlier turn's completion. Using
+		// s.turnID here would relabel it as the current turn and close a turn
+		// that is still working. When either id is unknown the guard stands
+		// down: a composer-driven or harness-initiated turn may have no
+		// recorded server id, and refusing to close those would leak them.
+		s.mu.Lock()
+		known := s.serverTurnID
+		s.mu.Unlock()
+		if p.Turn.ID != "" && known != "" && p.Turn.ID != known {
+			return
+		}
 
 		stop, errMsg := proto.StopEndTurn, ""
 		switch {
@@ -846,6 +884,11 @@ func (s *session) handleItem(completed bool, turn string, params json.RawMessage
 		return
 	}
 	it := p.Item
+	// open reports whether hy has this turn open; a completion arriving with
+	// no open turn is a straggler from after turn/completed. Labelling such
+	// events with codex's own turn id keeps the timeline coherent, but see the
+	// agentMessage case for the one event that must not go out at all.
+	open := turn != ""
 	if turn == "" {
 		turn = p.TurnID
 	}
@@ -864,6 +907,14 @@ func (s *session) handleItem(completed bool, turn string, params json.RawMessage
 		// Deltas normally carry the text. Backfill only when none arrived,
 		// so a message that did stream is not duplicated.
 		if !completed || it.Text == "" {
+			return
+		}
+		// No open turn means this completion straggled in after turn/completed.
+		// The projection reads any chunk while idle as a running turn (the
+		// activity defence), and nothing would ever close it — drop the
+		// backfill rather than reopen the session as working forever.
+		if !open {
+			s.host.Logf("codex: dropping agentMessage %s that completed after its turn", it.ID)
 			return
 		}
 		s.mu.Lock()

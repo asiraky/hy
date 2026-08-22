@@ -2,6 +2,7 @@ package codexapp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -121,6 +122,14 @@ func (s *session) RunComposerAction(ctx context.Context, in adapter.ComposerActi
 	}
 
 	s.mu.Lock()
+	// Same collision guard as Prompt: codex may have started work on its own
+	// (ensureTurn) between the actor's idle check and this call. Overwriting
+	// that turn's id would orphan it — its completion would be dropped and the
+	// session would read as working forever.
+	if s.turnID != "" && s.turnID != in.TurnID {
+		s.mu.Unlock()
+		return nil, errors.New("the harness resumed work on its own; wait for it to finish")
+	}
 	s.turnID = in.TurnID
 	s.mu.Unlock()
 	if in.Action == "compact" {
