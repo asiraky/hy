@@ -251,7 +251,7 @@ function receivedTime(ms?: number): string {
 }
 
 /**
- * The footer under an agent message: when it arrived, and a one-click copy of
+ * The footer under a message: when it arrived, and a one-click copy of
  * the raw text. Quiet by design — metadata should not compete with the prose —
  * so it fades in on hover on a desktop and stays small everywhere.
  */
@@ -338,7 +338,7 @@ function UserMessage({ item }: { item: Item }) {
   };
 
   return (
-    <div ref={wrapRef} data-msg-id={item.id} className="fade-in flex flex-col items-end">
+    <div ref={wrapRef} data-msg-id={item.id} className="group fade-in flex flex-col items-end">
       <div
         ref={bodyRef}
         style={
@@ -369,6 +369,7 @@ function UserMessage({ item }: { item: Item }) {
           {expanded ? "Show less" : "Show more"}
         </button>
       )}
+      <MessageMeta item={item} />
     </div>
   );
 }

@@ -103,6 +103,37 @@ const state = (id: string, mode: string): any => ({
   pendingElicitations: [],
 });
 
+describe("copying a transcript", () => {
+  it("copies only the raw user and assistant prose from the session header", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    render(<App />);
+    await act(async () => {
+      events.onProjects([project]);
+      events.onHarnesses([harness], "/tmp/repo");
+      events.onSessions([session("a")]);
+    });
+    fireEvent.click(screen.getByText("Session a"));
+    await act(async () =>
+      events.onState("a", {
+        ...state("a", "default"),
+        items: [
+          { id: "u1", kind: "message", role: "user", text: "Question" },
+          { id: "thought", kind: "message", role: "agent", contentKind: "thought", text: "Private" },
+          { id: "tool", kind: "tool", title: "Read" },
+          { id: "a1", kind: "message", role: "agent", contentKind: "text", text: "**Answer**" },
+        ],
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy transcript" }));
+
+    expect(writeText).toHaveBeenCalledWith(
+      "## User\n\nQuestion\n\n## Assistant\n\n**Answer**",
+    );
+  });
+});
+
 describe("a bypass session is just a session", () => {
   it("opens with no confirmation, banner, or acknowledgement", async () => {
     const confirm = vi.fn(() => true);

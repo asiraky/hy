@@ -74,6 +74,22 @@ describe("copying an agent message", () => {
   });
 });
 
+describe("copying a user message", () => {
+  it("copies the entire raw prompt from its footer", () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const userState = state("");
+    userState.items = [
+      { id: "u1", kind: "message", role: "user", text: "A long **raw** prompt", receivedAt: 1 },
+    ];
+
+    render(view(userState));
+    fireEvent.click(screen.getByLabelText("Copy message"));
+
+    expect(writeText).toHaveBeenCalledWith("A long **raw** prompt");
+  });
+});
+
 // A prompt sent into a session on screen is lifted to the top of the view so
 // the answer streams into the space below it. Which prompts count as "just
 // sent" is this component's rule — the hook is told what to hold, not when.
