@@ -297,7 +297,12 @@ function SessionList({
           >
             <div
               className={cn(
-                "group relative rounded-lg transition-colors",
+                // min-w-0: a grid item's automatic minimum size is its
+                // min-content width, and a `truncate`d line is `nowrap` — so
+                // its min-content is the whole untruncated string. Left at
+                // `auto` the row grows to fit the longest title and is clipped
+                // by the scroller instead of ever reaching the ellipsis.
+                "group relative min-w-0 rounded-lg transition-colors",
                 leaving && "overflow-hidden",
                 active
                   ? "bg-sidebar-accent text-sidebar-accent-foreground"
@@ -338,13 +343,17 @@ function SessionList({
                 </span>
                 <span className="text-muted-foreground mt-1 flex min-w-0 items-center gap-1 font-mono text-[10px]">
                   <FolderIcon aria-hidden className="size-3 shrink-0" />
-                  <span className="truncate">
+                  {/* The project keeps its natural width up to half the line;
+                      the branch takes what is left and gives way first. Left to
+                      shrink in proportion, a long branch reduced a short project
+                      name to a letter and an ellipsis. */}
+                  <span className="max-w-[50%] shrink-0 truncate">
                     {projectName(s.projectId) ?? s.cwd.split("/").slice(-2).join("/")}
                   </span>
                   {s.branch && (
                     <>
                       <GitBranchIcon aria-hidden className="ml-1 size-3 shrink-0" />
-                      <span className="truncate">{s.branch}</span>
+                      <span className="min-w-0 flex-1 truncate">{s.branch}</span>
                     </>
                   )}
                   <span className="ml-auto flex shrink-0 items-center pl-1.5">
