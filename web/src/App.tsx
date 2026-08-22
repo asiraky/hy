@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Client, wsURL, type ConnectionStatus } from "./client";
 import { useIsDesktop } from "./useMediaQuery";
 import { useSessionPR } from "./useSessionPR";
-import type { Access, ComposerItem, FileContent, FileDiff, FileTree, HarnessMeta, Project, ProjectConfig, SessionChanges, SessionMeta, SessionState, SessionSummary, PullRequest, UserConfig, Workspace } from "./protocol";
+import type { Access, ComposerItem, FileContent, FileDiff, FileTree, HarnessMeta, Label, Project, ProjectConfig, SessionChanges, SessionMeta, SessionState, SessionSummary, PullRequest, UserConfig, Workspace } from "./protocol";
 import { AccessPanel } from "./components/Access";
 import { SessionSummaryPanel } from "./components/SessionSummary";
 import { Panel, type PanelRequest } from "./components/panel/Panel";
@@ -15,6 +15,9 @@ import { ProjectSettings } from "./components/ProjectSettings";
 import { PermissionPrompt } from "./components/PermissionPrompt";
 import { ElicitationPrompt } from "./components/ElicitationPrompt";
 import { DeleteSessionDialog, useDeleteSession } from "./components/DeleteSessionDialog";
+import { LabelManager } from "./components/LabelManager";
+import { LabelDot, LabelMenu } from "./components/LabelMenu";
+import { DropdownMenu, DropdownMenuTrigger } from "./components/ui/dropdown-menu";
 import { Sidebar } from "./components/Sidebar";
 import { Transcript } from "./components/Transcript";
 import { IconButton } from "./components/IconButton";
@@ -30,7 +33,7 @@ import {
 } from "./components/ui/select";
 import { loadResume } from "./resume";
 import { cn } from "./lib/utils";
-import { CoffeeIcon, FileDiffIcon, MessagesSquareIcon, PanelLeftIcon, PlusIcon, SettingsIcon, SparklesIcon } from "lucide-react";
+import { CoffeeIcon, FileDiffIcon, MessagesSquareIcon, PanelLeftIcon, PlusIcon, SettingsIcon, SparklesIcon, TagIcon } from "lucide-react";
 import { toast } from "sonner";
 
 const LAST_SESSION = "hy.lastSession";
@@ -67,6 +70,10 @@ export function App() {
   const [harnesses, setHarnesses] = useState<HarnessMeta[]>([]);
   const [defaultCwd, setDefaultCwd] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
+  // The user's label definitions, server-owned: every mutation round-trips
+  // and comes back as a broadcast, so paired devices all render the same set.
+  const [labels, setLabels] = useState<Label[]>([]);
+  const [manageLabels, setManageLabels] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(resume?.state.sessionId ?? null);
   const [state, setState] = useState<SessionState | null>(resume?.state ?? null);
   // Read by long-lived callbacks (openPath) that must see the current state
@@ -221,6 +228,7 @@ export function App() {
         if (id === activeRef.current) setComposerRevision((revision) => revision + 1);
       },
       onProjects: setProjects,
+      onLabels: setLabels,
       // State only lands for the session currently attached; the client
       // discards anything else.
       onState: (id, s) => {
@@ -360,6 +368,39 @@ export function App() {
     await saveUserConfig({ ...userConfig, summaryPrompt });
     setSummaries({});
   }, [userConfig, saveUserConfig]);
+
+  // Label mutations fire and forget: the authoritative answer arrives as a
+  // labels (or sessions) broadcast, the same way it does for a paired device,
+  // so there is no local state to reconcile — only failures to report.
+  const setSessionLabel = useCallback((sessionId: string, labelId: string) => {
+    clientRef.current?.command("set_session_label", { sessionId, labelId }).catch((e) => {
+      toast.error("Could not label that session", { description: e.message });
+    });
+  }, []);
+  const createLabel = useCallback((name: string, color: string) => {
+    clientRef.current?.command("create_label", { name, color }).catch((e) => {
+      toast.error("Could not create that label", { description: e.message });
+    });
+  }, []);
+  const saveLabel = useCallback((label: Label) => {
+    clientRef.current
+      ?.command("save_label", {
+        labelId: label.id,
+        name: label.name,
+        color: label.color,
+        position: label.position,
+        collapsedByDefault: !!label.collapsedByDefault,
+      })
+      .catch((e) => {
+        toast.error("Could not save that label", { description: e.message });
+      });
+  }, []);
+  const deleteLabel = useCallback((id: string) => {
+    clientRef.current?.command("delete_label", { labelId: id }).catch((e) => {
+      toast.error("Could not delete that label", { description: e.message });
+    });
+  }, []);
+  const openLabelManager = useCallback(() => setManageLabels(true), []);
 
   const addProject = useCallback(async (root: string) => { const res=await clientRef.current!.command("add_project",{root}); setProjects(p=>[res.project,...p.filter(x=>x.id!==res.project.id)]); },[]);
   const saveProject = useCallback(async (projectId:string,config:ProjectConfig) => { const res=await clientRef.current!.command("save_project",{projectId,config}); setProjects(p=>p.map(x=>x.id===projectId?res.project:x)); },[]);
@@ -718,6 +759,9 @@ export function App() {
         accentOf={accentOf}
         projectName={(id)=>projects.find(p=>p.id===id)?.config.name}
         projectRoot={(id)=>projects.find(p=>p.id===id)?.root}
+        labels={labels}
+        onSetLabel={setSessionLabel}
+        onManageLabels={openLabelManager}
       />
 
       <DeleteSessionDialog flow={deleteFlow} />
@@ -766,6 +810,45 @@ export function App() {
                     ))}
                   </SelectContent>
                 </Select>
+              )}
+
+              {/* Filing the open session — the same menu the sidebar row
+                  carries, so a session can be labelled from either place.
+                  Invisible until the user has defined a label. */}
+              {labels.length > 0 && activeId && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    {(() => {
+                      const current = labels.find((l) => l.id === meta?.labelId);
+                      return current ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`Labelled ${current.name} — change label`}
+                          className="text-muted-foreground h-8 max-w-32 gap-1.5 px-2 text-[11px]"
+                        >
+                          <LabelDot color={current.color} />
+                          <span className="truncate">{current.name}</span>
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label="Label this session"
+                          className="size-8"
+                        >
+                          <TagIcon />
+                        </Button>
+                      );
+                    })()}
+                  </DropdownMenuTrigger>
+                  <LabelMenu
+                    labels={labels}
+                    current={meta?.labelId}
+                    onSelect={(labelId) => setSessionLabel(activeId, labelId)}
+                    onManage={openLabelManager}
+                  />
+                </DropdownMenu>
               )}
 
               <IconButton
@@ -906,6 +989,16 @@ export function App() {
           onRegenerate={() => void summarize(activeId)}
           onSavePrompt={saveSummaryPrompt}
           onClose={() => setShowSummary(false)}
+        />
+      )}
+
+      {manageLabels && (
+        <LabelManager
+          labels={labels}
+          onCreate={createLabel}
+          onSave={saveLabel}
+          onDelete={deleteLabel}
+          onClose={() => setManageLabels(false)}
         />
       )}
 

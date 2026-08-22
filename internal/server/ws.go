@@ -65,6 +65,11 @@ func (s *Server) handleWS(ws *websocket.Conn, ctx context.Context, deviceID stri
 	harnessID, harnessCh := s.mgr.SubscribeHarnesses()
 	defer s.mgr.UnsubscribeHarnesses(harnessID)
 
+	// Label definitions are user-level and shared across paired devices, so a
+	// change on one device pushes the whole list to every connection.
+	labelsID, labelsCh := s.mgr.SubscribeLabels()
+	defer s.mgr.UnsubscribeLabels(labelsID)
+
 	go func() {
 		for {
 			select {
@@ -74,6 +79,8 @@ func (s *Server) handleWS(ws *websocket.Conn, ctx context.Context, deviceID stri
 				c.sendSessions()
 			case <-harnessCh:
 				c.send(serverFrame{Type: "harnesses", Harnesses: s.mgr.Harnesses(ctx)})
+			case <-labelsCh:
+				c.sendLabels()
 			}
 		}
 	}()
@@ -100,6 +107,7 @@ func (c *conn) dispatch(f clientFrame) {
 	case "hello":
 		sessions, _ := c.srv.mgr.List(c.ctx)
 		projects, _ := c.srv.mgr.Projects(c.ctx)
+		labels, _ := c.srv.mgr.Labels(c.ctx)
 		c.send(serverFrame{
 			Type:      "welcome",
 			ServerID:  c.srv.id,
@@ -107,6 +115,7 @@ func (c *conn) dispatch(f clientFrame) {
 			Sessions:  sessions,
 			Harnesses: c.srv.mgr.Harnesses(c.ctx),
 			Projects:  projects,
+			Labels:    labels,
 			Cwd:       c.srv.defaultCwd,
 			Access:    c.srv.access(c.ctx),
 		})
@@ -135,6 +144,14 @@ func (c *conn) sendSessions() {
 		return
 	}
 	c.send(serverFrame{Type: "sessions", Sessions: sessions})
+}
+
+func (c *conn) sendLabels() {
+	labels, err := c.srv.mgr.Labels(c.ctx)
+	if err != nil {
+		return
+	}
+	c.send(serverFrame{Type: "labels", Labels: labels})
 }
 
 // attach implements the ordering the spec calls load-bearing: subscribe first,
@@ -453,6 +470,51 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 			return nil, err
 		}
 		return map[string]any{"effort": a.Effort}, nil
+
+	case "create_label":
+		var a createLabelArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		label, err := c.srv.mgr.CreateLabel(ctx, a.Name, a.Color)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"label": label}, nil
+
+	case "save_label":
+		var a saveLabelArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		label, err := c.srv.mgr.SaveLabel(ctx, store.Label{
+			ID: a.LabelID, Name: a.Name, Color: a.Color,
+			Position: a.Position, CollapsedByDefault: a.CollapsedByDefault,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"label": label}, nil
+
+	case "delete_label":
+		var a deleteLabelArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		if err := c.srv.mgr.DeleteLabel(ctx, a.LabelID); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "deleted"}, nil
+
+	case "set_session_label":
+		var a setSessionLabelArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		if err := c.srv.mgr.SetSessionLabel(ctx, a.SessionID, a.LabelID); err != nil {
+			return nil, err
+		}
+		return map[string]any{"labelId": a.LabelID}, nil
 
 	case "list_composer_items":
 		var a sessionArgs
