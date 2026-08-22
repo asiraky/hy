@@ -149,32 +149,14 @@ function useDeleteFlow({
     },
     // The request never went, so there is no departure to animate.
     onRefused: () => setFrozen(null),
+    // The row has left the list. The hook has already stopped waiting; all
+    // that is left here is to keep the row on screen long enough to leave.
+    onDeparted: (target) => setExiting(target),
+    // Teardown failed, so the row is staying. App is already asking what to do
+    // about it, and the list has no departure to hold its order for.
+    onFailed: () => setFrozen(null),
   });
-  const { deleting, settle } = session;
-
-  // Handing the row off to its exit animation is done here, during the render
-  // that drops it, rather than in an effect: an effect would let one commit
-  // through with the row already gone, and the DOM node we want to animate
-  // would be destroyed before it could move.
-  if (deleting && !sessions.some((s) => s.id === deleting.id)) {
-    settle(deleting.id);
-    setExiting(deleting);
-  }
-
-  // Teardown failed, so the row is staying. App is already asking what to do
-  // about it; the dialog stops spinning and gets out of the way.
-  const failed =
-    deleting && sessions.some((s) => s.id === deleting.id && s.phase === "cleanup_failed")
-      ? deleting.id
-      : null;
-  useEffect(() => {
-    if (!failed) return;
-    settle(failed);
-    setFrozen(null);
-    // settle is recreated each render and only ever reads the id it is given,
-    // so tracking it here would re-run this for no change in what it does.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [failed]);
+  const { deleting } = session;
 
   // The animation is the only thing still holding either of these.
   useEffect(() => {

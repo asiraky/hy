@@ -3,7 +3,7 @@ import { fireEvent, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { DeleteSessionDialog, useDeleteSession } from "./DeleteSessionDialog";
-import { render } from "~/test/harness";
+import { render, wrap } from "~/test/harness";
 import type { SessionMeta } from "~/protocol";
 
 const session = (id: string, extra: Partial<SessionMeta> = {}): SessionMeta => ({
@@ -83,6 +83,43 @@ describe("the delete confirmation, opened from outside the sidebar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     // The worktree stays: it is not this session's alone to take.
     expect(onDelete).toHaveBeenCalledWith("a", false);
+  });
+
+  // The regression this pair guards: the wait used to end only in the sidebar,
+  // which watched its own list for the row leaving. A caller with no list —
+  // the transcript's "this landed" prompt — was never told the delete had
+  // finished, so it spun forever and sat over whatever session was opened
+  // next. The hook owns the whole wait now, list or no list.
+  it("stops waiting once the session has left the list", () => {
+    const target = session("a", { workspaceMode: "managed", cwd: "/tmp/repo/.worktrees/a" });
+    const { rerender } = render(
+      <Standalone sessions={[target]} target={target} onDelete={() => Promise.resolve()} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(screen.getByText("Deleting worktree…")).toBeTruthy();
+
+    // The server finished the teardown and the session is gone.
+    rerender(wrap(<Standalone sessions={[]} target={target} onDelete={() => Promise.resolve()} />));
+
+    expect(screen.queryByText("Deleting worktree…")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("stops waiting when teardown fails and the session stays", () => {
+    const target = session("a", { workspaceMode: "managed", cwd: "/tmp/repo/.worktrees/a" });
+    const props = { target, onDelete: () => Promise.resolve() };
+    const { rerender } = render(<Standalone sessions={[target]} {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    // The row is staying, and something else is already asking what to do
+    // about it — so the dialog has to get out of the way rather than go on
+    // claiming a delete is still running.
+    rerender(wrap(<Standalone sessions={[{ ...target, phase: "cleanup_failed" }]} {...props} />));
+
+    expect(screen.queryByText("Deleting worktree…")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("waits for the delete rather than claiming it is done", () => {
