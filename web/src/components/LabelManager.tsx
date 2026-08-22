@@ -135,15 +135,19 @@ export function LabelManager({
     setNewColor(LABEL_COLORS[(labels.length + 1) % LABEL_COLORS.length]);
   };
 
-  // Reorder by swapping positions with the neighbour: two saves, and the
-  // server's broadcast settles the final order for every device at once.
+  // Reorder by renumbering to display indices rather than swapping the two
+  // stored positions: a swap of equal positions is a no-op, and equal
+  // positions can exist after two devices reordered at once. Renumbering
+  // saves only the labels whose position actually changes — normally just
+  // the pair — and heals any duplicates as a side effect.
   const move = (index: number, delta: -1 | 1) => {
     const other = index + delta;
     if (other < 0 || other >= labels.length) return;
-    const a = labels[index];
-    const b = labels[other];
-    onSave({ ...a, position: b.position });
-    onSave({ ...b, position: a.position });
+    const next = [...labels];
+    [next[index], next[other]] = [next[other], next[index]];
+    next.forEach((l, i) => {
+      if (l.position !== i) onSave({ ...l, position: i });
+    });
   };
 
   return (

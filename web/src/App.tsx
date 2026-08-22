@@ -383,6 +383,15 @@ export function App() {
     });
   }, []);
   const saveLabel = useCallback((label: Label) => {
+    // Apply locally before the round-trip: a second edit made before the
+    // broadcast lands (recolour, then flip the collapse switch) must derive
+    // from this save, not from the stale snapshot, or the later save silently
+    // reverts the earlier field. The broadcast then settles the true state.
+    setLabels((ls) =>
+      ls
+        .map((l) => (l.id === label.id ? label : l))
+        .sort((a, b) => a.position - b.position || a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1)),
+    );
     clientRef.current
       ?.command("save_label", {
         labelId: label.id,

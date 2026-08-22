@@ -228,7 +228,10 @@ function SessionList({
 }) {
   const { rows, ask, deleting, exiting } = flow;
 
-  if (rows.length === 0) {
+  // With labels defined, an empty session list still shows the label groups —
+  // the structure is the user's, not the sessions'. Only a truly blank slate
+  // (no sessions, no labels) gets the empty-state copy.
+  if (rows.length === 0 && labels.length === 0) {
     return (
       <p className="text-muted-foreground px-3 py-10 text-center text-[13px]">
         No sessions yet.

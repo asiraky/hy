@@ -29,24 +29,15 @@ func (m *Manager) CreateLabel(ctx context.Context, name, color string) (store.La
 	if name == "" {
 		return store.Label{}, errors.New("a label needs a name")
 	}
-	existing, err := m.store.ListLabels(ctx)
-	if err != nil {
-		return store.Label{}, err
-	}
-	position := 0
-	for _, l := range existing {
-		if l.Position >= position {
-			position = l.Position + 1
-		}
-	}
-	label := store.Label{
+	// The store assigns the position inside the INSERT — reading max+1 here
+	// would let two devices creating at once claim the same slot.
+	label, err := m.store.CreateLabel(ctx, store.Label{
 		ID:        uuid.NewString(),
 		Name:      name,
 		Color:     color,
-		Position:  position,
 		CreatedAt: proto.NowMillis(),
-	}
-	if err := m.store.CreateLabel(ctx, label); err != nil {
+	})
+	if err != nil {
 		return store.Label{}, err
 	}
 	m.notifyLabels()

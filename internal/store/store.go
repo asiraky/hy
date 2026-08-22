@@ -391,14 +391,25 @@ func (s *Store) ListLabels(ctx context.Context) ([]Label, error) {
 	return out, rows.Err()
 }
 
-// CreateLabel inserts a new definition.
-func (s *Store) CreateLabel(ctx context.Context, l Label) error {
+// CreateLabel inserts a new definition at the end of the order. The position
+// is claimed inside the INSERT itself — not read beforehand by the caller —
+// so two devices creating at once cannot land on the same slot. The returned
+// label carries the position the row actually got.
+func (s *Store) CreateLabel(ctx context.Context, l Label) (Label, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO labels (id, name, color, position, collapsed, created_at) VALUES (?,?,?,?,?,?)`,
-		l.ID, l.Name, l.Color, l.Position, boolInt(l.CollapsedByDefault), l.CreatedAt)
-	return err
+		`INSERT INTO labels (id, name, color, position, collapsed, created_at)
+		 VALUES (?,?,?,(SELECT COALESCE(MAX(position),-1)+1 FROM labels),?,?)`,
+		l.ID, l.Name, l.Color, boolInt(l.CollapsedByDefault), l.CreatedAt)
+	if err != nil {
+		return Label{}, err
+	}
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT position FROM labels WHERE id=?`, l.ID).Scan(&l.Position); err != nil {
+		return Label{}, err
+	}
+	return l, nil
 }
 
 // SaveLabel rewrites an existing definition — rename, recolour, reorder, or

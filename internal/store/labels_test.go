@@ -28,13 +28,19 @@ func TestLabelsRoundTrip(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
-	// Ordered by position, not insertion.
-	for _, l := range []Label{
-		{ID: "b", Name: "In progress", Color: "#0091ff", Position: 1, CreatedAt: 2},
-		{ID: "a", Name: "Parked", Color: "#8d8d8d", Position: 0, CollapsedByDefault: true, CreatedAt: 1},
+	// The store assigns positions in creation order; a caller-supplied
+	// position is ignored — it would be a value read before the insert, and
+	// two devices can read the same one.
+	for i, l := range []Label{
+		{ID: "a", Name: "Parked", Color: "#8d8d8d", Position: 99, CollapsedByDefault: true, CreatedAt: 1},
+		{ID: "b", Name: "In progress", Color: "#0091ff", Position: 99, CreatedAt: 2},
 	} {
-		if err := s.CreateLabel(ctx, l); err != nil {
+		got, err := s.CreateLabel(ctx, l)
+		if err != nil {
 			t.Fatalf("create label %s: %v", l.ID, err)
+		}
+		if got.Position != i {
+			t.Fatalf("label %s: got position %d, want %d", l.ID, got.Position, i)
 		}
 	}
 	labels, err := s.ListLabels(ctx)
@@ -65,7 +71,7 @@ func TestSessionLabelAssignment(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	mustCreateSession(t, s, "s1")
-	if err := s.CreateLabel(ctx, Label{ID: "l1", Name: "Parked"}); err != nil {
+	if _, err := s.CreateLabel(ctx, Label{ID: "l1", Name: "Parked"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -110,7 +116,7 @@ func TestDeleteLabelUnlabelsButKeepsSessions(t *testing.T) {
 	ctx := context.Background()
 	mustCreateSession(t, s, "s1")
 	mustCreateSession(t, s, "s2")
-	if err := s.CreateLabel(ctx, Label{ID: "l1", Name: "Done"}); err != nil {
+	if _, err := s.CreateLabel(ctx, Label{ID: "l1", Name: "Done"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"s1", "s2"} {
