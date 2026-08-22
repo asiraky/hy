@@ -402,6 +402,20 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 		}
 		return map[string]any{"model": a.Model}, nil
 
+	case "set_effort":
+		var a setEffortArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		actor, err := c.srv.mgr.Get(ctx, a.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		if err := actor.SetEffort(ctx, a.Effort); err != nil {
+			return nil, err
+		}
+		return map[string]any{"effort": a.Effort}, nil
+
 	case "list_composer_items":
 		var a sessionArgs
 		if err := json.Unmarshal(f.Args, &a); err != nil {

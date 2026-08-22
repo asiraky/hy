@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
@@ -11,45 +11,66 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog";
 import { Label } from "~/components/ui/label";
+import { Spinner } from "~/components/ui/spinner";
 import type { SessionMeta } from "~/protocol";
 
+// How long a delete may take before the dialog stops holding the window shut.
+const STUCK_MS = 10_000;
+
 /**
- * The one place a session is deleted from. Both the sidebar's X and the
- * transcript's "this landed" prompt open this, so the guards on what may be
- * removed from disk are written once and cannot drift apart.
+ * Everything a delete needs to be asked for and waited through: the guards on
+ * what may be removed from disk, the confirmation's own state, and the wait
+ * while the server tears the workspace down.
+ *
+ * What is deliberately *not* here is anything about a list — the row's exit
+ * animation and the ordering it is pinned to belong to the sidebar, which is
+ * the only place a row exists. That split is what lets the transcript's
+ * "this landed" prompt open the very same confirmation, with the very same
+ * guards, without inheriting a row it does not have.
  */
-export function DeleteSessionDialog({
-  session,
+export function useDeleteSession({
   sessions,
-  projectRoot,
-  onOpenChange,
   onDelete,
+  projectRoot,
+  onStart,
+  onRefused,
 }: {
-  /** The session being deleted, or null when the dialog is closed. */
-  session: SessionMeta | null;
   /** Every session hy knows of, to see who else is in the same checkout. */
   sessions: SessionMeta[];
+  /** removeWorktree is the user's answer to the checkbox, never inferred. */
+  onDelete: (id: string, removeWorktree: boolean) => void | Promise<unknown>;
   /** The project's own checkout, which is never a worktree hy may remove. */
   projectRoot: (id?: string) => string | undefined;
-  onOpenChange: (open: boolean) => void;
-  /** removeWorktree is the user's answer to the checkbox, never inferred. */
-  onDelete: (id: string, removeWorktree: boolean) => void;
+  /** Fired as the request goes, for a caller that must pin a list first. */
+  onStart?: (target: SessionMeta) => void;
+  /** Fired when the server would not take the request after all. */
+  onRefused?: (target: SessionMeta) => void;
 }) {
+  // Deleting a session can take a checkout on disk with it, so a stray click
+  // on the X must not be enough on its own — the X only opens this
+  // confirmation, and the checkout only goes if it is asked for there.
+  const [confirming, setConfirming] = useState<SessionMeta | null>(null);
   const [removeWorktree, setRemoveWorktree] = useState(false);
+  // The delete the server is working on, which is not over when the click is:
+  // the row only goes when the teardown finishes.
+  const [deleting, setDeleting] = useState<SessionMeta | null>(null);
+  // The delete this hook is currently living through, for the one thing that
+  // arrives too late to read state: a refusal from the server.
+  const latest = useRef<string | null>(null);
 
-  // Defaulted on for a worktree hy provisioned, because that is what hy did
-  // before and it is usually right; off for one it merely borrowed. Re-seeded
-  // per session so a previous answer is never inherited by the next dialog.
-  useEffect(() => {
-    if (session) setRemoveWorktree(session.workspaceMode === "managed");
-  }, [session]);
+  const ask = (s: SessionMeta) => {
+    // Defaulted on for a worktree hy provisioned, because that is what hy did
+    // before and it is usually right; off for one it merely borrowed.
+    setRemoveWorktree(s.workspaceMode === "managed");
+    setConfirming(s);
+  };
 
-  const mode = session?.workspaceMode ?? "";
+  const mode = confirming?.workspaceMode ?? "";
   // "The last session hy knows of" is a question the session list can already
   // answer: it holds every session's cwd. A closed session counts — it still
   // names that path, and hy still knows of it.
-  const sharers = session
-    ? sessions.filter((s) => s.id !== session.id && s.cwd === session.cwd)
+  const sharers = confirming
+    ? sessions.filter((s) => s.id !== confirming.id && s.cwd === confirming.cwd)
     : [];
   // Only these two modes have a directory hy could remove. A local session is
   // the user's own checkout, and a session with no project has no lease at all
@@ -59,34 +80,119 @@ export function DeleteSessionDialog({
   // server refuses to remove that whatever the dialog asked for.
   const hasWorktree =
     (mode === "managed" || mode === "borrowed") &&
-    !!session?.cwd &&
-    session.cwd !== projectRoot(session.projectId);
+    !!confirming?.cwd &&
+    confirming.cwd !== projectRoot(confirming.projectId);
   const removable = hasWorktree && sharers.length === 0;
 
+  // The dialog is only "busy" for the session it is currently asking about: it
+  // can be dismissed once the wait has gone long and reopened on another row,
+  // and that row's Delete button must still be a live button.
+  const busy = !!deleting && deleting.id === confirming?.id;
+
+  // A deprovision hook is a user's own script and can hang forever. The dialog
+  // holds the window while a delete is running, so it has to admit when the
+  // wait has stopped being normal and let go.
+  const [stuck, setStuck] = useState(false);
+  useEffect(() => {
+    if (!deleting) {
+      setStuck(false);
+      return;
+    }
+    const t = setTimeout(() => setStuck(true), STUCK_MS);
+    return () => clearTimeout(t);
+  }, [deleting]);
+
+  // Stop claiming a delete is still happening. Only the dialog that was asking
+  // about *this* session closes; the user may have dismissed it and opened
+  // another meanwhile.
+  const settle = (id: string) => {
+    setDeleting((d) => (d?.id === id ? null : d));
+    setConfirming((c) => (c?.id === id ? null : c));
+  };
+
+  const startDelete = () => {
+    if (!confirming || busy) return;
+    const target = confirming;
+    latest.current = target.id;
+    onStart?.(target);
+    setDeleting(target);
+    Promise.resolve(onDelete(target.id, removable && removeWorktree)).catch(() => {
+      // The failure has already been reported where it was raised; all that is
+      // left here is to stop claiming the delete is still happening. Written
+      // against the current state, not the state at the click: a slow refusal
+      // must not clear a delete the user has since started on another row.
+      if (latest.current !== target.id) return;
+      settle(target.id);
+      onRefused?.(target);
+    });
+  };
+
+  return {
+    confirming,
+    ask,
+    mode,
+    sharers,
+    hasWorktree,
+    removable,
+    removeWorktree,
+    setRemoveWorktree,
+    deleting,
+    busy,
+    stuck,
+    startDelete,
+    settle,
+    dismiss: () => setConfirming(null),
+  };
+}
+
+export type DeleteSession = ReturnType<typeof useDeleteSession>;
+
+/**
+ * The confirmation, and then the wait. Rendered above whatever opened it — in
+ * the sidebar's case above both of its shapes, so that neither the sheet
+ * closing nor a change of breakpoint can take it away mid-delete.
+ */
+export function DeleteSessionDialog({ flow }: { flow: DeleteSession }) {
+  // It stays put while the delete runs: closing it on the click would be
+  // claiming the session is gone at the moment the work starts. The one way
+  // out is `stuck` — a teardown script that hangs must not take the window
+  // with it — and taking it only hides the progress. The delete carries on,
+  // and the row still leaves on its own.
+  const held = flow.busy && !flow.stuck;
   return (
-    <Dialog open={session !== null} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
+    <Dialog open={flow.confirming !== null} onOpenChange={(open) => !open && flow.dismiss()}>
+      <DialogContent
+        className="sm:max-w-sm"
+        showCloseButton={!held}
+        onEscapeKeyDown={(e) => held && e.preventDefault()}
+        onInteractOutside={(e) => held && e.preventDefault()}
+      >
         <DialogHeader>
-          <DialogTitle>Delete “{session?.title || "Untitled"}”?</DialogTitle>
+          <DialogTitle>Delete “{flow.confirming?.title || "Untitled"}”?</DialogTitle>
           {/* Whatever else it says, it says plainly whether anything on disk
               is at risk. The old copy promised a worktree removal that a
               borrowed session never performed. */}
           <DialogDescription>
-            {mode === "local"
+            {flow.mode === "local"
               ? "This permanently deletes the session and its transcript. Your checkout is left untouched."
               : "This permanently deletes the session and its transcript."}
           </DialogDescription>
         </DialogHeader>
 
-        {session && hasWorktree && (
+        {flow.confirming && flow.hasWorktree && (
           <div className="space-y-2 text-[12px]">
-            {removable ? (
+            {flow.removable ? (
               <>
                 <div className="flex items-start gap-2">
+                  {/* Settled the moment Delete was pressed: the request has
+                      already gone with the answer that was ticked then, so
+                      changing it now would only make the dialog lie about what
+                      is happening on disk. */}
                   <Checkbox
                     id="delete-remove-worktree"
-                    checked={removeWorktree}
-                    onCheckedChange={(v) => setRemoveWorktree(v === true)}
+                    checked={flow.removeWorktree}
+                    onCheckedChange={(v) => flow.setRemoveWorktree(v === true)}
+                    disabled={flow.busy}
                     className="mt-0.5"
                   />
                   <div className="min-w-0">
@@ -94,42 +200,50 @@ export function DeleteSessionDialog({
                       Also delete the worktree
                     </Label>
                     <span className="text-muted-foreground block font-mono text-[11px] break-all">
-                      {session.cwd}
+                      {flow.confirming.cwd}
                     </span>
                   </div>
                 </div>
                 <p className="text-muted-foreground text-[11px]">
-                  {session.branch
-                    ? `The branch ${session.branch} is kept either way.`
+                  {flow.confirming.branch
+                    ? `The branch ${flow.confirming.branch} is kept either way.`
                     : "Branches are never deleted."}
-                  {mode === "borrowed" && " hy did not create this worktree."}
+                  {flow.mode === "borrowed" && " hy did not create this worktree."}
                 </p>
               </>
             ) : (
               <p className="text-muted-foreground text-[11px]">
-                The worktree is left on disk: {sharers.length} other session
-                {sharers.length === 1 ? "" : "s"} still
-                {sharers.length === 1 ? " uses" : " use"} it
-                {sharers[0]?.title ? ` (“${sharers[0].title}”)` : ""}.
+                The worktree is left on disk: {flow.sharers.length} other session
+                {flow.sharers.length === 1 ? "" : "s"} still
+                {flow.sharers.length === 1 ? " uses" : " use"} it
+                {flow.sharers[0]?.title ? ` (“${flow.sharers[0].title}”)` : ""}.
               </p>
             )}
           </div>
         )}
 
+        {flow.stuck && (
+          <p className="text-muted-foreground text-[11px]">
+            This is taking longer than usual. You can close this — the delete keeps running, and
+            the session goes when it finishes.
+          </p>
+        )}
+
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={flow.dismiss} disabled={flow.busy}>
             Cancel
           </Button>
-          <Button
-            variant="destructive"
-            onClick={() => {
-              // The re-check at click time is the final guard: the dialog may
-              // have been open while another session claimed the checkout.
-              if (session) onDelete(session.id, removable && removeWorktree);
-              onOpenChange(false);
-            }}
-          >
-            Delete
+          <Button variant="destructive" onClick={flow.startDelete} disabled={flow.busy}>
+            {flow.busy ? (
+              <>
+                <Spinner aria-hidden className="size-4" />
+                {/* Named, because tearing a worktree down is the slow part
+                    and the one worth waiting through. */}
+                {flow.removable && flow.removeWorktree ? "Deleting worktree…" : "Deleting…"}
+              </>
+            ) : (
+              "Delete"
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>

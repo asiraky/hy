@@ -174,19 +174,32 @@ type sidecarConfig struct {
 	ClaudePath string `json:"claudePath,omitempty"`
 }
 
+// conversationID resolves which Claude conversation a CreateSession call names
+// or resumes. hy names the conversation at start — the same id starts a
+// session and later resumes it, so a server restart continues the conversation
+// rather than starting blank. But the name is not immutable: Claude Code
+// rotates its conversation id in place (/clear starts a new conversation under
+// a new id inside the same process), and the rotated id — reported back
+// through session.config_changed and replayed into the projection — is the
+// conversation this session actually is now. Resuming the original id after a
+// rotation would resurrect a cleared conversation and strand the live one.
+func conversationID(o adapter.CreateOptions) string {
+	if o.Resume && o.HarnessSessionID != "" {
+		return o.HarnessSessionID
+	}
+	if o.SessionID != "" {
+		return o.SessionID
+	}
+	return uuid.NewString()
+}
+
 func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, o adapter.CreateOptions) (adapter.Session, error) {
 	r, avail := a.resolve(ctx)
 	if !avail.OK() {
 		return nil, fmt.Errorf("claude is unavailable: %s", avail.Reason)
 	}
 
-	// We own session identity: the same id starts a session and later resumes
-	// it, so a server restart continues the conversation rather than starting
-	// blank.
-	sessionID := o.SessionID
-	if sessionID == "" {
-		sessionID = uuid.NewString()
-	}
+	sessionID := conversationID(o)
 
 	cfg := sidecarConfig{
 		Cwd:            o.Cwd,
@@ -202,9 +215,7 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 		Effort:                          o.Effort,
 		ClaudePath:                      r.claudePath,
 	}
-	// We own session identity: the same id names the conversation on create
-	// and resumes it later, so a server restart continues rather than starting
-	// blank. The SDK rejects both fields together.
+	// One field or the other, never both — the SDK rejects the pair.
 	if o.Resume {
 		cfg.Resume = sessionID
 	} else {
@@ -222,6 +233,15 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 	// credential mechanism: CLAUDE_CONFIG_DIR, CLAUDE_CODE_OAUTH_TOKEN, or
 	// ANTHROPIC_API_KEY select the account per process.
 	cmd.Env = append(adapter.MergeEnv(os.Environ(), o.Env), "CLAUDE_CODE_ENTRYPOINT=sdk-ts")
+	// The 1M context window is a process-start choice, not a runtime one: the
+	// CLI decides it from CLAUDE_CODE_DISABLE_1M_CONTEXT when it boots, and no
+	// control call changes it after. It is 1M by default on accounts that have
+	// it, which is expensive and rarely wanted, so hy opts in explicitly: a
+	// session runs 1M only when its model id carries the "[1m]" tag, and 200k
+	// otherwise. That makes the tag the real switch and 200k the default.
+	if !strings.Contains(o.Model, "[1m]") {
+		cmd.Env = append(cmd.Env, "CLAUDE_CODE_DISABLE_1M_CONTEXT=1")
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -246,6 +266,8 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 		cwd:              o.Cwd,
 		configDir:        claudeConfigDir(o.Cwd, o.Env),
 		harnessSessionID: sessionID,
+		model:            o.Model,
+		effort:           o.Effort,
 		events:           make(chan proto.Emission, 256),
 		streams:          map[string]*stream{},
 		done:             make(chan struct{}),
@@ -301,6 +323,7 @@ type session struct {
 	streams   map[string]*stream
 	sawResult bool
 	model     string
+	effort    string
 
 	// usage carries both cost accounting and window occupancy; it is kept on
 	// the session and re-emitted whole so a result (accounting + fallback
@@ -360,6 +383,26 @@ func (s *session) SetModel(ctx context.Context, model string) error {
 	}
 	s.mu.Lock()
 	s.model = model
+	// The cached window belonged to the old model. Clearing it stops a stale
+	// value (a 1M Opus window shown for a 200k Sonnet) from persisting: the
+	// next result recomputes from the new model, and the next context_usage
+	// report replaces it with the harness's authoritative figure.
+	s.usage.ContextWindow = 0
+	s.usage.ContextLimit = 0
+	s.mu.Unlock()
+	return nil
+}
+
+// SetEffort switches reasoning effort mid-session via the SDK's
+// applyFlagSettings, which changes effortLevel on a running streaming session
+// with no restart. Like SetModel it is a request: an effort the harness
+// refuses must surface as an error rather than be recorded as applied.
+func (s *session) SetEffort(ctx context.Context, effort string) error {
+	if err := s.conn.Call(ctx, "setEffort", map[string]any{"effort": effort}, nil); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.effort = effort
 	s.mu.Unlock()
 	return nil
 }
@@ -629,6 +672,7 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 // handleSDKMessage maps one Agent SDK message onto canonical events. This is
 // the only mapping in the system, and it is the reason the sidecar stays dumb.
 func (s *session) handleSDKMessage(msg map[string]json.RawMessage) {
+	s.trackSessionID(msg)
 	switch str(msg["type"]) {
 	case "system":
 		s.handleSystem(msg)
@@ -645,12 +689,48 @@ func (s *session) handleSDKMessage(msg map[string]json.RawMessage) {
 	}
 }
 
+// trackSessionID follows the harness's own conversation id, which hy names at
+// start but does not control afterwards: Claude Code rotates it in place when
+// the user runs /clear, silently starting a new conversation under a new id in
+// the same process. Every SDK message carries the id of the conversation it
+// belongs to, so a rotation shows up on the first message after it. It is
+// re-emitted as session.config_changed, which the projection folds into
+// HarnessSessionID — the id the next resume passes back. Missing this is how a
+// /clear'd session used to resurrect its cleared conversation after a server
+// restart, answering from history the user had discarded and knowing nothing
+// of the turns since the clear.
+func (s *session) trackSessionID(msg map[string]json.RawMessage) {
+	// Subagent traffic carries the parent Task's id, not the conversation's
+	// identity; only top-level messages speak for the session.
+	if str(msg["parent_tool_use_id"]) != "" {
+		return
+	}
+	id := str(msg["session_id"])
+	if id == "" {
+		return
+	}
+	s.mu.Lock()
+	changed := id != s.harnessSessionID
+	if changed {
+		s.harnessSessionID = id
+	}
+	s.mu.Unlock()
+	if changed {
+		s.emit(proto.Emit(proto.SessionConfigChanged, proto.SessionConfigChangedPayload{
+			HarnessSessionID: id,
+		}))
+	}
+}
+
 // contextWindowFor is the fallback window used only when the harness cannot
 // report context usage directly (an older CLI without the control method): the
-// standard 200k unless the model id opts into the 1M beta. When
-// getContextUsage is available it supplies the real window and this is unused.
+// standard 200k unless the model is one of the 1M ones. The Opus 5 generation
+// is 1M whether or not its id carries the "[1m]" tag (the harness reports the
+// bare "claude-opus-5" mid-session), and older Opus ids run at 1M too, so the
+// family name is recognised as well as the tag. When getContextUsage is
+// available it supplies the real window and this is unused.
 func contextWindowFor(model string) int64 {
-	if strings.Contains(model, "[1m]") {
+	if strings.Contains(model, "[1m]") || strings.Contains(model, "opus") {
 		return 1_000_000
 	}
 	return 200_000
@@ -670,9 +750,10 @@ func (s *session) handleSystem(msg map[string]json.RawMessage) {
 		remarshal(msg, &init)
 		s.mu.Lock()
 		s.model = init.Model
+		harnessID := s.harnessSessionID
 		s.mu.Unlock()
 		s.emit(proto.Emit(proto.SessionConfigChanged, proto.SessionConfigChangedPayload{
-			Model: init.Model, Mode: init.PermissionMode, HarnessSessionID: s.harnessSessionID,
+			Model: init.Model, Mode: init.PermissionMode, HarnessSessionID: harnessID,
 		}))
 	case "compact_boundary":
 		var b struct {

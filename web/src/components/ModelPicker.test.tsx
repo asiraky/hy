@@ -62,7 +62,13 @@ const claude: HarnessMeta = {
           resolves: "claude-opus-5[1m]",
           default: true,
         },
-        { id: "sonnet", label: "Sonnet", version: "Sonnet 5", description: "Efficient for routine tasks" },
+        {
+          id: "sonnet",
+          label: "Sonnet",
+          version: "Sonnet 5",
+          description: "Efficient for routine tasks",
+          efforts: ["low", "medium", "high", "xhigh"],
+        },
         { id: "claude-opus-4-8", label: "Opus 4.8", version: "Opus 4.8", group: "legacy" },
         { id: "claude-opus-4-7", label: "Opus 4.7", version: "Opus 4.7", group: "legacy" },
       ],
@@ -220,5 +226,130 @@ describe("ModelPicker", () => {
 
     expect(screen.queryByText("Codex Work")).toBeNull();
     expect(row("Sonnet")).toBeTruthy();
+  });
+});
+
+describe("ModelPicker effort", () => {
+  const effortProps = {
+    lockInstance: true,
+    value: { harness: "claude", instance: "claude", model: "sonnet" },
+    efforts: ["low", "medium", "high", "xhigh"],
+  };
+
+  /** Opens the model menu, then the effort submenu out of it. */
+  function openEfforts(props: Partial<Parameters<typeof ModelPicker>[0]> = {}) {
+    const onEffortChange = vi.fn();
+    render(
+      <ModelPicker
+        harnesses={[claude]}
+        onChange={() => {}}
+        onEffortChange={onEffortChange}
+        {...effortProps}
+        {...props}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText("Harness and model"));
+    fireEvent.click(screen.getByLabelText("Reasoning effort"));
+    return onEffortChange;
+  }
+
+  it("names the model and the level together, so one control says both", () => {
+    render(
+      <ModelPicker
+        harnesses={[claude]}
+        onChange={() => {}}
+        onEffortChange={() => {}}
+        {...effortProps}
+        effort="xhigh"
+      />,
+    );
+
+    const trigger = screen.getByLabelText("Harness and model");
+    expect(trigger.textContent).toContain("Sonnet");
+    // The harness's id is "xhigh"; nobody should have to read that.
+    expect(trigger.textContent).toContain("Extra high");
+    expect(trigger.textContent).not.toContain("xhigh");
+  });
+
+  it("says Auto when no level is named, rather than going blank", () => {
+    render(
+      <ModelPicker
+        harnesses={[claude]}
+        onChange={() => {}}
+        onEffortChange={() => {}}
+        {...effortProps}
+        effort=""
+      />,
+    );
+
+    expect(screen.getByLabelText("Harness and model").textContent).toContain("Auto");
+  });
+
+  it("opens the levels as a submenu of the model menu, formatted", () => {
+    openEfforts({ effort: "high" });
+
+    const menu = within(document.body);
+    expect(menu.getByText("Extra high")).toBeTruthy();
+    expect(menu.getByText("Medium")).toBeTruthy();
+  });
+
+  it("badges the row a session gets when no level is chosen", () => {
+    openEfforts({ effort: "low" });
+
+    const badges = document.querySelectorAll("[data-slot='badge']");
+    // Exactly one: no harness reports a default level, so the only honest
+    // claim is about the row that defers to it.
+    expect(badges.length).toBe(1);
+    expect(badges[0].textContent).toBe("Default");
+    expect(badges[0].closest("[data-slot='command-item']")!.textContent).toContain("Auto");
+  });
+
+  it("names a level the model can no longer switch, rather than dropping it", () => {
+    // A legacy model reports no levels; the session still ran at one, and the
+    // trigger is where it is said — not in a second control beside it.
+    render(
+      <ModelPicker
+        harnesses={[claude]}
+        value={{ harness: "claude", instance: "claude", model: "claude-opus-4-7" }}
+        onChange={() => {}}
+        onEffortChange={() => {}}
+        efforts={[]}
+        effort="high"
+        lockInstance
+      />,
+    );
+
+    expect(screen.getByLabelText("Harness and model").textContent).toContain("High");
+    fireEvent.click(screen.getByLabelText("Harness and model"));
+    expect(screen.queryByLabelText("Reasoning effort")).toBeNull();
+  });
+
+  it("hands back the harness's own id, not the label shown for it", () => {
+    const onEffortChange = openEfforts({ effort: "low" });
+
+    fireEvent.click(screen.getByText("Extra high"));
+
+    expect(onEffortChange).toHaveBeenCalledWith("xhigh");
+  });
+
+  it("offers a way back to the harness default once a level is set", () => {
+    const onEffortChange = openEfforts({ effort: "high" });
+
+    fireEvent.click(screen.getByText("Auto"));
+
+    expect(onEffortChange).toHaveBeenCalledWith("");
+  });
+
+  it("keeps the effort row out of the way of callers that do not offer levels", () => {
+    render(
+      <ModelPicker
+        harnesses={[claude]}
+        value={{ harness: "claude", instance: "claude", model: "sonnet" }}
+        onChange={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText("Harness and model"));
+
+    expect(screen.queryByLabelText("Reasoning effort")).toBeNull();
   });
 });

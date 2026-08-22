@@ -6,25 +6,28 @@ import (
 	"github.com/asiraky/hy/internal/adapter"
 )
 
-// The SDK's own rows, as observed from claude CLI 2.1.237. The mapping has to
-// survive them verbatim: this is the shape hy actually receives.
+// The SDK's own rows, as observed from claude CLI 2.1.238 — including the twin
+// Opus aliases (a generic "default" and a named "opus[1m]") that resolve to the
+// same model, and a Haiku row.
 func liveRows() []modelInfo {
 	return []modelInfo{
 		{Value: "default", ResolvedModel: "claude-opus-5[1m]", DisplayName: "Default (recommended)", Description: "Opus 5 with 1M context · Best for everyday, complex tasks", SupportedEffortLevels: []string{"low", "medium", "high", "xhigh", "max"}},
-		{Value: "claude-fable-5[1m]", ResolvedModel: "claude-fable-5", DisplayName: "Fable", Description: "Fable 5 · Most capable for your hardest and longest-running tasks"},
+		{Value: "opus[1m]", ResolvedModel: "claude-opus-5[1m]", DisplayName: "Opus (1M context)", Description: "Opus 5 with 1M context · Best for everyday, complex tasks", SupportedEffortLevels: []string{"low", "medium", "high", "xhigh", "max"}},
+		{Value: "fable", ResolvedModel: "claude-fable-5", DisplayName: "Fable", Description: "Fable 5 · Most capable for your hardest and longest-running tasks", SupportedEffortLevels: []string{"low", "medium", "high", "xhigh", "max"}},
+		{Value: "sonnet", ResolvedModel: "claude-sonnet-5", DisplayName: "Sonnet", Description: "Sonnet 5 · Efficient for routine tasks", SupportedEffortLevels: []string{"low", "medium", "high", "xhigh", "max"}},
 		{Value: "haiku", ResolvedModel: "claude-haiku-4-5-20251001", DisplayName: "Haiku", Description: "Haiku 4.5 · Fastest for quick answers"},
 	}
 }
 
-func TestMapClaudeModelsSplitsVersionFromDescription(t *testing.T) {
+// Each current row is the bare concrete model (so it defaults to 200k and
+// matches what the harness reports), labelled by its generation, with the
+// purpose kept as the description.
+func TestMapClaudeModelsCleanRows(t *testing.T) {
 	got := mapClaudeModels(liveRows())
 
-	fable := findModel(t, got, "claude-fable-5[1m]")
-	if fable.Label != "Fable" {
-		t.Errorf("label = %q, want Fable", fable.Label)
-	}
-	if fable.Version != "Fable 5" {
-		t.Errorf("version = %q, want %q", fable.Version, "Fable 5")
+	fable := findModel(t, got, "claude-fable-5")
+	if fable.Label != "Fable 5" {
+		t.Errorf("label = %q, want Fable 5", fable.Label)
 	}
 	if fable.Description != "Most capable for your hardest and longest-running tasks" {
 		t.Errorf("description = %q, still carries the version", fable.Description)
@@ -32,44 +35,81 @@ func TestMapClaudeModelsSplitsVersionFromDescription(t *testing.T) {
 	if fable.Resolves != "claude-fable-5" {
 		t.Errorf("resolves = %q, want claude-fable-5", fable.Resolves)
 	}
+	// No current row carries the "[1m]" tag: the tag is the 1M opt-in, chosen
+	// separately, not part of the default id.
+	for _, m := range got {
+		if m.Group == "" && stringsContains(m.ID, "[1m]") {
+			t.Errorf("current row %q carries a context tag", m.ID)
+		}
+	}
 }
 
-// The picker preselects whatever the harness calls its default, so exactly one
-// row must carry the flag — and it must be the harness's row, not one hy
-// invented.
-func TestMapClaudeModelsMarksOneDefault(t *testing.T) {
+// Haiku is a quick-answer model, not a coding one, so it is dropped.
+func TestMapClaudeModelsDropsHaiku(t *testing.T) {
+	for _, m := range mapClaudeModels(liveRows()) {
+		if stringsContains(m.ID, "haiku") {
+			t.Fatalf("haiku was offered: %+v", m)
+		}
+	}
+}
+
+// The two Opus aliases resolve to one model, so the picker shows one "Opus 5"
+// row — the bare id, carrying the recommended flag. Exactly one row is default.
+func TestMapClaudeModelsMergesOpusToOneRow(t *testing.T) {
 	got := mapClaudeModels(liveRows())
 
+	var opus []adapter.ModelMeta
 	var defaults []string
 	for _, m := range got {
+		if m.Resolves == "claude-opus-5" {
+			opus = append(opus, m)
+		}
 		if m.Default {
 			defaults = append(defaults, m.ID)
 		}
 	}
-	if len(defaults) != 1 || defaults[0] != "default" {
-		t.Fatalf("default rows = %v, want exactly [default]", defaults)
+	if len(opus) != 1 {
+		t.Fatalf("rows resolving to Opus 5 = %d, want 1", len(opus))
 	}
-	if got[0].ID != "default" {
-		t.Errorf("first row = %q, want the default first", got[0].ID)
+	if opus[0].ID != "claude-opus-5" || opus[0].Label != "Opus 5" {
+		t.Errorf("opus row = {id:%q label:%q}, want {claude-opus-5, Opus 5}", opus[0].ID, opus[0].Label)
 	}
-	if got[0].Version != "Opus 5 with 1M context" {
-		t.Errorf("the default row must name what it resolves to; version = %q", got[0].Version)
+	if len(defaults) != 1 || defaults[0] != "claude-opus-5" {
+		t.Fatalf("default rows = %v, want exactly [claude-opus-5]", defaults)
 	}
 }
 
-// hy offers only what the harness serves: no hardcoded legacy group is
-// appended, because the installed Claude Code no longer serves those older ids
-// and offering a model it will not run is what let the picker and the context
-// meter disagree.
-func TestMapClaudeModelsOffersOnlyLiveRows(t *testing.T) {
+// Current models are ordered by strength — Fable, Opus, Sonnet — and the
+// curated legacy group is appended, folded away.
+func TestMapClaudeModelsOrdersByStrengthThenLegacy(t *testing.T) {
 	got := mapClaudeModels(liveRows())
 
-	if len(got) != len(liveRows()) {
-		t.Fatalf("len = %d, want exactly the live rows", len(got))
-	}
+	var currentIDs []string
 	for _, m := range got {
-		if m.Group != "" {
-			t.Errorf("%s group = %q, want current — nothing is folded away", m.ID, m.Group)
+		if m.Group == "" {
+			currentIDs = append(currentIDs, m.ID)
+		}
+	}
+	want := []string{"claude-fable-5", "claude-opus-5", "claude-sonnet-5"}
+	if len(currentIDs) != len(want) {
+		t.Fatalf("current ids = %v, want %v", currentIDs, want)
+	}
+	for i := range want {
+		if currentIDs[i] != want[i] {
+			t.Fatalf("current order = %v, want %v", currentIDs, want)
+		}
+	}
+	firstLegacy := len(currentIDs)
+	if len(got) != firstLegacy+len(legacyModels) {
+		t.Fatalf("len = %d, want %d current + %d legacy", len(got), firstLegacy, len(legacyModels))
+	}
+	for _, want := range legacyModels {
+		m := findModel(t, got, want.ID)
+		if m.Group != adapter.GroupLegacy {
+			t.Errorf("%s group = %q, want legacy", m.ID, m.Group)
+		}
+		if m.Version == m.Label && m.Version != "" {
+			t.Errorf("%s renders its name twice (label==version)", m.ID)
 		}
 	}
 }
@@ -78,14 +118,15 @@ func TestMapClaudeModelsIgnoresEmptyAndUnlisted(t *testing.T) {
 	if got := mapClaudeModels(nil); got != nil {
 		t.Errorf("no live rows should map to nothing, got %v", got)
 	}
-	got := mapClaudeModels([]modelInfo{{Value: ""}, {Value: "sonnet", DisplayName: "Sonnet", Description: "Sonnet 5"}})
-	if len(got) != 1 {
-		t.Fatalf("len = %d, want the one real row", len(got))
+	got := mapClaudeModels([]modelInfo{{Value: ""}, {Value: "sonnet", ResolvedModel: "claude-sonnet-5", DisplayName: "Sonnet", Description: "Sonnet 5"}})
+	if len(got) != 1+len(legacyModels) {
+		t.Fatalf("len = %d, want the one real row plus legacy", len(got))
 	}
-	sonnet := findModel(t, got, "sonnet")
-	// A description with no separator is all version, not half a sentence.
-	if sonnet.Version != "" || sonnet.Description != "Sonnet 5" {
-		t.Errorf("unseparated description split into %q / %q", sonnet.Version, sonnet.Description)
+	sonnet := findModel(t, got, "claude-sonnet-5")
+	// No " · " separator means no generation to read, so the label falls back
+	// to the harness's display name rather than inventing one.
+	if sonnet.Label != "Sonnet" {
+		t.Errorf("label = %q, want the display-name fallback Sonnet", sonnet.Label)
 	}
 }
 
@@ -98,4 +139,13 @@ func findModel(t *testing.T, in []adapter.ModelMeta, id string) adapter.ModelMet
 	}
 	t.Fatalf("no model %q in %v", id, in)
 	return adapter.ModelMeta{}
+}
+
+func stringsContains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }

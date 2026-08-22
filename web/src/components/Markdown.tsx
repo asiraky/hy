@@ -1,11 +1,11 @@
 import type { Element, Text } from "hast";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
-import { toast } from "sonner";
 
+import { useCopy } from "~/lib/clipboard";
 import { fileIconFor } from "~/lib/fileIcons";
 import { useOpenPath } from "~/lib/openPath";
 import { detectPath } from "~/lib/paths";
@@ -58,29 +58,12 @@ function codeLang(node: Element | undefined): string {
 }
 
 function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  useEffect(() => () => clearTimeout(timer.current), []);
-
-  const copy = useCallback(async () => {
-    try {
-      // Only available over https or on localhost; hy is served over both, so
-      // the failure has to be said out loud rather than silently doing nothing.
-      if (!navigator.clipboard) throw new Error("Clipboard unavailable in this context");
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), 1500);
-    } catch (e) {
-      toast.error("Could not copy", { description: e instanceof Error ? e.message : String(e) });
-    }
-  }, [text]);
+  const { copied, copy } = useCopy();
 
   return (
     <button
       type="button"
-      onClick={copy}
+      onClick={() => void copy(text)}
       aria-label={copied ? "Copied" : "Copy code"}
       className="text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring flex size-6 shrink-0 items-center justify-center rounded-md transition-colors outline-none focus-visible:ring-2"
     >
@@ -119,13 +102,20 @@ function InlineCode({ children }: { children?: ReactNode }) {
     return <code className="bg-muted rounded px-1 py-0.5 font-mono text-[0.9em]">{children}</code>;
   }
 
+  // The chip has to read as the same size as the inline `code` beside it —
+  // same 0.9em mono, same px-1/py-0.5 box — while an inline-flex box, unlike a
+  // plain inline one, does contribute its own height to the line. The negative
+  // vertical margin cancels exactly the padding it adds, so the chip looks the
+  // same as inline code but never pushes lines apart. `leading-[normal]` (the
+  // font's own metrics) rather than a fixed ratio keeps the box hugging the
+  // glyphs the way inline code's content area does.
   const { Icon, tone } = fileIconFor(detected.path);
   return (
     <button
       type="button"
       onClick={() => open!(detected.path, detected.line)}
       title={`Open ${detected.path}`}
-      className="bg-muted hover:bg-accent focus-visible:ring-ring -my-px inline-flex max-w-full cursor-pointer items-baseline gap-1 rounded px-1 py-0 align-baseline font-mono text-[0.9em] leading-none shadow-[inset_0_0_0_1px_var(--color-border)] transition-colors outline-none focus-visible:ring-2"
+      className="bg-muted hover:bg-accent focus-visible:ring-ring -my-0.5 inline-flex max-w-full cursor-pointer items-baseline gap-1 rounded px-1 py-0.5 align-baseline font-mono text-[0.9em] leading-[normal] shadow-[inset_0_0_0_1px_var(--color-border)] transition-colors outline-none focus-visible:ring-2"
     >
       <Icon className={cn("size-[0.85em] shrink-0 self-center", tone)} />
       <span className="truncate">{text}</span>

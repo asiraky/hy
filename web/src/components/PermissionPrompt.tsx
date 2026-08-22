@@ -1,5 +1,4 @@
-import { ShieldQuestionMarkIcon } from "lucide-react";
-
+import { AttentionLabel } from "~/components/AttentionLabel";
 import { Button } from "~/components/ui/button";
 import type { PendingPermission } from "~/protocol";
 
@@ -18,24 +17,21 @@ export function PermissionPrompt({
       : null;
 
   return (
-    // Sits directly above the composer, so it is already where a thumb rests.
-    // The attention band is a theme role, not a hardcoded amber, so it reads
-    // as deliberate in both themes rather than glowing in one of them.
-    <div
-      role="group"
-      aria-label="Permission request"
-      className="attention-in border-attention bg-attention-surface shrink-0 border-t-2"
-    >
-      <div className="mx-auto max-w-3xl px-4 py-3.5 md:px-5">
-        <div className="flex items-center gap-2">
-          <ShieldQuestionMarkIcon className="text-attention-foreground size-3.5 shrink-0" />
-          <span className="text-attention-foreground font-mono text-[10px] tracking-wide uppercase">
-            permission
-          </span>
+    // Floats in the band above the composer, where a thumb already rests, as a
+    // rounded card matching the input rather than a full-bleed coloured tray.
+    // Attention is a small pulsing dot, not a wall of amber, so it reads as
+    // deliberate in both themes rather than glowing in one of them.
+    <div className="mx-auto max-w-3xl px-4 pb-2.5 md:px-5">
+      <div
+        role="group"
+        aria-label="Permission request"
+        className="attention-in bg-card ring-attention/25 rounded-2xl border p-4 shadow-lg ring-1"
+      >
+        <AttentionLabel label="permission">
           <span className="text-muted-foreground font-mono text-[11px]">{request.toolName}</span>
-        </div>
+        </AttentionLabel>
 
-        <p className="mt-1.5 font-mono text-[13px] break-words">{request.title}</p>
+        <p className="mt-2 font-mono text-[13px] break-words">{request.title}</p>
 
         {detail && (
           <pre className="scroll-thin bg-muted text-muted-foreground mt-2 max-h-20 overflow-auto overscroll-contain rounded-md p-2 font-mono text-[11px] leading-relaxed md:max-h-32">

@@ -222,6 +222,14 @@ type ModelSwitcher interface {
 	SetModel(ctx context.Context, model string) error
 }
 
+// EffortSwitcher is implemented by sessions whose harness can change reasoning
+// effort mid-conversation. The effort is one of the running model's own
+// Efforts ids. A harness that cannot switch simply does not implement this,
+// and the host reports that legibly instead of silently ignoring it.
+type EffortSwitcher interface {
+	SetEffort(ctx context.Context, effort string) error
+}
+
 // ComposerItem is one provider-native token the composer can discover. The
 // core deliberately does not interpret Trigger, InsertText, or Action: they
 // are the adapter's normalized presentation and routing contract.

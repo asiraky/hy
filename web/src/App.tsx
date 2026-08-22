@@ -13,7 +13,7 @@ import type { NewSessionInput } from "./components/NewSession";
 import { ProjectSettings } from "./components/ProjectSettings";
 import { PermissionPrompt } from "./components/PermissionPrompt";
 import { ElicitationPrompt } from "./components/ElicitationPrompt";
-import { DeleteSessionDialog } from "./components/DeleteSessionDialog";
+import { DeleteSessionDialog, useDeleteSession } from "./components/DeleteSessionDialog";
 import { Sidebar } from "./components/Sidebar";
 import { Transcript } from "./components/Transcript";
 import { IconButton } from "./components/IconButton";
@@ -27,6 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "./components/ui/select";
+import { loadResume } from "./resume";
 import { cn } from "./lib/utils";
 import { CoffeeIcon, FileDiffIcon, MessagesSquareIcon, PanelLeftIcon, PlusIcon, SettingsIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -39,21 +40,37 @@ const LAST_SESSION = "hy.lastSession";
 const SHOW_MODE_SWITCHER = false;
 
 export function App() {
+  // The snapshot a previous page of this tab saved as it went to background
+  // (resume.ts). A mobile browser discards a backgrounded tab and reloads it
+  // on return; hydrating from the cache paints the session as it was left —
+  // right frame one, right scroll position — instead of "Attaching…", and the
+  // socket then fetches only what the page missed. Cleared once consumed, and
+  // if the session turns out to be gone when the list arrives.
+  const [resume, setResume] = useState(() => {
+    try {
+      return loadResume(localStorage.getItem(LAST_SESSION));
+    } catch {
+      return null;
+    }
+  });
+  // The copy the socket-setup effect reads: priming must use what the page
+  // hydrated with, not what later clearing left behind.
+  const resumeRef = useRef(resume);
   // The socket callbacks below outlive any single render, so they read the
   // attached session from a ref rather than a captured closure. The ref is
   // written after commit, never during render, so it can only ever hold a
   // value the UI actually rendered.
-  const activeRef = useRef<string | null>(null);
+  const activeRef = useRef<string | null>(resume?.state.sessionId ?? null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [harnesses, setHarnesses] = useState<HarnessMeta[]>([]);
   const [defaultCwd, setDefaultCwd] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [state, setState] = useState<SessionState | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(resume?.state.sessionId ?? null);
+  const [state, setState] = useState<SessionState | null>(resume?.state ?? null);
   // Read by long-lived callbacks (openPath) that must see the current state
   // without re-creating themselves on every event.
-  const stateRef = useRef<SessionState | null>(null);
+  const stateRef = useRef<SessionState | null>(resume?.state ?? null);
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
@@ -66,6 +83,26 @@ export function App() {
   // the map is pruned as sessions go away (see below).
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [composerRevision, setComposerRevision] = useState(0);
+  // Where each session's transcript was scrolled, kept up here for the same
+  // reason as the drafts: switching sessions unmounts the Transcript, so a
+  // position it owned would be lost every time — you would come back to a
+  // session you were reading half-way up and find yourself at the bottom.
+  // A ref rather than state: the transcript reports every scroll, and nothing
+  // on the page renders from this, so re-rendering the app on each one would
+  // be pure cost. Seeded from the resume cache so the boot restore and the
+  // switch restore are one path. Session scope only, pruned with the drafts.
+  const scrollPositions = useRef<Record<string, { top: number; atBottom: boolean }>>(
+    resume ? { [resume.state.sessionId]: { top: resume.scrollTop, atBottom: resume.atBottom } } : {},
+  );
+  // Sessions the list has taken away. A deleted session's transcript reports
+  // one last position as it unmounts, and that unmount happens after the prune
+  // below has already dropped it — so the id is refused outright rather than
+  // being written straight back in.
+  const goneSessions = useRef<Set<string>>(new Set());
+  const recordScroll = useCallback((id: string, top: number, atBottom: boolean) => {
+    if (goneSessions.current.has(id)) return;
+    scrollPositions.current[id] = { top, atBottom };
+  }, []);
   const setDraft = useCallback(
     (id: string, text: string) =>
       setDrafts((d) => (d[id] === text ? d : { ...d, [id]: text })),
@@ -180,6 +217,10 @@ export function App() {
       onAccess: setAccess,
     });
     clientRef.current = client;
+    // A resumed page attaches where it left off: the client carries the
+    // cached state and cursor into its first attach, and the server answers
+    // with just the gap.
+    if (resumeRef.current) client.prime(resumeRef.current.state);
     client.connect();
     return () => client.close();
   }, []);
@@ -197,7 +238,24 @@ export function App() {
   useEffect(() => {
     if (!sessionsLoaded || restoreAttempted.current) return;
     restoreAttempted.current = true;
-    if (activeId) return;
+    if (activeId) {
+      // Hydrated from the resume cache before the list could say whether the
+      // session still exists. It usually does; when it doesn't — deleted or
+      // closed from elsewhere while the page was dead — let go the same way
+      // a live delete would. The seenActive effect below can't: it only acts
+      // on sessions it saw in a list first.
+      if (sessions.some((s) => s.id === activeId && s.phase !== "closed")) return;
+      // Including the position the cache seeded: the prune below only drops
+      // sessions it saw in a list, and this one never made it into one.
+      delete scrollPositions.current[activeId];
+      goneSessions.current.add(activeId);
+      setActiveId(null);
+      setState(null);
+      setResume(null);
+      clientRef.current?.detach();
+      if (!isDesktop) setSidebarOpen(true);
+      return;
+    }
     const last = localStorage.getItem(LAST_SESSION);
     const pick = sessions.find((s) => s.id === last && s.phase !== "closed") ?? null;
     if (pick) select(pick.id);
@@ -381,11 +439,21 @@ export function App() {
     [activeId],
   );
 
+  // The returned promise settles when the server has *accepted* the delete,
+  // not when it is done — the session is gone when it leaves the list, which
+  // is what the sidebar waits on. Rejecting it is the sidebar's cue to stop
+  // waiting, so the error is re-thrown after it has been reported.
   const remove = useCallback(
     (id: string, removeWorktree: boolean) => {
       if (id !== activeRef.current) select(id);
-      clientRef.current?.command("delete_session", { sessionId: id, removeWorktree }).catch((e) => {
+      const client = clientRef.current;
+      if (!client) {
+        toast.error("Could not delete that session", { description: "Not connected." });
+        return Promise.reject(new Error("not connected"));
+      }
+      return client.command("delete_session", { sessionId: id, removeWorktree }).catch((e) => {
         toast.error("Could not delete that session", { description: e.message });
+        throw e;
       });
     },
     [select],
@@ -415,10 +483,15 @@ export function App() {
   const meta = useMemo(() => sessions.find((s) => s.id === activeId), [sessions, activeId]);
 
   // Whether the work in this session has landed, and the confirmation the
-  // transcript's prompt opens. The dialog is the sidebar's own, so "finish
-  // with this session" and the row's X are the same action with the same
-  // guards, reached from two places.
-  const [confirmingDelete, setConfirmingDelete] = useState<SessionMeta | null>(null);
+  // transcript's prompt opens. The dialog and its guards are the sidebar's
+  // own, so "finish with this session" and the row's X are the same action
+  // reached from two places; only the sidebar's row animation is not shared,
+  // because the transcript has no row.
+  const deleteFlow = useDeleteSession({
+    sessions,
+    onDelete: remove,
+    projectRoot: (id) => projects.find((p) => p.id === id)?.root,
+  });
   const fetchPR = useCallback(async (sessionId: string): Promise<PullRequest | null> => {
     const res = await clientRef.current!.command("session_pr", { sessionId });
     return (res.pr ?? null) as PullRequest | null;
@@ -462,6 +535,15 @@ export function App() {
       if (!activeId) return;
       clientRef.current?.command("set_model", { sessionId: activeId, model: modelId }).catch((e) => {
         toast.error("Could not switch model", { description: e.message });
+      });
+    },
+    [activeId],
+  );
+  const switchEffort = useCallback(
+    (effort: string) => {
+      if (!activeId) return;
+      clientRef.current?.command("set_effort", { sessionId: activeId, effort }).catch((e) => {
+        toast.error("Could not change reasoning effort", { description: e.message });
       });
     },
     [activeId],
@@ -514,6 +596,15 @@ export function App() {
   const seenSessions = useRef<Set<string>>(new Set());
   useEffect(() => {
     for (const s of sessions) seenSessions.current.add(s.id);
+    // The scroll positions go the same way, and for the same reason: a
+    // deleted session's offset means nothing, and a new id reusing it would
+    // be handed a stranger's place in the transcript.
+    for (const s of sessions) goneSessions.current.delete(s.id);
+    for (const id of Object.keys(scrollPositions.current)) {
+      if (sessions.some((s) => s.id === id) || !seenSessions.current.has(id)) continue;
+      delete scrollPositions.current[id];
+      goneSessions.current.add(id);
+    }
     setDrafts((d) => {
       const live = new Set(sessions.map((s) => s.id));
       const next: Record<string, string> = {};
@@ -534,6 +625,13 @@ export function App() {
   // visibly rises: it reads as the composer pushing the transcript up, even
   // though it is floating.
   const hasSession = state != null;
+  // The resume cache is one boot's worth of help. Its scroll position moved
+  // into the per-session map above as the page hydrated, and the transcript
+  // takes over reporting from there, so once a session is on screen the blob
+  // has done its job.
+  useEffect(() => {
+    if (resume && hasSession) setResume(null);
+  }, [resume, hasSession]);
   useEffect(() => {
     if (!hasSession || typeof ResizeObserver === "undefined") return;
     const overlay = overlayRef.current;
@@ -574,13 +672,7 @@ export function App() {
         projectRoot={(id)=>projects.find(p=>p.id===id)?.root}
       />
 
-      <DeleteSessionDialog
-        session={confirmingDelete}
-        sessions={sessions}
-        projectRoot={(id)=>projects.find(p=>p.id===id)?.root}
-        onOpenChange={(open) => !open && setConfirmingDelete(null)}
-        onDelete={remove}
-      />
+      <DeleteSessionDialog flow={deleteFlow} />
 
       <main
         className={cn(
@@ -666,7 +758,7 @@ export function App() {
             <div className="from-background pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-gradient-to-b to-transparent" />
 
             <OpenPathContext.Provider value={openPath}>
-              <Transcript state={state} onContinue={()=>activeId&&clientRef.current?.command("continue_session",{sessionId:activeId})} onRetryProvision={()=>activeId&&clientRef.current?.command("retry_provision",{sessionId:activeId})} onCleanup={()=>activeId&&clientRef.current?.command("cleanup_session",{sessionId:activeId})} onForceDelete={()=>activeId&&forceDelete(activeId)} onOpenDiff={openDiff} pr={pr} onFinish={()=>meta&&setConfirmingDelete(meta)} />
+              <Transcript key={activeId} state={state} initialScroll={activeId ? scrollPositions.current[activeId] : undefined} onScrollChange={recordScroll} onContinue={()=>activeId&&clientRef.current?.command("continue_session",{sessionId:activeId})} onRetryProvision={()=>activeId&&clientRef.current?.command("retry_provision",{sessionId:activeId})} onCleanup={()=>activeId&&clientRef.current?.command("cleanup_session",{sessionId:activeId})} onForceDelete={()=>activeId&&forceDelete(activeId)} onOpenDiff={openDiff} pr={pr} onFinish={()=>meta&&deleteFlow.ask(meta)} />
             </OpenPathContext.Provider>
 
             {/* The mirror of the header fade: content dissolves into the
@@ -713,6 +805,7 @@ export function App() {
                 model={state.model}
                 effort={state.effort}
                 onSwitchModel={switchModel}
+                onSwitchEffort={switchEffort}
                 usage={state.usage}
                 loadComposerItems={loadComposerItems}
                 onRunClientAction={runClientComposerAction}

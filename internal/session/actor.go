@@ -131,6 +131,7 @@ const (
 	cmdActivate      = "activate"
 	cmdSetMode       = "set_mode"
 	cmdSetModel      = "set_model"
+	cmdSetEffort     = "set_effort"
 	cmdListComposer  = "list_composer_items"
 	cmdRunComposer   = "run_composer_action"
 	cmdHarnessEvent  = "harness_event"
@@ -455,6 +456,13 @@ func (a *Actor) SetModel(ctx context.Context, model string) error {
 	return err
 }
 
+// SetEffort switches the harness's reasoning effort mid-session and records the
+// change as a session.config_changed event, so every presenter sees it.
+func (a *Actor) SetEffort(ctx context.Context, effort string) error {
+	_, err := a.call(ctx, command{kind: cmdSetEffort, effort: effort})
+	return err
+}
+
 // ComposerItems asks the live adapter what this exact session can invoke.
 func (a *Actor) ComposerItems(ctx context.Context) ([]adapter.ComposerItem, error) {
 	v, err := a.call(ctx, command{kind: cmdListComposer})
@@ -658,6 +666,32 @@ func (a *Actor) handle(c command) (stop bool) {
 			return false
 		}
 		a.append(proto.Emit(proto.SessionConfigChanged, proto.SessionConfigChangedPayload{Model: c.model}))
+		c.reply <- cmdResult{}
+
+	case cmdSetEffort:
+		if a.state.Closed {
+			c.reply <- cmdResult{err: ErrClosed}
+			return false
+		}
+		if a.sess == nil {
+			c.reply <- cmdResult{err: ErrNotReady}
+			return false
+		}
+		switcher, ok := a.sess.(adapter.EffortSwitcher)
+		if !ok {
+			c.reply <- cmdResult{err: errors.New("this harness cannot change reasoning effort mid-session")}
+			return false
+		}
+		// Bounded for the same reason as cmdSetModel: a wedged harness must
+		// not stall the actor loop forever.
+		effortCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		err := switcher.SetEffort(effortCtx, c.effort)
+		cancel()
+		if err != nil {
+			c.reply <- cmdResult{err: err}
+			return false
+		}
+		a.append(proto.Emit(proto.SessionConfigChanged, proto.SessionConfigChangedPayload{Effort: &c.effort}))
 		c.reply <- cmdResult{}
 
 	case cmdListComposer:
