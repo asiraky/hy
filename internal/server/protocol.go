@@ -114,6 +114,13 @@ type sessionArgs struct {
 	SessionID string `json:"sessionId"`
 }
 
+// summarizeArgs asks for a fresh summary of one session. There is no "use the
+// cached one" flag: the command is only sent when a client wants a new answer,
+// and the client holds the last one it was given.
+type summarizeArgs struct {
+	SessionID string `json:"sessionId"`
+}
+
 type fileDiffArgs struct {
 	SessionID string `json:"sessionId"`
 	Path      string `json:"path"`

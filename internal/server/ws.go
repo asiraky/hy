@@ -234,6 +234,22 @@ func (c *conn) detachAll() {
 	}
 }
 
+// commandTimeout bounds one command. Sixty seconds is the rule: every command
+// here either talks to a local process or reads the log, and one that has not
+// answered in a minute is wedged.
+//
+// Summarising is the exception, and honestly so. It starts a cold harness
+// against a model and waits for prose, which on a slow machine or a long
+// transcript is minutes rather than seconds — and the session-level timeout it
+// runs under is shorter than this, so the harness still gets the last word on
+// giving up.
+func commandTimeout(command string) time.Duration {
+	if command == "summarize_session" {
+		return 5 * time.Minute
+	}
+	return 60 * time.Second
+}
+
 // command executes an idempotent command. A repeated commandId replays the
 // stored result rather than re-executing, so a retry after a dropped
 // connection cannot double-send a prompt.
@@ -245,7 +261,7 @@ func (c *conn) command(f clientFrame) {
 	// A command belongs to the user operation, not to the socket that happened
 	// to carry it. Let it finish and persist its result after a disconnect so a
 	// reconnect can recover the acknowledgement with the same command id.
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout(f.Command))
 	defer cancel()
 
 	for {
@@ -542,6 +558,17 @@ func (c *conn) execute(ctx context.Context, f clientFrame) (any, error) {
 			return nil, err
 		}
 		return map[string]any{"file": file}, nil
+
+	case "summarize_session":
+		var a summarizeArgs
+		if err := json.Unmarshal(f.Args, &a); err != nil {
+			return nil, err
+		}
+		summary, err := c.srv.mgr.SummarizeSession(ctx, a.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"summary": summary}, nil
 
 	case "get_user_config":
 		cfg, err := userconfig.Load()

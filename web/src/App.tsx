@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Client, wsURL, type ConnectionStatus } from "./client";
 import { useIsDesktop } from "./useMediaQuery";
-import type { Access, ComposerItem, FileContent, FileDiff, FileTree, HarnessMeta, Project, ProjectConfig, SessionChanges, SessionMeta, SessionState, UserConfig, Workspace } from "./protocol";
+import type { Access, ComposerItem, FileContent, FileDiff, FileTree, HarnessMeta, Project, ProjectConfig, SessionChanges, SessionMeta, SessionState, SessionSummary, UserConfig, Workspace } from "./protocol";
 import { AccessPanel } from "./components/Access";
+import { SessionSummaryPanel } from "./components/SessionSummary";
 import { Panel, type PanelRequest } from "./components/panel/Panel";
 import { liveAgentCount } from "./components/panel/AgentsSurface";
 import { OpenPathContext } from "./lib/openPath";
@@ -27,7 +28,7 @@ import {
 } from "./components/ui/select";
 import { loadResume } from "./resume";
 import { cn } from "./lib/utils";
-import { CoffeeIcon, FileDiffIcon, MessagesSquareIcon, PanelLeftIcon, PlusIcon, SettingsIcon } from "lucide-react";
+import { CoffeeIcon, FileDiffIcon, MessagesSquareIcon, PanelLeftIcon, PlusIcon, SettingsIcon, SparklesIcon } from "lucide-react";
 import { toast } from "sonner";
 
 const LAST_SESSION = "hy.lastSession";
@@ -118,6 +119,14 @@ export function App() {
   const [creating, setCreating] = useState(false);
   const [projectSettings, setProjectSettings] = useState<Project | "add" | null>(null);
   const [userConfig, setUserConfig] = useState<UserConfig | null>(null);
+  // The summary panel. Summaries are held per session so flicking between two
+  // sessions does not re-bill a model for an answer we already have; they are
+  // deliberately not persisted, because a stale summary read as current is
+  // worse than no summary at all.
+  const [showSummary, setShowSummary] = useState(false);
+  const [summaries, setSummaries] = useState<Record<string, SessionSummary>>({});
+  const [summarizing, setSummarizing] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
   const [access, setAccess] = useState<Access | null>(null);
   const [showAccess, setShowAccess] = useState(false);
   const [showChanges, setShowChanges] = useState(false);
@@ -286,6 +295,40 @@ export function App() {
     return { issues: res.issues ?? [], issuesError: res.issuesError ?? "" };
   }, []);
   const saveUserConfig = useCallback(async (cfg: UserConfig) => { const res=await clientRef.current!.command("save_user_config",{config:cfg}); setUserConfig(res.userConfig); },[]);
+
+  // Summarising starts a harness against a small model, so it can take tens of
+  // seconds. The result is keyed by session id: the panel can be closed and
+  // reopened, or another session visited and come back to, without paying for
+  // the same answer twice.
+  const summarize = useCallback(async (id: string) => {
+    setSummarizing(true);
+    setSummaryError(null);
+    try {
+      const res = await clientRef.current!.command("summarize_session", { sessionId: id });
+      setSummaries((prev) => ({ ...prev, [id]: res.summary as SessionSummary }));
+    } catch (e) {
+      setSummaryError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSummarizing(false);
+    }
+  }, []);
+
+  // Opening the panel summarises only if there is nothing to show yet. Asking
+  // again is a button, not a side effect of looking.
+  const openSummary = useCallback(() => {
+    if (!activeId) return;
+    setShowSummary(true);
+    setSummaryError(null);
+    if (!summaries[activeId]) void summarize(activeId);
+  }, [activeId, summaries, summarize]);
+
+  // A saved prompt invalidates every summary: they were all written to
+  // different instructions and would otherwise sit there looking current.
+  const saveSummaryPrompt = useCallback(async (summaryPrompt: string) => {
+    if (!userConfig) return;
+    await saveUserConfig({ ...userConfig, summaryPrompt });
+    setSummaries({});
+  }, [userConfig, saveUserConfig]);
 
   const addProject = useCallback(async (root: string) => { const res=await clientRef.current!.command("add_project",{root}); setProjects(p=>[res.project,...p.filter(x=>x.id!==res.project.id)]); },[]);
   const saveProject = useCallback(async (projectId:string,config:ProjectConfig) => { const res=await clientRef.current!.command("save_project",{projectId,config}); setProjects(p=>p.map(x=>x.id===projectId?res.project:x)); },[]);
@@ -677,6 +720,10 @@ export function App() {
                 )}
               </IconButton>
 
+              <IconButton label="Summarise this session" onClick={openSummary}>
+                <SparklesIcon />
+              </IconButton>
+
               {activeProject && (
                 <IconButton
                   label={`${activeProject.config.name} settings`}
@@ -782,6 +829,21 @@ export function App() {
           loadTree={loadFileTree}
           loadFile={loadFile}
           request={panelRequest}
+        />
+      )}
+
+      {showSummary && activeId && (
+        <SessionSummaryPanel
+          summary={summaries[activeId] ?? null}
+          loading={summarizing}
+          error={summaryError}
+          // A summary made before the latest events is still worth reading —
+          // it just should not claim to be the whole story.
+          stale={!!state && !!summaries[activeId] && summaries[activeId].seq < state.seq}
+          userConfig={userConfig}
+          onRegenerate={() => void summarize(activeId)}
+          onSavePrompt={saveSummaryPrompt}
+          onClose={() => setShowSummary(false)}
         />
       )}
 
