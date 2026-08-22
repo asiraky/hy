@@ -343,11 +343,13 @@ function SessionList({
                 </span>
                 <span className="text-muted-foreground mt-1 flex min-w-0 items-center gap-1 font-mono text-[10px]">
                   <FolderIcon aria-hidden className="size-3 shrink-0" />
-                  {/* The project keeps its natural width up to half the line;
-                      the branch takes what is left and gives way first. Left to
-                      shrink in proportion, a long branch reduced a short project
-                      name to a letter and an ellipsis. */}
-                  <span className="max-w-[50%] shrink-0 truncate">
+                  {/* With a branch alongside it the project keeps its natural
+                      width up to half the line and the branch takes what is
+                      left, so a long branch can no longer shrink a short
+                      project name to a letter and an ellipsis. With no branch
+                      there is nothing to share with, and the cap would only
+                      truncate a name that fits. */}
+                  <span className={cn("truncate", s.branch ? "max-w-[50%] shrink-0" : "min-w-0")}>
                     {projectName(s.projectId) ?? s.cwd.split("/").slice(-2).join("/")}
                   </span>
                   {s.branch && (
