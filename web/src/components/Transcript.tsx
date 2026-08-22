@@ -709,7 +709,7 @@ export function Transcript({
   onForceDelete: () => void;
   onContinue: () => void;
   onOpenDiff: (path?: string) => void;
-  /** The session branch's pull request, when hy could find one. */
+  /** The session branch's pull request, when omniplex could find one. */
   pr?: PullRequest | null;
   /** Opens the delete confirmation for this session. */
   onFinish: () => void;

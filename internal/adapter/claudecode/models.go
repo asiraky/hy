@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/asiraky/hy/internal/adapter"
+	"github.com/asiraky/omniplex/internal/adapter"
 )
 
 // modelListTimeout bounds the listing run. Asking costs a Claude Code start,
@@ -45,7 +45,7 @@ func (a *Adapter) Models() []adapter.ModelMeta {
 // legacyModels are older Claude models the installed Claude Code still accepts
 // and runs — verified live: `claude-opus-4-8` starts and reports a 1M window,
 // `claude-sonnet-4-5` a 200k one — but no longer advertises in supportedModels().
-// They are the one piece of model data hy hardcodes, offered folded away under
+// They are the one piece of model data omniplex hardcodes, offered folded away under
 // a "Legacy" group rather than first. Reviewed against claude CLI 2.1.238.
 //
 // Version is left empty on purpose: setting it equal to Label is what made the
@@ -72,7 +72,7 @@ type modelInfo struct {
 
 // ListModels asks the installed Claude Code what it offers, by running the
 // bridge in its one-shot listing mode. The answer is the SDK's own, so a new
-// model or a renamed one appears in hy without a release.
+// model or a renamed one appears in omniplex without a release.
 func (a *Adapter) ListModels(ctx context.Context, env map[string]string) ([]adapter.ModelMeta, error) {
 	r, avail := a.resolve(ctx)
 	if !avail.OK() {
@@ -145,7 +145,7 @@ func (a *Adapter) ListModels(ctx context.Context, env map[string]string) ([]adap
 	}
 }
 
-// mapClaudeModels turns the SDK's rows into hy's, curated for the picker.
+// mapClaudeModels turns the SDK's rows into omniplex's, curated for the picker.
 //
 // The presentation calls made here, none of which the harness list does itself:
 //   - Haiku is dropped — it is a quick-answer model, not a coding one.

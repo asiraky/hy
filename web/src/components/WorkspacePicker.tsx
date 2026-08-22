@@ -8,7 +8,7 @@ import { cn } from "~/lib/utils";
 import type { Issue, UserConfig, Workspace } from "~/protocol";
 
 export interface WorkspaceChoice {
-  /** What the user typed: the branch to create. Empty means "let hy name it". */
+  /** What the user typed: the branch to create. Empty means "let omniplex name it". */
   branch: string;
   /** Set only when attaching to a checkout that already exists. */
   attachPath: string;
@@ -140,7 +140,7 @@ export function WorkspacePicker({
   }, [mode, value.branch, value.attachPath, issues, workspaces, formatter, userConfig?.suggestIssues]);
 
   // Every row is selectable. A checkout somebody else is in is a warning the
-  // caller renders, not a door hy locks: nothing about Git stops two sessions
+  // caller renders, not a door omniplex locks: nothing about Git stops two sessions
   // sharing one, only their own edits do.
   useEffect(() => {
     setActive(0);

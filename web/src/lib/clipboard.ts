@@ -5,7 +5,7 @@ import { toast } from "sonner";
  * Copies through the async Clipboard API, falling back to the legacy
  * `execCommand` path.
  *
- * `navigator.clipboard` exists only in a secure context, and hy is routinely
+ * `navigator.clipboard` exists only in a secure context, and omniplex is routinely
  * reached over plain http on a LAN address — which is exactly where the phone
  * is. There the whole `clipboard` object is undefined, so the obvious
  * `navigator.clipboard?.writeText(...)` reads as "no clipboard, do nothing"

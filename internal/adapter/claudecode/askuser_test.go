@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/asiraky/hy/internal/adapter"
+	"github.com/asiraky/omniplex/internal/adapter"
 )
 
 // fakeHost stands in for the session's host services. RequestPermission fails

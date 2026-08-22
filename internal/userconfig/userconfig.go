@@ -1,7 +1,7 @@
 // Package userconfig holds per-machine preferences that deliberately do not
-// belong in a repo. Project settings live in .hy/project.json and are shared
+// belong in a repo. Project settings live in .omniplex/project.json and are shared
 // with whoever clones the project; the things here are the operator's own
-// habits, so they live beside the database in ~/.hy instead.
+// habits, so they live beside the database in ~/.omniplex instead.
 package userconfig
 
 import (
@@ -58,13 +58,13 @@ func Default() Config {
 	return Config{Version: 1, BranchFormat: DefaultBranchFormat, SummaryPrompt: DefaultSummaryPrompt}
 }
 
-// Path is ~/.hy/config.json, beside hy.db.
+// Path is ~/.omniplex/config.json, beside omniplex.db.
 func Path() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".hy", "config.json"), nil
+	return filepath.Join(home, ".omniplex", "config.json"), nil
 }
 
 func Normalize(cfg Config) (Config, error) {

@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-const module = "github.com/asiraky/hy"
+const module = "github.com/asiraky/omniplex"
 
 // core packages must never learn that a particular harness exists. They may
 // depend on the adapter contract; they may not depend on any implementation
@@ -89,7 +89,7 @@ func TestOnlyCompositionRootNamesHarnesses(t *testing.T) {
 	for _, pkg := range corePackages {
 		for _, imp := range importsOf(t, filepath.Join(root, pkg)) {
 			if strings.Contains(imp, "claudecode") || strings.Contains(imp, "codexapp") {
-				t.Errorf("%s imports %s; only cmd/hy may name a harness", pkg, imp)
+				t.Errorf("%s imports %s; only cmd/omniplex may name a harness", pkg, imp)
 			}
 		}
 	}

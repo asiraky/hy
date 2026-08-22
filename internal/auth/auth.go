@@ -25,14 +25,14 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/asiraky/hy/internal/store"
+	"github.com/asiraky/omniplex/internal/store"
 )
 
 // CookieName carries the device token in browsers. It is httpOnly, so page
 // scripts cannot read it, and it rides WebSocket upgrades to the same origin
 // automatically, which is why the browser client needs no token handling of
 // its own.
-const CookieName = "hy_device"
+const CookieName = "omniplex_device"
 
 // PairingTTL bounds how long a printed code stays valid. Long enough to walk
 // to another room and find your phone, short enough that a code left on a
@@ -299,7 +299,7 @@ func looksProxied(r *http.Request) bool {
 
 // Authorize reports whether a request may proceed, and as which device.
 func (g *Guard) Authorize(r *http.Request) (store.Device, bool) {
-	// A reverse proxy in front of hy would otherwise defeat the whole scheme,
+	// A reverse proxy in front of omniplex would otherwise defeat the whole scheme,
 	// because every request it relays arrives with a loopback peer address.
 	// While one is in front of us, nothing gets in on locality alone.
 	proxied := g.proxied.Load() || looksProxied(r)
@@ -351,7 +351,7 @@ func tokenFrom(r *http.Request) string {
 	// cannot rely on the cookie.
 	for _, part := range strings.Split(r.Header.Get("Sec-WebSocket-Protocol"), ",") {
 		part = strings.TrimSpace(part)
-		if after, found := strings.CutPrefix(part, "hy.token."); found {
+		if after, found := strings.CutPrefix(part, "omniplex.token."); found {
 			return after
 		}
 	}
@@ -364,7 +364,7 @@ func tokenFrom(r *http.Request) string {
 func TokenSubprotocol(r *http.Request) (string, bool) {
 	for _, part := range strings.Split(r.Header.Get("Sec-WebSocket-Protocol"), ",") {
 		part = strings.TrimSpace(part)
-		if strings.HasPrefix(part, "hy.token.") {
+		if strings.HasPrefix(part, "omniplex.token.") {
 			return part, true
 		}
 	}

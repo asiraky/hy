@@ -48,7 +48,7 @@ const FALLBACK_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
  * permission mode called exactly that, so choosing either silently saved "no
  * preference" instead.
  */
-const UNSET = "__hy_unset__";
+const UNSET = "__omniplex_unset__";
 
 /**
  * Every effort level the harness's models accept, in the order they report
@@ -78,7 +78,7 @@ function SectionHeading({ children, note }: { children: React.ReactNode; note?: 
 
 /**
  * The branch-name function is the operator's own habit, not the project's, so
- * it saves to ~/.hy/config.json even though it is edited on this screen.
+ * it saves to ~/.omniplex/config.json even though it is edited on this screen.
  */
 function BranchFormatField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const id = useId();
@@ -159,7 +159,7 @@ function HookField({
           id={id}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder={`scripts/hy-${label.toLowerCase()}`}
+          placeholder={`scripts/omniplex-${label.toLowerCase()}`}
           className="min-w-0 flex-1 font-mono md:text-[12px]"
         />
         <Button
@@ -282,7 +282,7 @@ export function ProjectSettings({
           <DialogDescription>
             {project
               ? "Defaults every new session in this project starts from."
-              : "Point hy at a Git checkout to start creating sessions in it."}
+              : "Point Omniplex at a Git checkout to start creating sessions in it."}
           </DialogDescription>
         </DialogHeader>
 
@@ -307,7 +307,7 @@ export function ProjectSettings({
                   onChange={(e) => setCfg({ ...cfg, name: e.target.value })}
                 />
                 <p className="text-muted-foreground font-mono text-[10px] break-all">
-                  {project.root}/.hy/project.json
+                  {project.root}/.omniplex/project.json
                 </p>
               </div>
 

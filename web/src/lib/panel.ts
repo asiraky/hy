@@ -18,7 +18,7 @@ export interface PanelState {
   active: string;
 }
 
-const KEY_PREFIX = "hy.panel.v1:";
+const KEY_PREFIX = "omniplex.panel.v1:";
 
 export function defaultPanel(): PanelState {
   return { surfaces: [{ id: "diff", kind: "diff" }], active: "diff" };

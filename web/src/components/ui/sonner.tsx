@@ -10,7 +10,7 @@ import { Toaster as Sonner, type ToasterProps } from "sonner"
 import { useTheme } from "~/lib/theme"
 
 const Toaster = ({ ...props }: ToasterProps) => {
-  // Upstream reads next-themes here. hy owns its own theme, so it reads that
+  // Upstream reads next-themes here. omniplex owns its own theme, so it reads that
   // instead — same three values, one less dependency.
   const { theme } = useTheme()
 

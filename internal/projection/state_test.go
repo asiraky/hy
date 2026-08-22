@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/asiraky/hy/internal/proto"
+	"github.com/asiraky/omniplex/internal/proto"
 )
 
 func event(t *testing.T, seq int64, typ string, payload any) proto.Event {

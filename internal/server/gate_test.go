@@ -15,9 +15,9 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/asiraky/hy/internal/auth"
-	"github.com/asiraky/hy/internal/session"
-	"github.com/asiraky/hy/internal/store"
+	"github.com/asiraky/omniplex/internal/auth"
+	"github.com/asiraky/omniplex/internal/session"
+	"github.com/asiraky/omniplex/internal/store"
 )
 
 // testServer builds a server whose guard treats requests as remote, so the

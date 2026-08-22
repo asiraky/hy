@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/asiraky/hy/internal/proto"
+	"github.com/asiraky/omniplex/internal/proto"
 )
 
 // checkpointer keeps the snapshots that bracket each turn, and turns a finished

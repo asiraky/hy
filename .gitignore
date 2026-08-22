@@ -1,23 +1,24 @@
 # Local binaries and development processes
-/hy
+/omniplex
+/omni
 /.air/
 /internal/adapter/claudecode/sidecar/dist/
 
 # Dependencies and generated frontend output
 node_modules/
 /web/dist/
-/cmd/hy/webdist/assets/
-/cmd/hy/webdist/index.html
+/cmd/omniplex/webdist/assets/
+/cmd/omniplex/webdist/index.html
 *.tsbuildinfo
 
-# Worktrees hy provisions for its own sessions, which live inside the checkout
+# Worktrees omniplex provisions for its own sessions, which live inside the checkout
 # by default and are complete repositories in their own right.
 /.worktrees/
 
-# Written into a worktree by scripts/hy-provision.mjs, and true only of that
-# one worktree. .hy/project.json is committed; everything else under .hy is not.
-/.hy/*
-!/.hy/project.json
+# Written into a worktree by scripts/omniplex-provision.mjs, and true only of that
+# one worktree. .omniplex/project.json is committed; everything else under .omniplex is not.
+/.omniplex/*
+!/.omniplex/project.json
 /WORKTREE.md
 
 # Runtime data

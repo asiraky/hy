@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/asiraky/hy/internal/adapter"
-	"github.com/asiraky/hy/internal/project"
-	"github.com/asiraky/hy/internal/projection"
-	"github.com/asiraky/hy/internal/proto"
-	"github.com/asiraky/hy/internal/store"
+	"github.com/asiraky/omniplex/internal/adapter"
+	"github.com/asiraky/omniplex/internal/project"
+	"github.com/asiraky/omniplex/internal/projection"
+	"github.com/asiraky/omniplex/internal/proto"
+	"github.com/asiraky/omniplex/internal/store"
 )
 
 // fakeAdapter emits scripted events, so the seam can be tested without a real
@@ -243,11 +243,11 @@ func TestProjectProvisionBlocksHarnessAndStreamsOutput(t *testing.T) {
 	root := t.TempDir()
 	hook := filepath.Join(root, "provision")
 	cleanupHook := filepath.Join(root, "deprovision")
-	script := "#!/bin/sh\necho preparing-test-workspace\nsleep 0.1\nprintf '{\"cwd\":\"%s\"}' \"$HY_PROJECT_ROOT\" > \"$HY_RESULT_FILE\"\n"
+	script := "#!/bin/sh\ntest \"$OMNIPLEX_LIFECYCLE_VERSION\" = 2\necho preparing-test-workspace\nsleep 0.1\nprintf '{\"cwd\":\"%s\"}' \"$OMNIPLEX_PROJECT_ROOT\" > \"$OMNIPLEX_RESULT_FILE\"\n"
 	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(cleanupHook, []byte("#!/bin/sh\ntest -f \"$HY_CONTEXT_FILE\"\necho cleanup-test-workspace\n"), 0o755); err != nil {
+	if err := os.WriteFile(cleanupHook, []byte("#!/bin/sh\ntest \"$OMNIPLEX_LIFECYCLE_VERSION\" = 2\ntest -f \"$OMNIPLEX_CONTEXT_FILE\"\necho cleanup-test-workspace\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
@@ -316,7 +316,7 @@ func TestProjectProvisionBlocksHarnessAndStreamsOutput(t *testing.T) {
 
 func TestClawdCompatibilityHookGetsBranchAndNeedsNoResultFile(t *testing.T) {
 	root := t.TempDir()
-	for _, args := range [][]string{{"init"}, {"config", "user.email", "hy@test.invalid"}, {"config", "user.name", "hy test"}, {"commit", "--allow-empty", "-m", "initial"}} {
+	for _, args := range [][]string{{"init"}, {"config", "user.email", "omniplex@test.invalid"}, {"config", "user.name", "omniplex test"}, {"commit", "--allow-empty", "-m", "initial"}} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = root
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -364,7 +364,7 @@ func TestClawdCompatibilityHookGetsBranchAndNeedsNoResultFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Cwd == root || !strings.Contains(s.Workspace.Output, "compatibility-branch:feature/hy-") {
+	if s.Cwd == root || !strings.Contains(s.Workspace.Output, "compatibility-branch:feature/omniplex-") {
 		t.Fatalf("compatibility result not synthesized: cwd=%q output=%q", s.Cwd, s.Workspace.Output)
 	}
 	if err := mgr.Delete(context.Background(), a.ID, true); err != nil {

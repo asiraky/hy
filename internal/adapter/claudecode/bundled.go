@@ -16,7 +16,7 @@ import (
 // Node nor Bun. Claude Code itself is still the user's own install — we never
 // ship one.
 //
-//go:embed sidecar/dist/hy-claude-sidecar
+//go:embed sidecar/dist/omniplex-claude-sidecar
 var bundledFS embed.FS
 
 var (
@@ -29,18 +29,18 @@ var (
 // never reuses a stale extraction.
 func bundledSidecarPath() string {
 	bundledOnce.Do(func() {
-		data, err := bundledFS.ReadFile("sidecar/dist/hy-claude-sidecar")
+		data, err := bundledFS.ReadFile("sidecar/dist/omniplex-claude-sidecar")
 		if err != nil {
 			return
 		}
 		sum := sha256.Sum256(data)
-		name := "hy-claude-sidecar-" + hex.EncodeToString(sum[:8])
+		name := "omniplex-claude-sidecar-" + hex.EncodeToString(sum[:8])
 
 		base, err := os.UserCacheDir()
 		if err != nil {
 			return
 		}
-		dir := filepath.Join(base, "hy", "bin")
+		dir := filepath.Join(base, "omniplex", "bin")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return
 		}

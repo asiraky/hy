@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "name": "hy",
+  "name": "omniplex",
   "defaults": {
     "harness": "claude",
     "workspace": "managed",
@@ -8,7 +8,7 @@
   },
   "workspace": {
     "suggestedRoot": ".worktrees",
-    "provision": "scripts/hy-provision.mjs",
+    "provision": "scripts/omniplex-provision.mjs",
     "provisionTimeoutSeconds": 600,
     "deprovisionTimeoutSeconds": 600
   }

@@ -3,20 +3,20 @@
 #
 # This exists rather than a line in package.json because a worktree needs its
 # own ports and its own database, and there is nowhere to pass flags through.
-# scripts/hy-provision.mjs writes .hy/worktree.env when it provisions one; the
+# scripts/omniplex-provision.mjs writes .omniplex/worktree.env when it provisions one; the
 # main checkout has no such file and falls back to the standard ports.
 set -e
 cd "$(dirname "$0")/.."
 
-if [ -f .hy/worktree.env ]; then
-  echo "hy: using the ports and database in .hy/worktree.env"
+if [ -f .omniplex/worktree.env ]; then
+  echo "omniplex: using the ports and database in .omniplex/worktree.env"
   # shellcheck disable=SC1091
-  . ./.hy/worktree.env
+  . ./.omniplex/worktree.env
 fi
 
-HY_PORT="${HY_PORT:-8787}"
-HY_VITE_PORT="${HY_VITE_PORT:-5199}"
-export HY_PORT HY_VITE_PORT
-[ -n "${HY_DB:-}" ] && export HY_DB
+OMNIPLEX_PORT="${OMNIPLEX_PORT:-8787}"
+OMNIPLEX_VITE_PORT="${OMNIPLEX_VITE_PORT:-5199}"
+export OMNIPLEX_PORT OMNIPLEX_VITE_PORT
+[ -n "${OMNIPLEX_DB:-}" ] && export OMNIPLEX_DB
 
 exec concurrently -k -n go,web -c cyan,magenta "air" "./scripts/web vite"

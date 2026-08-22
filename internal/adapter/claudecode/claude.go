@@ -27,9 +27,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/asiraky/hy/internal/adapter"
-	"github.com/asiraky/hy/internal/jsonrpc"
-	"github.com/asiraky/hy/internal/proto"
+	"github.com/asiraky/omniplex/internal/adapter"
+	"github.com/asiraky/omniplex/internal/jsonrpc"
+	"github.com/asiraky/omniplex/internal/proto"
 )
 
 //go:embed sidecar/sidecar.mjs sidecar/guard.mjs sidecar/package.json
@@ -67,7 +67,7 @@ func (a *Adapter) Meta() adapter.HarnessMeta {
 
 // PermissionModes are the Agent SDK's PermissionMode values, verbatim: the id
 // is what the sidecar passes as `permissionMode`. The SDK spells the manual
-// mode `default` (the CLI alias `manual` is CLI-only), and it is what hy sends.
+// mode `default` (the CLI alias `manual` is CLI-only), and it is what omniplex sends.
 func (a *Adapter) PermissionModes() []adapter.PermissionModeMeta {
 	return []adapter.PermissionModeMeta{
 		{ID: "default", Label: "Manual", Description: "Ask before every edit, command, and network call", Default: true},
@@ -105,7 +105,7 @@ func (a *Adapter) sidecarPath() (string, error) {
 			a.unpackErr = err
 			return
 		}
-		dir := filepath.Join(base, "hy", "claude-sidecar")
+		dir := filepath.Join(base, "omniplex", "claude-sidecar")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			a.unpackErr = err
 			return
@@ -175,7 +175,7 @@ type sidecarConfig struct {
 }
 
 // conversationID resolves which Claude conversation a CreateSession call names
-// or resumes. hy names the conversation at start — the same id starts a
+// or resumes. omniplex names the conversation at start — the same id starts a
 // session and later resumes it, so a server restart continues the conversation
 // rather than starting blank. But the name is not immutable: Claude Code
 // rotates its conversation id in place (/clear starts a new conversation under
@@ -209,7 +209,7 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 		// --allow-dangerously-skip-permissions semantics), never enabled by it:
 		// the SDK rejects bypassPermissions — at start or via a mid-session
 		// setPermissionMode — unless this was set at launch. Bypass is a mode
-		// like any other here: picking it is the whole decision, so hy adds no
+		// like any other here: picking it is the whole decision, so omniplex adds no
 		// gate of its own on top of the SDK's own refusals.
 		AllowDangerouslySkipPermissions: true,
 		Effort:                          o.Effort,
@@ -236,7 +236,7 @@ func (a *Adapter) CreateSession(ctx context.Context, host adapter.HostServices, 
 	// The 1M context window is a process-start choice, not a runtime one: the
 	// CLI decides it from CLAUDE_CODE_DISABLE_1M_CONTEXT when it boots, and no
 	// control call changes it after. It is 1M by default on accounts that have
-	// it, which is expensive and rarely wanted, so hy opts in explicitly: a
+	// it, which is expensive and rarely wanted, so omniplex opts in explicitly: a
 	// session runs 1M only when its model id carries the "[1m]" tag, and 200k
 	// otherwise. That makes the tag the real switch and 200k the default.
 	if !strings.Contains(o.Model, "[1m]") {
@@ -694,7 +694,7 @@ func (s *session) handleSDKMessage(msg map[string]json.RawMessage) {
 	}
 }
 
-// trackSessionID follows the harness's own conversation id, which hy names at
+// trackSessionID follows the harness's own conversation id, which omniplex names at
 // start but does not control afterwards: Claude Code rotates it in place when
 // the user runs /clear, silently starting a new conversation under a new id in
 // the same process. Every SDK message carries the id of the conversation it

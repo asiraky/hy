@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/asiraky/hy/internal/adapter"
-	"github.com/asiraky/hy/internal/proto"
+	"github.com/asiraky/omniplex/internal/adapter"
+	"github.com/asiraky/omniplex/internal/proto"
 )
 
 func TestCodexSkillOrigin(t *testing.T) {

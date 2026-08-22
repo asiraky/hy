@@ -72,7 +72,7 @@ var candidates = cliCandidates
 
 // FindCLI returns the Tailscale executable, or "" when there is none.
 func FindCLI() string {
-	if env := os.Getenv("HY_TAILSCALE_PATH"); env != "" {
+	if env := os.Getenv("OMNIPLEX_TAILSCALE_PATH"); env != "" {
 		if isExecutable(env) {
 			return env
 		}

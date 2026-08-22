@@ -139,7 +139,7 @@ describe("a bypass session is just a session", () => {
   it("opens with no confirmation, banner, or acknowledgement", async () => {
     const confirm = vi.fn(() => true);
     vi.stubGlobal("confirm", confirm);
-    localStorage.setItem("hy.lastSession", "a");
+    localStorage.setItem("omniplex.lastSession", "a");
     viewport("desktop");
     render(<App />);
     await act(async () => {
@@ -190,7 +190,7 @@ describe("landing on a phone", () => {
   });
 
   it("restores straight into the last session without flashing the list open", async () => {
-    localStorage.setItem("hy.lastSession", "a");
+    localStorage.setItem("omniplex.lastSession", "a");
     viewport("phone");
     render(<App />);
 
@@ -204,7 +204,7 @@ describe("landing on a phone", () => {
   });
 
   it("falls back to the list when the stored session is gone", async () => {
-    localStorage.setItem("hy.lastSession", "gone");
+    localStorage.setItem("omniplex.lastSession", "gone");
     viewport("phone");
     render(<App />);
     await act(async () => events.onSessions([session("a")]));
@@ -214,7 +214,7 @@ describe("landing on a phone", () => {
   });
 
   it("says nothing while it is still deciding", async () => {
-    localStorage.setItem("hy.lastSession", "a");
+    localStorage.setItem("omniplex.lastSession", "a");
     viewport("phone");
     render(<App />);
 
@@ -692,9 +692,9 @@ describe("losing the attached session", () => {
 
 describe("resuming after a tab discard", () => {
   const seed = (id: string) => {
-    localStorage.setItem("hy.lastSession", id);
+    localStorage.setItem("omniplex.lastSession", id);
     sessionStorage.setItem(
-      "hy.resume",
+      "omniplex.resume",
       JSON.stringify({ build: "dev", state: state(id, "default"), scrollTop: 120, atBottom: false }),
     );
   };
@@ -735,9 +735,9 @@ describe("resuming after a tab discard", () => {
 
   it("ignores a cache written by a different bundle", async () => {
     viewport("phone");
-    localStorage.setItem("hy.lastSession", "a");
+    localStorage.setItem("omniplex.lastSession", "a");
     sessionStorage.setItem(
-      "hy.resume",
+      "omniplex.resume",
       JSON.stringify({ build: "other", state: state("a", "default"), scrollTop: 0, atBottom: true }),
     );
     render(<App />);
@@ -826,9 +826,9 @@ describe("transcript scroll position", () => {
     // The cache hydrates a position for "a" before any list exists, so the
     // prune that follows the list has never seen the id — it has to be
     // dropped here or an id coming back would inherit a dead offset.
-    localStorage.setItem("hy.lastSession", "a");
+    localStorage.setItem("omniplex.lastSession", "a");
     sessionStorage.setItem(
-      "hy.resume",
+      "omniplex.resume",
       JSON.stringify({ build: "dev", state: state("a", "default"), scrollTop: 300, atBottom: false }),
     );
     viewport("desktop");

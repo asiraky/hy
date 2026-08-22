@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/asiraky/hy/internal/adapter"
+	"github.com/asiraky/omniplex/internal/adapter"
 )
 
 // resolved is everything this harness needs in order to start. Working out
@@ -92,7 +92,7 @@ func (a *Adapter) resolve(ctx context.Context) (resolved, adapter.Availability) 
 		return r, adapter.Unavailable(
 			"Claude Code is not installed on this machine.",
 			adapter.Remedy{Text: "Install Claude Code", URL: docsURL},
-			adapter.Remedy{Text: "Or point hy at an existing install with -claude-path"},
+			adapter.Remedy{Text: "Or point Omniplex at an existing install with -claude-path"},
 		)
 	}
 	r.claudePath = claudePath
@@ -114,7 +114,7 @@ func (a *Adapter) findClaude() (string, bool) {
 		}
 		return "", false // an explicit path that is wrong is an error, not a hint
 	}
-	if env := os.Getenv("HY_CLAUDE_PATH"); env != "" && isExecutable(env) {
+	if env := os.Getenv("OMNIPLEX_CLAUDE_PATH"); env != "" && isExecutable(env) {
 		return env, true
 	}
 	if p, err := exec.LookPath("claude"); err == nil {

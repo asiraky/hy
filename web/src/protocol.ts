@@ -314,7 +314,7 @@ export interface PullRequest {
 }
 
 /**
- * Per-machine preferences, kept in ~/.hy/config.json rather than the repo:
+ * Per-machine preferences, kept in ~/.omniplex/config.json rather than the repo:
  * branchFormat is the operator's own naming habit, not the project's.
  */
 export interface UserConfig {
@@ -373,7 +373,7 @@ export interface SessionMeta {
 
 /**
  * One selectable model, exactly as the harness describes itself. Everything
- * but `group` is the harness's own answer — hy asks it what it offers rather
+ * but `group` is the harness's own answer — omniplex asks it what it offers rather
  * than shipping a list that goes stale — and `group` is the adapter's single
  * presentation call, since no harness reports what it considers superseded.
  */

@@ -10,8 +10,8 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/asiraky/hy/internal/netinfo"
-	"github.com/asiraky/hy/internal/overlay"
+	"github.com/asiraky/omniplex/internal/netinfo"
+	"github.com/asiraky/omniplex/internal/overlay"
 )
 
 // Reachability says who can reach an endpoint.

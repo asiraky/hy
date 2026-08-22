@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/asiraky/hy/internal/adapter"
+	"github.com/asiraky/omniplex/internal/adapter"
 )
 
 type codexSkill struct {
@@ -82,7 +82,7 @@ func (s *session) ComposerItems(ctx context.Context) ([]adapter.ComposerItem, er
 }
 
 // codexBuiltinComposerItems is deliberately small. Codex app-server does not
-// publish the TUI slash-command catalogue, so hy advertises only commands for
+// publish the TUI slash-command catalogue, so omniplex advertises only commands for
 // which it has a real local surface or a real app-server operation.
 func codexBuiltinComposerItems() []adapter.ComposerItem {
 	return []adapter.ComposerItem{

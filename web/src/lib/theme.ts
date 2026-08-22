@@ -8,7 +8,7 @@ export type ResolvedTheme = "light" | "dark";
  * choice before first paint. Change it in one place and the other is wrong, so
  * the two are commented as a pair.
  */
-export const THEME_STORAGE_KEY = "hy.theme";
+export const THEME_STORAGE_KEY = "omniplex.theme";
 
 const DARK_QUERY = "(prefers-color-scheme: dark)";
 

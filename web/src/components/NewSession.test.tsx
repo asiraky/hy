@@ -242,7 +242,7 @@ describe("NewSession", () => {
     open({ onCreate });
 
     // The managed default lands on the "New worktree" tile; leaving its name
-    // empty is the old scratch behaviour — hy makes the name up.
+    // empty is the old scratch behaviour — omniplex makes the name up.
     await waitFor(() =>
       screen.getByRole("radio", { name: /New worktree from issue or branch name/ }),
     );

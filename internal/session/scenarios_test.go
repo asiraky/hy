@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/asiraky/hy/internal/store"
+	"github.com/asiraky/omniplex/internal/store"
 )
 
 func git(t *testing.T, dir string, args ...string) string {
@@ -145,7 +145,7 @@ func TestDeleteRemovesTheWorktreeWhenAsked(t *testing.T) {
 		_, statErr := os.Stat(meta.Cwd)
 		return os.IsNotExist(statErr)
 	})
-	// The branch outlives the checkout: hy never deletes branches.
+	// The branch outlives the checkout: omniplex never deletes branches.
 	if out := git(t, root, "branch", "--list", "issue/3-go"); !strings.Contains(out, "issue/3-go") {
 		t.Fatalf("the branch was deleted with the worktree: %q", out)
 	}
@@ -183,7 +183,7 @@ func TestDeleteRefusesToRemoveASharedWorktree(t *testing.T) {
 }
 
 // The main checkout is the user's own working directory, and no answer to any
-// dialog makes it hy's to delete.
+// dialog makes it omniplex's to delete.
 func TestDeleteNeverRemovesTheMainCheckout(t *testing.T) {
 	root, _, _ := gitRepo(t)
 	st, p := testProject(t, root)
@@ -236,7 +236,7 @@ func TestDeletingAClosedSessionStillHonoursTheCheckbox(t *testing.T) {
 	}
 }
 
-// A closed sibling is still a session hy knows of, and it still names the
+// A closed sibling is still a session omniplex knows of, and it still names the
 // directory somebody is about to delete.
 func TestAClosedSiblingStillProtectsTheWorktree(t *testing.T) {
 	root, worktree, _ := gitRepo(t)

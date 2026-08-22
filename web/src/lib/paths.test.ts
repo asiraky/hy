@@ -95,8 +95,8 @@ describe("detectPath", () => {
       path: "scripts/build",
       line: undefined,
     });
-    expect(detectPath("/Users/aaron/code/hy/bin/dev")).toEqual({
-      path: "/Users/aaron/code/hy/bin/dev",
+    expect(detectPath("/Users/aaron/code/omniplex/bin/dev")).toEqual({
+      path: "/Users/aaron/code/omniplex/bin/dev",
       line: undefined,
     });
   });
@@ -135,7 +135,7 @@ describe("detectPath", () => {
   });
 
   it("does not treat a dotted hostname segment as an extension", () => {
-    expect(detectPath("github.com/asiraky/hy")).toBeNull();
+    expect(detectPath("github.com/asiraky/omniplex")).toBeNull();
     expect(detectPath("api.example.com/system/init")).toBeNull();
   });
 });
