@@ -103,13 +103,24 @@ function SelectLabel({
 function SelectItem({
   className,
   children,
+  description,
   ...props
-}: React.ComponentProps<typeof SelectPrimitive.Item>) {
+}: React.ComponentProps<typeof SelectPrimitive.Item> & {
+  // Secondary text for the option, shown under its label in the list. It sits
+  // outside ItemText on purpose: the trigger echoes ItemText verbatim, so
+  // anything in there would be dragged into a one-line box that cannot hold it.
+  description?: React.ReactNode
+}) {
+  // Radix names an option after its ItemText alone, so a description sitting
+  // outside it would be silent to a screen reader. Point at it explicitly.
+  const descriptionId = React.useId()
   return (
     <SelectPrimitive.Item
       data-slot="select-item"
+      aria-describedby={description ? descriptionId : undefined}
       className={cn(
         "relative flex w-full cursor-default items-center gap-2 rounded-sm py-1.5 pr-8 pl-2 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
+        description && "flex-col items-start gap-0.5 *:[span]:last:block",
         className
       )}
       {...props}
@@ -123,6 +134,15 @@ function SelectItem({
         </SelectPrimitive.ItemIndicator>
       </span>
       <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+      {description && (
+        <span
+          id={descriptionId}
+          data-slot="select-item-description"
+          className="text-muted-foreground text-xs leading-snug text-pretty"
+        >
+          {description}
+        </span>
+      )}
     </SelectPrimitive.Item>
   )
 }
