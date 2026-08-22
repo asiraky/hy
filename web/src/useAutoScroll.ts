@@ -27,6 +27,10 @@ export const atBottom = (el: HTMLElement) =>
 // already showing everything there is.
 const canScroll = (el: HTMLElement) => el.scrollHeight - el.clientHeight > AT_BOTTOM_PX;
 
+// The strip of view left above a message the transcript was asked to anchor —
+// enough that it reads as "at the top" without sitting on the edge.
+const ANCHOR_GAP_PX = 16;
+
 /**
  * Keeps a scroller pinned to its own bottom while content grows, and gives up
  * the pin the moment the reader scrolls up.
@@ -38,6 +42,15 @@ const canScroll = (el: HTMLElement) => el.scrollHeight - el.clientHeight > AT_BO
  *
  * `initialPinned` is for a scroller restoring a saved position: mounting
  * pinned would snap it straight to the bottom before the restore could land.
+ *
+ * `anchorTo(el)` is the other half: it lifts one element up near the top of the
+ * view and holds it there while the space below fills. The room to do that
+ * rarely exists — an element at the bottom of the transcript cannot rise
+ * without something underneath it — so the hook makes it, publishing the
+ * shortfall as `--anchor-reserve` on the content element for the caller's
+ * padding to consume. The reserve shrinks as real content takes its place, and
+ * once the new content fills the view on its own the anchor gives way to the
+ * pin, so a long answer ends up followed rather than frozen.
  */
 export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>(
   initialPinned = true,
@@ -67,6 +80,26 @@ export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>(
     lastTop.current = el.scrollTop;
   }, []);
 
+  // The element the view is holding high, the reserve currently making room
+  // for it, and whether that hold is still ours to enforce — a reader who
+  // scrolls takes the view back, but the room they can see stays until content
+  // grows into it, so it is not thrown away with the hold.
+  const anchorEl = useRef<HTMLElement | null>(null);
+  const anchored = useRef(false);
+  const reserve = useRef(0);
+
+  const setReserve = useCallback((px: number) => {
+    if (reserve.current === px) return;
+    reserve.current = px;
+    contentRef.current?.style.setProperty("--anchor-reserve", `${px}px`);
+  }, []);
+
+  const clearAnchor = useCallback(() => {
+    anchored.current = false;
+    anchorEl.current = null;
+    setReserve(0);
+  }, [setReserve]);
+
   const stick = useCallback(() => {
     const el = scrollerRef.current;
     if (!pinnedRef.current || !el) return;
@@ -89,6 +122,7 @@ export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>(
   const scrollToBottom = useCallback(() => {
     const el = scrollerRef.current;
     if (!el) return;
+    clearAnchor();
     setPin(true);
     const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     if (reduced || typeof el.scrollTo !== "function") {
@@ -96,7 +130,56 @@ export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>(
       return;
     }
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [jumpToBottom, setPin]);
+  }, [clearAnchor, jumpToBottom, setPin]);
+
+  // Size the reserve to whatever the anchored element still needs to sit high
+  // in the view, and — while the hold is ours — put it there. Both halves run
+  // on every content change: the measurement is what retires the reserve as
+  // the answer grows into it.
+  const applyAnchor = useCallback(() => {
+    const el = scrollerRef.current;
+    const target = anchorEl.current;
+    if (!el || !target?.isConnected) return clearAnchor();
+
+    const offset = target.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
+    const desired = Math.max(0, offset - ANCHOR_GAP_PX);
+    // What lies below the anchor on its own merits: the reserve is discounted,
+    // or it would keep justifying itself.
+    const natural = el.scrollHeight - reserve.current - desired;
+    const need = Math.max(0, Math.ceil(el.clientHeight - natural));
+    setReserve(need);
+
+    if (need === 0) {
+      // The turn has outgrown the room made for it, so there is nothing left
+      // to hold up. Someone watching output arrive wants the tail from here.
+      const takeOver = anchored.current;
+      clearAnchor();
+      if (takeOver) {
+        setPin(true);
+        jumpToBottom();
+      }
+      return;
+    }
+    if (!anchored.current) return;
+    el.scrollTop = desired;
+    lastTop.current = el.scrollTop;
+  }, [clearAnchor, jumpToBottom, setPin, setReserve]);
+
+  /**
+   * Lift `el` up near the top of the view and keep it there while the space
+   * beneath it fills. Unpinning is the point rather than a side effect: the
+   * tail is exactly where this is asking not to be.
+   */
+  const anchorTo = useCallback(
+    (el: HTMLElement | null) => {
+      if (!el) return;
+      anchorEl.current = el;
+      anchored.current = true;
+      setPin(false);
+      applyAnchor();
+    },
+    [applyAnchor, setPin],
+  );
 
   useEffect(() => {
     const el = scrollerRef.current;
@@ -109,6 +192,10 @@ export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>(
 
     const onScroll = () => {
       const top = el.scrollTop;
+      // Every position this hook writes is recorded as it is written, so a
+      // position that is not the recorded one came from the reader — and a
+      // reader who moves the view has taken it back from the anchor.
+      if (anchored.current && Math.abs(top - lastTop.current) > 1) anchored.current = false;
       // A position that went up — under the reader's hand or the scrollbar's
       // — ends the pin, and it does so even a few pixels from the bottom:
       // re-arming inside the tolerance would undo a small deliberate nudge
@@ -128,7 +215,10 @@ export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>(
     // frame as the reader's scroll and cancel it out, leaving nothing for the
     // scroll handler to notice; the intent was still real.
     const onWheel = (e: WheelEvent) => {
-      if (e.deltaY < 0 && canScroll(el)) setPin(false);
+      if (e.deltaY < 0 && canScroll(el)) {
+        anchored.current = false;
+        setPin(false);
+      }
     };
 
     let touchY = 0;
@@ -139,13 +229,19 @@ export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>(
       const y = e.touches[0]?.clientY ?? 0;
       // A finger travelling down the screen drags the content down, which is
       // to say it scrolls the view up.
-      if (y > touchY && canScroll(el)) setPin(false);
+      if (y > touchY && canScroll(el)) {
+        anchored.current = false;
+        setPin(false);
+      }
       touchY = y;
     };
 
     const UP_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
     const onKeyDown = (e: KeyboardEvent) => {
-      if (UP_KEYS.has(e.key) && canScroll(el)) setPin(false);
+      if (UP_KEYS.has(e.key) && canScroll(el)) {
+        anchored.current = false;
+        setPin(false);
+      }
     };
 
     el.addEventListener("scroll", onScroll, { passive: true });
@@ -172,10 +268,16 @@ export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>(
     // bottom padding that tracks the floating composer, and a composer growing
     // past that headroom would otherwise creep over the tail without ever
     // resizing the content box — so the pin would never re-snap to clear it.
-    const ro = new ResizeObserver(() => stick());
+    const ro = new ResizeObserver(() => {
+      // Order matters: the anchor gets to retire its reserve first, so a turn
+      // that has outgrown it hands the view to the pin in the same tick rather
+      // than one frame late.
+      if (anchorEl.current) applyAnchor();
+      if (!anchored.current) stick();
+    });
     ro.observe(content, { box: "border-box" });
     return () => ro.disconnect();
-  }, [stick]);
+  }, [applyAnchor, stick]);
 
-  return { scrollerRef, contentRef, pinned, stick, scrollToBottom };
+  return { scrollerRef, contentRef, pinned, stick, scrollToBottom, anchorTo };
 }

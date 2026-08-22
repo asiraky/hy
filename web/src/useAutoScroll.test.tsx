@@ -13,15 +13,22 @@ const BOTTOM = CONTENT - VIEWPORT;
 
 let stick: () => void;
 let scrollToBottom: () => void;
+let anchorTo: (el: HTMLElement | null) => void;
+// The content ResizeObserver's callback, so a growing transcript can be played
+// out a step at a time — jsdom has no layout to grow on its own.
+let grew: () => void;
 
 function Harness() {
   const auto = useAutoScroll<HTMLDivElement, HTMLDivElement>();
   stick = auto.stick;
   scrollToBottom = auto.scrollToBottom;
+  anchorTo = auto.anchorTo;
   return (
     <>
       <div ref={auto.scrollerRef} data-testid="scroller">
-        <div ref={auto.contentRef} />
+        <div ref={auto.contentRef} data-testid="content">
+          <div data-testid="prompt" />
+        </div>
       </div>
       <span data-testid="pinned">{String(auto.pinned)}</span>
     </>
@@ -30,6 +37,21 @@ function Harness() {
 
 function scroller() {
   return screen.getByTestId("scroller");
+}
+
+// What the hook is asking the content's padding to add, in px.
+function reserve() {
+  return parseInt(screen.getByTestId("content").style.getPropertyValue("--anchor-reserve") || "0", 10);
+}
+
+// Place the prompt element `offset` px into the transcript and hand it to the
+// hook, the way the transcript does when a prompt of its own arrives. Where it
+// sits on screen follows the scroll position, as a real element's box does.
+function anchorPrompt(offset: number) {
+  const target = screen.getByTestId("prompt");
+  target.getBoundingClientRect = () => ({ top: offset - scroller().scrollTop }) as DOMRect;
+  scroller().getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
+  act(() => anchorTo(target));
 }
 
 function pinned() {
@@ -59,11 +81,26 @@ function wheel(deltaY: number) {
   fire(new WheelEvent("wheel", { deltaY }));
 }
 
+// The transcript's own height, before any room the hook reserves under it —
+// which is real height too, so the scroller reports the sum.
+let content = CONTENT;
+
 beforeEach(() => {
   vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(cb: () => void) {
+        grew = () => act(cb);
+      }
+      observe() {}
+      disconnect() {}
+    },
+  );
+  content = CONTENT;
   render(<Harness />);
   const el = scroller();
-  Object.defineProperty(el, "scrollHeight", { value: CONTENT, configurable: true });
+  Object.defineProperty(el, "scrollHeight", { get: () => content + reserve(), configurable: true });
   Object.defineProperty(el, "clientHeight", { value: VIEWPORT, configurable: true });
   // A real scroller clamps: the position cannot pass the last screenful, so
   // "scroll to scrollHeight" lands at BOTTOM and stays there.
@@ -183,5 +220,65 @@ describe("useAutoScroll", () => {
   it("unpins on a key that scrolls upwards", () => {
     fire(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
     expect(pinned()).toBe(false);
+  });
+});
+
+// Sending a prompt asks the view for something the pin cannot give: the newest
+// message at the *top*, with the answer streaming into the space below it. The
+// space has to be invented — nothing follows the prompt yet — and then given
+// back as the answer takes its place.
+// Where the prompt sits in the transcript: 300px down a view scrolled to 600.
+const PROMPT_AT = 900;
+const ANCHORED = PROMPT_AT - 16;
+
+describe("useAutoScroll anchoring", () => {
+  it("lifts the anchored element to the top of the view", () => {
+    anchorPrompt(PROMPT_AT);
+    // The element lands a hair below the top edge, and the room to put it
+    // there — a viewport's worth, less what already followed it — is reserved.
+    expect(scroller().scrollTop).toBe(ANCHORED);
+    expect(reserve()).toBe(VIEWPORT - (CONTENT - ANCHORED));
+    expect(pinned()).toBe(false);
+  });
+
+  it("holds it there while the answer streams in underneath", () => {
+    anchorPrompt(PROMPT_AT);
+    content += 100;
+    grew();
+    expect(scroller().scrollTop).toBe(ANCHORED);
+    expect(reserve()).toBe(VIEWPORT - (CONTENT + 100 - ANCHORED));
+  });
+
+  it("hands the view back to the pin once the answer fills it on its own", () => {
+    anchorPrompt(PROMPT_AT);
+    content += 1000;
+    grew();
+    expect(reserve()).toBe(0);
+    expect(pinned()).toBe(true);
+    expect(scroller().scrollTop).toBe(content - VIEWPORT);
+  });
+
+  it("lets the reader take the view back from the anchor", () => {
+    anchorPrompt(PROMPT_AT);
+    scrollTo(120);
+    content += 100;
+    grew();
+    expect(scroller().scrollTop).toBe(120);
+    expect(pinned()).toBe(false);
+  });
+
+  it("gives the reserved room back as the transcript grows into it", () => {
+    anchorPrompt(PROMPT_AT);
+    wheel(-40);
+    content += 1000;
+    grew();
+    expect(reserve()).toBe(0);
+  });
+
+  it("drops the anchor when the button is used", () => {
+    anchorPrompt(PROMPT_AT);
+    settle(scrollToBottom);
+    expect(reserve()).toBe(0);
+    expect(pinned()).toBe(true);
   });
 });
