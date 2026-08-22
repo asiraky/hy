@@ -34,6 +34,8 @@ export function useDeleteSession({
   projectRoot,
   onStart,
   onRefused,
+  onDeparted,
+  onFailed,
 }: {
   /** Every session hy knows of, to see who else is in the same checkout. */
   sessions: SessionMeta[];
@@ -45,6 +47,11 @@ export function useDeleteSession({
   onStart?: (target: SessionMeta) => void;
   /** Fired when the server would not take the request after all. */
   onRefused?: (target: SessionMeta) => void;
+  /** Fired the moment the session leaves the list, for a caller with a row to
+      animate out. The wait is already over by then — this is only the news. */
+  onDeparted?: (target: SessionMeta) => void;
+  /** Fired when teardown failed and the session is staying after all. */
+  onFailed?: (target: SessionMeta) => void;
 }) {
   // Deleting a session can take a checkout on disk with it, so a stray click
   // on the X must not be enough on its own — the X only opens this
@@ -109,6 +116,37 @@ export function useDeleteSession({
     setDeleting((d) => (d?.id === id ? null : d));
     setConfirming((c) => (c?.id === id ? null : c));
   };
+
+  // A delete is over when the session leaves the list. The request only
+  // *starts* the teardown — its promise settles on acceptance, so nothing else
+  // here can tell the difference between "still working" and "finished".
+  //
+  // This is done during the render that drops the session rather than in an
+  // effect, so a caller with a row to animate still has its DOM node when it
+  // hears about the departure. It lives here rather than in the sidebar
+  // because every caller of this hook has to stop waiting; only the sidebar
+  // has a row, and a caller without one was left spinning forever.
+  if (deleting && !sessions.some((s) => s.id === deleting.id)) {
+    settle(deleting.id);
+    onDeparted?.(deleting);
+  }
+
+  // Teardown failed, so the session is staying. The wait is just as over as a
+  // successful one: whoever asked is already being told what to do about it,
+  // and a dialog still claiming to be deleting is in the way of doing it.
+  const failed =
+    deleting && sessions.some((s) => s.id === deleting.id && s.phase === "cleanup_failed")
+      ? deleting
+      : null;
+  useEffect(() => {
+    if (!failed) return;
+    settle(failed.id);
+    onFailed?.(failed);
+    // settle and onFailed are recreated each render and only ever act on the
+    // session they are given, so tracking them here would re-run this for no
+    // change in what it does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [failed]);
 
   const startDelete = () => {
     if (!confirming || busy) return;
