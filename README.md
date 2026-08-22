@@ -133,6 +133,19 @@ weakened.
 | `-dev` | off | Serve the UI from the Vite dev server instead of the embedded bundle |
 | `-vite-port` | 5199 | Where the Vite dev server listens (with `-dev`) |
 
+## Relocating a project
+
+If a configured project directory has been moved or renamed, stop Omniplex and run:
+
+```bash
+omniplex relocate <old-root> <new-root>
+```
+
+Use `-db path` after `relocate` when the server uses a non-default database.
+The command repairs stored project and session paths, lifecycle state, Git
+worktree links, and Claude Code transcript directories. It refuses to overwrite
+an existing transcript directory.
+
 ## Harnesses are optional
 
 No harness is required. Each adapter reports its own readiness, and the core

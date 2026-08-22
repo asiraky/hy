@@ -39,6 +39,12 @@ import (
 var webdist embed.FS
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "relocate" {
+		if err := runRelocateCommand(context.Background(), os.Args[2:], os.Stdout); err != nil {
+			log.Fatalf("relocate project: %v", err)
+		}
+		return
+	}
 	var (
 		addr       = flag.String("addr", "", "bind one specific address, e.g. 192.168.1.20:8787 (default: every private and overlay address)")
 		port       = flag.Int("port", envInt("OMNIPLEX_PORT", 8787), "port to listen on")
