@@ -579,6 +579,7 @@ function InterruptedCard({ turn, onContinue }: { turn: Turn; onContinue: () => v
 export function Transcript({
   state,
   initialScroll,
+  onScrollChange,
   onRetryProvision,
   onCleanup,
   onForceDelete,
@@ -586,9 +587,14 @@ export function Transcript({
   onOpenDiff,
 }: {
   state: SessionState;
-  /** Where a resumed page was scrolled when it went to background (resume.ts).
-      Applied once, on mount; the parent clears the prop right after. */
+  /** Where this session was last scrolled — the position the parent kept from
+      the previous time this session was open, or the one a resumed page saved
+      as it went to background (resume.ts). Applied once, on mount. */
   initialScroll?: { top: number; atBottom: boolean };
+  /** Reports where the reader is, so the parent can hand it back the next time
+      this session is opened. Switching sessions unmounts this component, so a
+      position it kept to itself would die with it. */
+  onScrollChange?: (sessionId: string, top: number, atBottom: boolean) => void;
   onRetryProvision: () => void;
   onCleanup: () => void;
   onForceDelete: () => void;
@@ -641,6 +647,35 @@ export function Transcript({
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("pagehide", save);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The same idea one scope smaller: where the reader is, reported up as it
+  // moves, so that switching to another session and back returns to the place
+  // they were reading rather than the bottom. Held in a ref so a new callback
+  // identity does not re-subscribe the listener.
+  const onScrollChangeRef = useRef(onScrollChange);
+  useEffect(() => {
+    onScrollChangeRef.current = onScrollChange;
+  }, [onScrollChange]);
+  // A layout effect, because its cleanup has to run while the scroller is
+  // still in the document: a detached node reports a scrollTop of zero, and
+  // the final read below is the one that catches movement whose scroll event
+  // was still queued when the switch happened.
+  useLayoutEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const report = () =>
+      onScrollChangeRef.current?.(latestState.current.sessionId, el.scrollTop, atBottom(el));
+    el.addEventListener("scroll", report, { passive: true });
+    // Mounting counts as a position too: a transcript left at the tail — or
+    // one that just restored an offset above — has somewhere to come back to
+    // even if the reader never touches it.
+    report();
+    return () => {
+      el.removeEventListener("scroll", report);
+      report();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
