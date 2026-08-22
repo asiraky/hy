@@ -7,8 +7,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/asiraky/hy/internal/proto"
-	"github.com/asiraky/hy/internal/store"
+	"github.com/asiraky/omniplex/internal/proto"
+	"github.com/asiraky/omniplex/internal/store"
 )
 
 // Labels are the user's own workflow markers — pure metadata over sessions.
