@@ -9,7 +9,30 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
-    <meta name="theme-color" content="#09090b" />
+    <!-- Matched to the two --background values in src/index.css, so the
+         browser chrome on a phone continues the page rather than sitting a
+         shade off it. A single value cannot do that: the app follows the
+         system theme. -->
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#121418" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fcfcfc" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="description" content="Omniplex drives coding sessions across harnesses, and attaches to them from any device." />
+    <!-- A personal server, not a site. Nothing here should ever be indexed. -->
+    <meta name="robots" content="noindex, nofollow" />
+
+    <!-- The SVG is what any current browser uses; the .ico is only there
+         because browsers ask for /favicon.ico whatever the markup says, and
+         without a file that request falls through to the document. -->
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- Added to the home screen on iOS, the app runs without browser chrome
+         and keeps its own name under the icon. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Omniplex" />
     <!-- Stamped with the bundle's content hash when the Go server serves this
          document. It stays "dev" under the Vite dev server, which is how the
          client knows to skip build-mismatch checks during development. -->
