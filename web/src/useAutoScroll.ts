@@ -87,6 +87,9 @@ export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>(
   const anchorEl = useRef<HTMLElement | null>(null);
   const anchored = useRef(false);
   const reserve = useRef(0);
+  // Whether the hold has yet been acted on — the first application is the one
+  // that lifts, and it is judged differently from the ones that follow.
+  const fresh = useRef(false);
 
   const setReserve = useCallback((px: number) => {
     if (reserve.current === px) return;
@@ -149,7 +152,12 @@ export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>(
     const need = Math.max(0, Math.ceil(el.clientHeight - natural));
     setReserve(need);
 
-    if (need === 0) {
+    // Needing no room means the content below the anchor already fills the
+    // view — which on the first application is not a turn outgrowing anything,
+    // it is a tall prompt under a tall composer that had the room all along.
+    // Reading it as "outgrown" there would hand the view straight back to the
+    // tail and undo the lift before it happened.
+    if (need === 0 && !fresh.current) {
       // The turn has outgrown the room made for it, so there is nothing left
       // to hold up. Someone watching output arrive wants the tail from here.
       const takeOver = anchored.current;
@@ -160,6 +168,7 @@ export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>(
       }
       return;
     }
+    fresh.current = false;
     if (!anchored.current) return;
     el.scrollTop = desired;
     lastTop.current = el.scrollTop;
@@ -175,6 +184,7 @@ export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>(
       if (!el) return;
       anchorEl.current = el;
       anchored.current = true;
+      fresh.current = true;
       setPin(false);
       applyAnchor();
     },
@@ -204,9 +214,14 @@ export function useAutoScroll<S extends HTMLElement, C extends HTMLElement>(
       // by content going away, and it leaves the pin as it found it. Arriving
       // at the bottom any other way re-arms: that is the position the pin
       // itself would hold, so there is nothing left to preserve.
+      // While an anchor holds, "at the bottom" is an artefact of the room the
+      // anchor reserved: the reserve is sized so the anchored position *is*
+      // the last screenful, so the hook's own scroll would otherwise re-arm
+      // the pin against the hold it just took — and the pin's snap would then
+      // fight the anchor for the rest of the turn.
       const movedUp = top < lastTop.current;
       if (movedUp && !atBottom(el)) setPin(false);
-      else if (!movedUp && atBottom(el)) setPin(true);
+      else if (!movedUp && atBottom(el) && !anchored.current) setPin(true);
       lastTop.current = top;
     };
 

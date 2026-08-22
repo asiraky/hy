@@ -275,6 +275,26 @@ describe("useAutoScroll anchoring", () => {
     expect(reserve()).toBe(0);
   });
 
+  it("does not let its own scroll re-arm the pin", () => {
+    // The reserve is sized so the anchored position is the last screenful,
+    // which means the scroll event the hook's own write produces arrives
+    // looking exactly like the reader parking at the bottom.
+    anchorPrompt(PROMPT_AT);
+    fire(new Event("scroll"));
+    expect(pinned()).toBe(false);
+    settle(stick);
+    expect(scroller().scrollTop).toBe(ANCHORED);
+  });
+
+  it("still lifts when the view was already full without any reserve", () => {
+    // A tall prompt under a tall composer: everything below the anchor already
+    // fills the view, so no room has to be made — but the lift is still owed.
+    content = 2000;
+    anchorPrompt(PROMPT_AT);
+    expect(reserve()).toBe(0);
+    expect(scroller().scrollTop).toBe(ANCHORED);
+  });
+
   it("drops the anchor when the button is used", () => {
     anchorPrompt(PROMPT_AT);
     settle(scrollToBottom);

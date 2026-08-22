@@ -680,17 +680,24 @@ export function Transcript({
     return undefined;
   }, [ownItems]);
 
-  // Only a prompt that arrived while this session was already on screen is
-  // one the reader just sent. Opening a session, or switching between two,
-  // also changes the newest prompt, and yanking the view then would be moving
-  // a transcript nobody asked to move.
+  // Only a prompt that arrived while this session was already on screen is one
+  // the reader just sent. Opening a session, or switching between two, also
+  // changes the newest prompt — the whole transcript arrives at once — and
+  // yanking the view then would be moving a transcript nobody asked to move.
+  // Which is why the session is remembered separately from the prompt: a
+  // session first seen with no prompt in it at all still anchors the first one
+  // it gets.
+  const seenSession = useRef<string>(undefined);
   const seenPrompt = useRef<string>(undefined);
   useLayoutEffect(() => {
-    const key = lastPromptID && `${state.sessionId}:${lastPromptID}`;
+    const fresh = seenSession.current !== state.sessionId;
     const prev = seenPrompt.current;
-    seenPrompt.current = key;
-    if (!key || key === prev || !prev?.startsWith(`${state.sessionId}:`)) return;
-    anchorTo(scrollerRef.current?.querySelector<HTMLElement>(`[data-msg-id="${lastPromptID}"]`) ?? null);
+    seenSession.current = state.sessionId;
+    seenPrompt.current = lastPromptID;
+    if (fresh || !lastPromptID || lastPromptID === prev) return;
+    anchorTo(
+      scrollerRef.current?.querySelector<HTMLElement>(`[data-msg-id="${lastPromptID}"]`) ?? null,
+    );
   }, [state.sessionId, lastPromptID, anchorTo, scrollerRef]);
 
   const rows = useMemo(
