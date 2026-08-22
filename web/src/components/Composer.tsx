@@ -1,5 +1,5 @@
 import { ArrowUpIcon, SquareIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 
 import { ContextMeter } from "~/components/ContextMeter";
 import { ModelPicker } from "~/components/ModelPicker";
@@ -17,7 +17,14 @@ import { formatContextWindow, pickerInstances, resolveInstance, resolveModel } f
 import type { ComposerItem, HarnessMeta, Usage } from "~/protocol";
 import { useIsDesktop } from "~/useMediaQuery";
 
+/** What the transcript's recent-skills list needs from the composer. */
+export interface ComposerHandle {
+  /** Focuses the input and parks the cursor at `cursor`, or at the end. */
+  focusEnd: (cursor?: number) => void;
+}
+
 export function Composer({
+  ref,
   draft,
   onDraftChange,
   disabled,
@@ -36,7 +43,9 @@ export function Composer({
   loadComposerItems,
   onRunClientAction,
   onRunComposerAction,
+  onCommandUsed,
 }: {
+  ref?: Ref<ComposerHandle>;
   /**
    * The in-progress message. Owned by the parent and keyed per session there,
    * so it survives this component being unmounted and remounted across a
@@ -63,8 +72,11 @@ export function Composer({
   loadComposerItems?: () => Promise<ComposerItem[]>;
   onRunClientAction?: (action: string) => void;
   onRunComposerAction?: (action: string, args: string, invocation: string) => Promise<void>;
+  /** Reports the leading `/token` of a submitted message, so the parent can
+      remember which skills this user actually reaches for. */
+  onCommandUsed?: (insertText: string) => void;
 }) {
-  const ref = useRef<HTMLTextAreaElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   // There is no ⇧↵ worth advertising on a phone, so keep the hint to desktop.
   const isDesktop = useIsDesktop();
 
@@ -156,7 +168,7 @@ export function Composer({
   // Grow with the content, up to a cap. Runs on mount too, so a restored draft
   // opens at the right height instead of a single collapsed row.
   useEffect(() => {
-    const el = ref.current;
+    const el = textareaRef.current;
     if (!el) return;
     el.style.height = "0px";
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
@@ -164,13 +176,21 @@ export function Composer({
 
   const focusAt = useCallback((nextCursor: number) => {
     window.requestAnimationFrame(() => {
-      const el = ref.current;
+      const el = textareaRef.current;
       if (!el) return;
       el.focus();
       el.setSelectionRange(nextCursor, nextCursor);
       setCursor(nextCursor);
     });
   }, []);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      focusEnd: (nextCursor?: number) => focusAt(nextCursor ?? draftRef.current.length),
+    }),
+    [focusAt],
+  );
 
   const trigger = useMemo(
     () => detectComposerTrigger(draft, cursor, items),
@@ -235,6 +255,11 @@ export function Composer({
     const t = draft.trim();
     if (!t || disabled) return;
     if (t.startsWith("/") && !catalogueReady) return;
+    // Recorded on submit rather than on completion: choosing from the menu is
+    // browsing, sending is the use. The token is reported whatever the message
+    // turns out to do — a prompt, a client action, an adapter action — because
+    // all three are things the user reached for.
+    if (t.startsWith("/")) onCommandUsed?.(t.split(/\s/, 1)[0] ?? "");
     const intercepted = submittedComposerAction(t, items);
     if (intercepted?.item.behavior === "client-action") {
       changeDraft("");
@@ -294,7 +319,7 @@ export function Composer({
 
   const textarea = (
     <textarea
-      ref={ref}
+      ref={textareaRef}
       rows={1}
       value={draft}
       disabled={disabled}

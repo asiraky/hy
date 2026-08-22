@@ -29,13 +29,14 @@ import {
 import { ChangedFiles } from "~/components/ChangedFiles";
 import { IconButton } from "~/components/IconButton";
 import { Markdown } from "~/components/Markdown";
+import { RecentSkills } from "~/components/RecentSkills";
 import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { useCopy } from "~/lib/clipboard";
 import { fmtTokens } from "~/lib/format";
 import { cn } from "~/lib/utils";
-import type { Item, PullRequest, SessionState, ToolStatus, Turn } from "~/protocol";
+import type { ComposerItem, Item, PullRequest, SessionState, ToolStatus, Turn } from "~/protocol";
 import { saveResume } from "~/resume";
 import { buildRows, foldLabel, rowTurnID, summarise } from "~/rows";
 import { atBottom, useAutoScroll } from "~/useAutoScroll";
@@ -50,6 +51,13 @@ const TAIL_RESERVE = "calc(var(--composer-h, 9rem) + 6rem)";
 // The tail's room plus whatever extra the scroll hook is asking for to lift a
 // just-sent prompt clear of the composer (`--anchor-reserve`, 0 when it is not).
 const CONTENT_RESERVE = `calc(${TAIL_RESERVE} + var(--anchor-reserve, 0px))`;
+
+// How long a ready workspace card stays before it collapses on its own: long
+// enough to read "Workspace ready" and reach for the disclosure if the output
+// is wanted, short enough that it is gone before the first prompt is typed.
+const AUTO_DISMISS_MS = 2500;
+// Matches the wrapper's transition duration, plus a frame's grace.
+const COLLAPSE_MS = 320;
 
 // One icon per tool kind the protocol defines. Anything new falls through to
 // the neutral dot rather than rendering nothing.
@@ -440,13 +448,56 @@ function WorkspaceCard({
   const failed = state.phase === "provision_failed" || state.phase === "cleanup_failed";
   const [open, setOpen] = useState(active || failed);
   const [dismissed, setDismissed] = useState(false);
+  // The card's exit, in two steps: `leaving` starts the collapse, `dismissed`
+  // unmounts it once the collapse has played. A hard unmount would make the
+  // rest of the transcript jump.
+  const [leaving, setLeaving] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (active || failed) {
       setOpen(true);
       setDismissed(false);
+      setLeaving(false);
     } else if (ws.phase === "ready") setOpen(false);
   }, [active, failed, ws.phase]);
+
+  // A finished provisioner is a receipt, not a task: it says its piece and
+  // then gets out of the way, rather than holding the top of an empty
+  // transcript until someone clicks the X. Only a *ready* workspace leaves —
+  // a failed one is asking for a decision and must keep asking. So does an
+  // expanded one: the reader opened it to look at the output, and yanking it
+  // mid-read would be the same rudeness in the other direction.
+  useEffect(() => {
+    if (ws.phase !== "ready" || active || failed || open || dismissed) return;
+    const timer = setTimeout(() => setLeaving(true), AUTO_DISMISS_MS);
+    return () => clearTimeout(timer);
+  }, [ws.phase, active, failed, open, dismissed]);
+
+  // Collapse from the height it actually has: an animation from a guessed
+  // max-height either clips the card or spends most of its duration playing
+  // nothing. Two frames because the browser has to observe the start value
+  // before the end value can transition from it.
+  useEffect(() => {
+    if (!leaving) return;
+    const el = wrapRef.current;
+    if (!el) {
+      setDismissed(true);
+      return;
+    }
+    el.style.maxHeight = `${el.scrollHeight}px`;
+    const frame = requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        el.style.maxHeight = "0px";
+        el.style.opacity = "0";
+      }),
+    );
+    const timer = setTimeout(() => setDismissed(true), COLLAPSE_MS);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(timer);
+    };
+  }, [leaving]);
 
   if (!ws.phase || dismissed) return null;
 
@@ -464,11 +515,16 @@ function WorkspaceCard({
 
   return (
     <div
-      className={cn(
-        "fade-in bg-card/70 rounded-xl border",
-        failed && "border-destructive/40 bg-destructive/5",
-      )}
+      ref={wrapRef}
+      aria-hidden={leaving || undefined}
+      className="motion-reduce:transition-none overflow-hidden transition-[max-height,opacity] duration-300 ease-in"
     >
+      <div
+        className={cn(
+          "fade-in bg-card/70 rounded-xl border",
+          failed && "border-destructive/40 bg-destructive/5",
+        )}
+      >
       <div className="flex items-center gap-2.5 px-3 py-2.5">
         {active ? (
           <Spinner className="text-primary size-4" />
@@ -495,7 +551,7 @@ function WorkspaceCard({
             size="icon-sm"
             aria-label="Dismiss workspace activity"
             className="size-11 md:size-8"
-            onClick={() => setDismissed(true)}
+            onClick={() => setLeaving(true)}
           >
             <XIcon />
           </Button>
@@ -538,6 +594,7 @@ function WorkspaceCard({
           )}
         </div>
       )}
+      </div>
     </div>
   );
 }
@@ -625,6 +682,9 @@ export function Transcript({
   onOpenDiff,
   pr,
   onFinish,
+  recents = [],
+  recentsSeeded = false,
+  onPickRecent,
 }: {
   state: SessionState;
   /** Where this session was last scrolled — the position the parent kept from
@@ -644,7 +704,23 @@ export function Transcript({
   pr?: PullRequest | null;
   /** Opens the delete confirmation for this session. */
   onFinish: () => void;
+  /** Skills to offer on an empty transcript, already filtered against this
+      session's live catalogue by the parent — never offer what it cannot run. */
+  recents?: ComposerItem[];
+  /** True when `recents` are catalogue suggestions rather than real history. */
+  recentsSeeded?: boolean;
+  /** Writes the skill's token into the composer. Omitted, the list is hidden. */
+  onPickRecent?: (item: ComposerItem) => void;
 }) {
+  // The provisioner is holding the transcript while it works, or while it
+  // waits for an answer about a failure. Anything else — ready, released, or
+  // never provisioned — leaves the empty state to speak.
+  const workspaceOccupied =
+    state.phase === "creating" ||
+    state.phase === "provisioning" ||
+    state.phase === "cleaning" ||
+    state.phase === "provision_failed" ||
+    state.phase === "cleanup_failed";
   // Follow the tail unless the reader has scrolled up; the button below is
   // how they get back. A restore that was scrolled up mounts unpinned, or the
   // first stick would snap it to the bottom over the restored position.
@@ -826,11 +902,21 @@ export function Transcript({
             onCleanup={onCleanup}
             onForceDelete={onForceDelete}
           />
-          {state.items.length === 0 && !state.workspace.phase && (
+          {/* The empty state used to hide behind any workspace phase at all,
+              which left a dismissed-but-ready workspace showing nothing
+              whatever. It only needs to stand aside while the provisioner is
+              still working or is asking for a decision — once the workspace is
+              ready, an empty transcript is an empty transcript. */}
+          {state.items.length === 0 && !workspaceOccupied && (
             <div className="text-muted-foreground flex flex-col items-center gap-2 py-20 text-center">
               <TerminalIcon className="size-5 opacity-60" />
               <p className="text-sm">Nothing yet.</p>
               <p className="text-[13px]">Send a prompt to start the turn.</p>
+              {recents.length > 0 && onPickRecent && (
+                <div className="mt-6 w-full">
+                  <RecentSkills items={recents} seeded={recentsSeeded} onPick={onPickRecent} />
+                </div>
+              )}
             </div>
           )}
 
